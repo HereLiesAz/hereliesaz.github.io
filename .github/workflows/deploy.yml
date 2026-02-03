@@ -3,6 +3,8 @@ name: Construct the Void
 on:
   push:
     branches: ["main"]
+  schedule:
+    - cron: '0 */6 * * *' # Check for new art every 6 hours
   workflow_dispatch:
 
 permissions:
@@ -21,11 +23,10 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
-          # Required for the commit-back to work
           ref: ${{ github.head_ref }}
 
       # ----------------------------------------------------------------
-      # PHASE 0: THE JANITOR (Deduplication)
+      # PHASE 0: THE HEIST (Scraping the Album)
       # ----------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -33,29 +34,44 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
-      - name: Install Dependencies
+      - name: Install Scraper
+        run: pip install gallery-dl
+
+      - name: Scrape Album
+        # Spoofing Firefox to bypass Google's bot detection
+        run: |
+          gallery-dl "${{ secrets.GOOGLE_PHOTOS_ALBUM_LINK }}" \
+          --destination "assets/raw" \
+          --filename "{filename}.{extension}" \
+          --user-agent "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" \
+          --no-mtime \
+          --ignore-errors
+
+      # ----------------------------------------------------------------
+      # PHASE 1: THE JANITOR (Deduplication)
+      # ----------------------------------------------------------------
+      - name: Install Processing Dependencies
         run: |
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          # Added 'imagehash' and 'Pillow' for the Janitor
           pip install opencv-python-headless numpy timm scipy imagehash Pillow
 
       - name: Run The Janitor
         run: python scripts/deduplicate.py
 
-      - name: Commit Deletions
+      - name: Commit New Artifacts
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🧹 Janitor removed duplicate assets"
+          commit_message: "📡 Scraped & Cleaned new assets"
           file_pattern: 'assets/raw/*'
-        
+
       # ----------------------------------------------------------------
-      # PHASE 1: THE GRINDER (Python Math Kernel)
+      # PHASE 2: THE GRINDER (3D Processing)
       # ----------------------------------------------------------------
       - name: Run The Grinder
         run: python scripts/grinder.py
 
       # ----------------------------------------------------------------
-      # PHASE 2: THE BUILD (React PWA)
+      # PHASE 3: THE BUILD (React PWA)
       # ----------------------------------------------------------------
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -70,7 +86,7 @@ jobs:
         run: npm run build
 
       # ----------------------------------------------------------------
-      # PHASE 3: DEPLOY (GitHub Pages)
+      # PHASE 4: DEPLOY
       # ----------------------------------------------------------------
       - name: Setup Pages
         uses: actions/configure-pages@v5
