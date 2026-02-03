@@ -18,3 +18,4 @@ _site/
 Gemfile.lock
 npm_modules
 npm_modules/*
+/assets/raw/Art/*
