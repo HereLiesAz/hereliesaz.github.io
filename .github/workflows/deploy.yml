@@ -5,8 +5,9 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+# Grant GITHUB_TOKEN the permissions needed to deploy to Pages
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -21,7 +22,9 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      # --- PHASE 1: THE GRINDER ---
+      # ----------------------------------------------------------------
+      # PHASE 1: THE GRINDER (Python Math Kernel)
+      # ----------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -30,28 +33,36 @@ jobs:
 
       - name: Install Grinder Dependencies
         run: |
+          # Install CPU-only PyTorch to save CI bandwidth/time
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install opencv-python-headless numpy timm
+          pip install opencv-python-headless numpy timm scipy
 
       - name: Run The Grinder
         run: python scripts/grinder.py
-        # This reads assets/raw and populates public/data/
+        # This reads 'assets/raw/*.jpg' and generates 'public/data/*.json' + 'manifest.json'
 
-      # --- PHASE 2: THE BUILD ---
+      # ----------------------------------------------------------------
+      # PHASE 2: THE BUILD (React PWA)
+      # ----------------------------------------------------------------
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
 
-      - name: Install Dependencies
+      - name: Install Node Dependencies
         run: npm ci
 
       - name: Build PWA
         run: npm run build
-        # Vite will now bundle the App + the new JSON data from Grinder
+        # Vite bundles the App Shell + the new JSON data located in public/data/
 
-      # --- PHASE 3: DEPLOY ---
+      # ----------------------------------------------------------------
+      # PHASE 3: DEPLOY (GitHub Pages)
+      # ----------------------------------------------------------------
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
