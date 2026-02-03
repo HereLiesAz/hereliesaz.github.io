@@ -123,25 +123,27 @@ def process_image(image_file, depth_model_pack):
     return processed_strokes
 
 def main():
-    # --- SAFETY CHECK ---
-    if not os.path.exists(INPUT_DIR):
-        print(f"⚠️ Directory '{INPUT_DIR}' does not exist. Nothing to grind.")
-        return
-
+    # 1. ALWAYS create the output directory first
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
     
-    # Check if there are any images to process
+    # 2. Check Input
+    if not os.path.exists(INPUT_DIR):
+        print(f"⚠️ Directory '{INPUT_DIR}' does not exist.")
+        # Create empty manifest so the build doesn't fail
+        with open(MANIFEST_FILE, 'w') as f:
+            json.dump([], f)
+        return
+
     valid_extensions = ('.png', '.jpg', '.jpeg')
     images = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith(valid_extensions)]
     
     if not images:
         print("zzZ No images found in assets/raw.")
-        # Create empty manifest so the frontend doesn't crash
-        if not os.path.exists(MANIFEST_FILE):
-             with open(MANIFEST_FILE, 'w') as f:
-                json.dump([], f)
+        with open(MANIFEST_FILE, 'w') as f:
+            json.dump([], f)
         return
 
+    # 3. Process if images exist
     depth_pack = load_depth_model()
     manifest = []
     
@@ -164,6 +166,7 @@ def main():
         except Exception as e:
             print(f"❌ Failed to process {filename}: {e}")
             
+    # 4. Save Final Manifest
     with open(MANIFEST_FILE, 'w') as f:
         json.dump(manifest, f, indent=2)
         
