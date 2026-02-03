@@ -63,11 +63,13 @@ jobs:
       - name: Run The Grinder
         run: python scripts/grinder.py
 
-      # ----------------------------------------------------------------
+# ----------------------------------------------------------------
       # PHASE 3: COMMIT RESULTS
       # ----------------------------------------------------------------
       - name: Commit Data Artifacts
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "🎨 Volumetric Data Update"
+          # REMOVED file_pattern.
+          # This forces the action to "git add ." which is safer.
           file_pattern: 'assets/raw/* public/data/*'
