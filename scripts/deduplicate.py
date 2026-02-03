@@ -5,8 +5,6 @@ from pathlib import Path
 
 # --- CONFIGURATION ---
 INPUT_DIR = "assets/raw"
-# Hash size 8 = 64 bits. Small enough to catch resize/compression variants, 
-# large enough to distinguish different paintings.
 HASH_SIZE = 8 
 
 def get_image_resolution(filepath):
@@ -20,17 +18,23 @@ def get_image_resolution(filepath):
 def find_and_purge_duplicates():
     print("🧹 The Janitor is scanning for duplicates...")
     
+    # --- SAFETY CHECK ---
+    if not os.path.exists(INPUT_DIR):
+        print(f"⚠️ Directory '{INPUT_DIR}' does not exist. Skipping cleanup.")
+        return
+    
     # Dictionary to store { hash: [list_of_files] }
     hashes = {}
     
     # 1. Scan and Hash
+    files_found = 0
     for filename in os.listdir(INPUT_DIR):
         if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
             filepath = Path(INPUT_DIR) / filename
+            files_found += 1
             
             try:
                 with Image.open(filepath) as img:
-                    # Calculate perceptual hash
                     h = str(imagehash.phash(img, hash_size=HASH_SIZE))
                     
                     if h not in hashes:
@@ -38,6 +42,10 @@ def find_and_purge_duplicates():
                     hashes[h].append(filepath)
             except Exception as e:
                 print(f"⚠️ Could not process {filename}: {e}")
+
+    if files_found == 0:
+        print("zzZ No images found to clean.")
+        return
 
     # 2. Analyze Collisions
     deleted_count = 0
@@ -47,7 +55,6 @@ def find_and_purge_duplicates():
             print(f"🔍 Found duplicate set for hash [{h}]:")
             
             # Sort by resolution (Descending), then by filesize (Descending)
-            # We use a tuple (resolution, filesize) as the key
             ranked_files = sorted(
                 file_list, 
                 key=lambda p: (get_image_resolution(p), p.stat().st_size), 
