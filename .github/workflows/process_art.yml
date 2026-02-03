@@ -1,1 +1,73 @@
+name: Process Art Pipeline
 
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Check for new art every 6 hours
+  workflow_dispatch:      # Run manually button
+  push:
+    paths:
+      - 'assets/raw/**'   # Run if you manually upload an image
+      - 'scripts/**'      # Run if you change the python logic
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "art-processing"
+  cancel-in-progress: true
+
+jobs:
+  refine-and-grind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      # ----------------------------------------------------------------
+      # PHASE 0: THE HEIST (Scraping)
+      # ----------------------------------------------------------------
+      - name: Install Scraper
+        run: pip install gallery-dl
+
+      - name: Scrape Album
+        continue-on-error: true
+        run: |
+          gallery-dl "${{ secrets.GOOGLE_PHOTOS_ALBUM_LINK }}" \
+          --destination "assets/raw" \
+          --filename "{filename}.{extension}" \
+          --user-agent "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" \
+          --no-mtime
+
+      # ----------------------------------------------------------------
+      # PHASE 1: THE JANITOR (Deduplication)
+      # ----------------------------------------------------------------
+      - name: Install Processing Dependencies
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install opencv-python-headless numpy timm scipy imagehash Pillow
+
+      - name: Run The Janitor
+        run: python scripts/deduplicate.py
+
+      # ----------------------------------------------------------------
+      # PHASE 2: THE GRINDER (3D Depth Processing)
+      # ----------------------------------------------------------------
+      - name: Run The Grinder
+        run: python scripts/grinder.py
+
+      # ----------------------------------------------------------------
+      # PHASE 3: COMMIT RESULTS
+      # ----------------------------------------------------------------
+      - name: Commit Data Artifacts
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🎨 Volumetric Data Update"
+          file_pattern: 'assets/raw/* public/data/*'
