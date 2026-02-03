@@ -2,12 +2,12 @@ name: Process Art Pipeline
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # Check for new art every 6 hours
-  workflow_dispatch:      # Run manually button
+    - cron: '0 */6 * * *' # Run every 6 hours
+  workflow_dispatch:      # Run manually
   push:
     paths:
-      - 'assets/raw/**'   # Run if you manually upload an image
-      - 'scripts/**'      # Run if you change the python logic
+      - 'scripts/**'      # Run if logic changes
+      - 'assets/raw/**'   # Run if you manually upload
 
 permissions:
   contents: write
@@ -37,11 +37,16 @@ jobs:
       - name: Install Scraper
         run: pip install gallery-dl
 
+      - name: Create Landing Zone
+        run: mkdir -p assets/raw
+
       - name: Scrape Album
         continue-on-error: true
+        # FIXED: Changed --destination to --directory
+        # FIXED: Added path filter to ensure it doesn't create subfolders
         run: |
           gallery-dl "${{ secrets.GOOGLE_PHOTOS_ALBUM_LINK }}" \
-          --destination "assets/raw" \
+          --directory "assets/raw" \
           --filename "{filename}.{extension}" \
           --user-agent "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" \
           --no-mtime
@@ -63,13 +68,11 @@ jobs:
       - name: Run The Grinder
         run: python scripts/grinder.py
 
-# ----------------------------------------------------------------
+      # ----------------------------------------------------------------
       # PHASE 3: COMMIT RESULTS
       # ----------------------------------------------------------------
       - name: Commit Data Artifacts
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "🎨 Volumetric Data Update"
-          # REMOVED file_pattern.
-          # This forces the action to "git add ." which is safer.
-          file_pattern: 'assets/raw/* public/data/*'
+          # No file_pattern = "git add ." (Catches everything)
