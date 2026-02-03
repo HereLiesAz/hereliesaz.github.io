@@ -1,10 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import glsl from 'vite-plugin-glsl';
 
 export default defineConfig({
   plugins: [
     react(),
+    glsl(), // Handles .vert and .frag imports
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'robots.txt', 'apple-touch-icon.png'],
@@ -14,7 +16,7 @@ export default defineConfig({
         description: 'A spatial deconstruction of art.',
         theme_color: '#050505',
         background_color: '#050505',
-        display: 'standalone', // Hides browser UI on mobile
+        display: 'standalone',
         orientation: 'portrait',
         icons: [
           {
@@ -30,20 +32,16 @@ export default defineConfig({
         ]
       },
       workbox: {
-        // 1. Precache the App Shell (JS, CSS, HTML)
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        
-        // 2. Runtime Cache for the "Void" Data (Lazy Load)
         runtimeCaching: [
           {
-            // Cache the Grinder output (JSON stroke data)
             urlPattern: ({ url }) => url.pathname.startsWith('/data/'),
-            handler: 'CacheFirst', // Once loaded, never ask network again
+            handler: 'CacheFirst',
             options: {
               cacheName: 'volumetric-data-cache',
               expiration: {
-                maxEntries: 50, // Keep last 50 paintings
-                maxAgeSeconds: 60 * 60 * 24 * 365 // 1 Year
+                maxEntries: 50,
+                maxAgeSeconds: 60 * 60 * 24 * 365
               },
               cacheableResponse: {
                 statuses: [0, 200]
@@ -51,7 +49,6 @@ export default defineConfig({
             }
           },
           {
-            // Cache the Brush Textures
             urlPattern: ({ url }) => url.pathname.includes('brush_stroke'),
             handler: 'CacheFirst',
             options: {
