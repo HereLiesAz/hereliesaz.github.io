@@ -5,9 +5,8 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
-# Grant GITHUB_TOKEN the permissions needed to deploy to Pages
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -21,9 +20,12 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
+        with:
+          # Required for the commit-back to work
+          ref: ${{ github.head_ref }}
 
       # ----------------------------------------------------------------
-      # PHASE 1: THE GRINDER (Python Math Kernel)
+      # PHASE 0: THE JANITOR (Deduplication)
       # ----------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -31,15 +33,26 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
-      - name: Install Grinder Dependencies
+      - name: Install Dependencies
         run: |
-          # Install CPU-only PyTorch to save CI bandwidth/time
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install opencv-python-headless numpy timm scipy
+          # Added 'imagehash' and 'Pillow' for the Janitor
+          pip install opencv-python-headless numpy timm scipy imagehash Pillow
 
+      - name: Run The Janitor
+        run: python scripts/deduplicate.py
+
+      - name: Commit Deletions
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🧹 Janitor removed duplicate assets"
+          file_pattern: 'assets/raw/*'
+        
+      # ----------------------------------------------------------------
+      # PHASE 1: THE GRINDER (Python Math Kernel)
+      # ----------------------------------------------------------------
       - name: Run The Grinder
         run: python scripts/grinder.py
-        # This reads 'assets/raw/*.jpg' and generates 'public/data/*.json' + 'manifest.json'
 
       # ----------------------------------------------------------------
       # PHASE 2: THE BUILD (React PWA)
@@ -55,7 +68,6 @@ jobs:
 
       - name: Build PWA
         run: npm run build
-        # Vite bundles the App Shell + the new JSON data located in public/data/
 
       # ----------------------------------------------------------------
       # PHASE 3: DEPLOY (GitHub Pages)
