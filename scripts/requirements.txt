@@ -1,1 +1,13 @@
+# --- Core Math & Image Processing ---
+numpy>=1.24.0
+opencv-python-headless>=4.8.0   # "Headless" avoids X11 errors on GitHub Actions
+Pillow>=10.0.0                  # For the Janitor (Image loading)
+scipy>=1.10.0                   # Required by some depth estimation routines
 
+# --- AI & Depth Estimation ---
+torch>=2.0.0                    # The engine for ZoeDepth/MiDaS
+torchvision>=0.15.0             # Image transforms for Torch
+timm>=0.9.0                     # PyTorch Image Models (Dependency for MiDaS)
+
+# --- Utilities ---
+imagehash>=4.3.1                # For the Janitor (Perceptual Hashing)
