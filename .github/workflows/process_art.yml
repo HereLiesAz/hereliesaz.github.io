@@ -1,78 +1,54 @@
-name: Art Processor (The Grinder)
+name: Process Art
 
+# 1. TRIGGERS
 on:
   push:
     paths:
-      - 'assets/raw/**'
-      - 'scripts/grinder.py'
-      - 'scripts/indexer.py'    
+      - 'assets/raw/**'   # Run when new images are uploaded
+      - 'assets/meta/**'  # Run when you edit text in Prose.io
+  workflow_dispatch:      # Allows manual run button
 
+# 2. PERMISSIONS (Required to commit changes back)
 permissions:
   contents: write
 
+# 3. JOBS
 jobs:
-  grind:
+  grind-and-index:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # Get full history
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: '3.9'
 
       - name: Install Dependencies
         run: |
-          # CPU-only Torch to save massive bandwidth/time
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          # Install other tools directly
-          pip install numpy opencv-python-headless Pillow pillow-heif scipy timm huggingface_hub git+https://github.com/facebookresearch/segment-anything.git
+          pip install opencv-python numpy torch torchvision Pillow scipy timm huggingface_hub
+          pip install git+https://github.com/facebookresearch/segment-anything.git
 
-      - name: Get Changed Files
-        id: changed-files
-        uses: tj-actions/changed-files@v44
-        with:
-          files: assets/raw/**
+      - name: Grind Images (Generate Data & Stubs)
+        # This will create JSONs in public/data AND .md stubs in assets/meta
+        run: python scripts/grinder.py --input assets/raw
 
-      - name: Process New Art
-        if: steps.changed-files.outputs.any_changed == 'true'
-        env:
-          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
-        run: |
-          echo "Processing the following files:"
-          echo "$CHANGED_FILES"
-          
-          for file in $CHANGED_FILES; do
-            echo "------------------------------------------------"
-            echo "Grinding: $file"
-            python scripts/grinder.py --input "$file"
-            echo "Finished: $file"
-          done
+      - name: Index Metadata (Build Manifest)
+        # This merges the Prose edits into the final app manifest
+        run: python scripts/indexer.py
 
-      - name: Scan for Ghosts (Pareidolia)
-        if: steps.changed-files.outputs.any_changed == 'true'
-        run: |
-          echo "Hallucinating faces in the noise..."
-          python scripts/pareidolia.py
-
-      - name: Rebuild Index
-        # REMOVED THE 'if' CONDITION. 
-        # We always want to ensure the index is up to date with whatever is in /data
-        run: |
-          echo "Regenerating Global Manifest..."
-          python scripts/indexer.py
-
-      - name: Commit & Push Results
-        # Run this if there are changes to commit, regardless of source triggers
+      - name: Commit Changes
         run: |
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
+          # Add the generated data
           git add public/data/*.json
           git add public/manifest.json
+          # Add the metadata stubs (so they show up in Prose)
+          git add assets/meta/*.md
           # Only commit if something actually changed
-          git diff --staged --quiet || git commit -m "Regenerated structural data and manifest"
+          git diff --staged --quiet || git commit -m "Auto-processed art and metadata"
           git push
