@@ -1,6 +1,5 @@
 import React from 'react';
 import useStore from '../store/useStore';
-import './Overlay.css'; // Assuming standard CSS modules or global CSS
 
 const Overlay = () => {
   const activeId = useStore(state => state.activeId);
