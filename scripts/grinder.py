@@ -99,8 +99,17 @@ class ArtGrinder:
                 })
         return masks
 
-    def process_image(self, input_path):
+def process_image(self, input_path):
         filename = os.path.basename(input_path)
+        name_no_ext = os.path.splitext(filename)[0]
+        output_path = os.path.join("public/data", f"{name_no_ext}.json")
+
+        # --- THE FIX: SKIP IF EXISTS ---
+        if os.path.exists(output_path):
+            print(f"[*] Skipping {filename} (Already Ground)")
+            return
+        # -------------------------------
+
         print(f"\n[*] Processing: {filename}")
 
         # READ
