@@ -7,7 +7,6 @@ DATA_DIR = "public/data"
 MANIFEST_PATH = "public/manifest.json"
 
 def calculate_distance(c1, c2):
-    # Euclidean distance between two RGB colors
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(c1, c2)))
 
 def main():
@@ -23,14 +22,18 @@ def main():
             with open(path, 'r') as json_file:
                 data = json.load(json_file)
                 
-                # Extract summary data for the manifest
-                # We don't want the full stroke list in the manifest (too heavy)
                 meta = data.get('meta', {})
                 strokes = data.get('strokes', [])
+                ghosts = data.get('pareidolia', [])
                 
-                # Calculate dominant color of the whole piece if not present
+                # Determine "Sweet Spot" (Target View)
+                # If we found a ghost, look at the first one. Otherwise center.
+                if len(ghosts) > 0:
+                    target = [ghosts[0]['x'] - 0.5, ghosts[0]['y'] - 0.5, 0] # Offset to center
+                else:
+                    target = [0, 0, 0]
+
                 if 'dominant_color' not in meta:
-                    # Quick average of the first 100 strokes
                     if len(strokes) > 0:
                         sample = strokes[:100]
                         avg_r = sum(s['color'][0] for s in sample) / len(sample)
@@ -46,18 +49,16 @@ def main():
                     "resolution": meta.get('resolution', [1024, 1024]),
                     "color": meta['dominant_color'],
                     "stroke_count": meta.get('stroke_count', 0),
-                    # Placeholder for the sophisticated "Sweet Spot" coordinates
-                    # Default to center looking forward
                     "view_origin": [0, 0, 5], 
-                    "view_target": [0, 0, 0]
+                    "view_target": target, # Now dynamic based on pareidolia
+                    "ghost_count": len(ghosts)
                 }
                 library.append(entry)
                 
         except Exception as e:
             print(f"[!] Error reading {f}: {e}")
 
-    # 2. Build the Graph (The "Next" Pointers)
-    # For now, we link every painting to the 2 most similar paintings based on color.
+    # 2. Build the Graph
     print(f"[*] Building graph for {len(library)} nodes...")
     
     for item in library:
@@ -74,10 +75,7 @@ def main():
                 "weight": dist
             })
         
-        # Sort by similarity (lowest distance)
         distances.sort(key=lambda x: x['weight'])
-        
-        # Link to top 3 matches
         item['neighbors'] = [d['id'] for d in distances[:3]]
 
     # 3. Save Manifest
