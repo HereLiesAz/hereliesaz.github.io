@@ -5,7 +5,7 @@ on:
     paths:
       - 'assets/raw/**'
       - 'scripts/grinder.py'
-      - 'scripts/indexer.py'
+      - 'scripts/indexer.py'    
 
 permissions:
   contents: write
