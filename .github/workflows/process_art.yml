@@ -5,6 +5,7 @@ on:
     paths:
       - 'assets/raw/**'
       - 'scripts/grinder.py'
+      - 'scripts/indexer.py'
 
 permissions:
   contents: write
@@ -16,7 +17,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Necessary to see history for changed-files
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -26,7 +27,6 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # CPU-only Torch to save massive bandwidth/time
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
 
@@ -51,12 +51,18 @@ jobs:
             echo "Finished: $file"
           done
 
+      - name: Rebuild Index
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          echo "Regenerating Global Manifest..."
+          python scripts/indexer.py
+
       - name: Commit & Push Results
         if: steps.changed-files.outputs.any_changed == 'true'
         run: |
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
           git add public/data/*.json
-          # We only commit if there are changes to commit
-          git diff --staged --quiet || git commit -m "Generated structural data for new art"
+          git add public/manifest.json
+          git diff --staged --quiet || git commit -m "Generated structural data and manifest"
           git push
