@@ -60,18 +60,19 @@ jobs:
           python scripts/pareidolia.py
 
       - name: Rebuild Index
-        if: steps.changed-files.outputs.any_changed == 'true'
+        # REMOVED THE 'if' CONDITION. 
+        # We always want to ensure the index is up to date with whatever is in /data
         run: |
           echo "Regenerating Global Manifest..."
           python scripts/indexer.py
 
       - name: Commit & Push Results
-        if: steps.changed-files.outputs.any_changed == 'true'
+        # Run this if there are changes to commit, regardless of source triggers
         run: |
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
           git add public/data/*.json
           git add public/manifest.json
-          git diff --staged --quiet || git commit -m "Generated structural data and manifest"
+          # Only commit if something actually changed
+          git diff --staged --quiet || git commit -m "Regenerated structural data and manifest"
           git push
-
