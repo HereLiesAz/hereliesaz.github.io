@@ -99,18 +99,15 @@ class ArtGrinder:
                 })
         return masks
 
-def process_image(self, input_path):
+    def process_image(self, input_path):
         filename = os.path.basename(input_path)
         name_no_ext = os.path.splitext(filename)[0]
         output_path = os.path.join("public/data", f"{name_no_ext}.json")
 
-        # --- THE FIX: SKIP IF EXISTS ---
+        # SKIP IF EXISTS
         if os.path.exists(output_path):
-            print(f"[*] Skipping {filename} (Already Ground)")
+            print(f"    -> Skipping (Already Ground)")
             return
-        # -------------------------------
-
-        print(f"\n[*] Processing: {filename}")
 
         # READ
         img_cv2 = cv2.imread(input_path)
@@ -181,8 +178,6 @@ def process_image(self, input_path):
 
         output_dir = "public/data"
         os.makedirs(output_dir, exist_ok=True)
-        name_no_ext = os.path.splitext(filename)[0]
-        output_path = os.path.join(output_dir, f"{name_no_ext}.json")
         
         with open(output_path, 'w') as f:
             json.dump(output_data, f)
@@ -203,22 +198,26 @@ def main():
     grinder = ArtGrinder()
 
     if os.path.isdir(args.input):
-        print(f"[*] Batch Mode: Shard {args.shard + 1}/{args.total}")
-        
         # Sort files to ensure every machine agrees on the order
         all_files = sorted([f for f in os.listdir(args.input) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))])
         
-        for i, f in enumerate(all_files):
-            # THE SHARDING LOGIC
-            # Only process if the file index belongs to this machine
-            if i % args.total == args.shard:
-                full_path = os.path.join(args.input, f)
-                try:
-                    grinder.process_image(full_path)
-                except Exception as e:
-                    print(f"[!] CRITICAL FAIL on {f}: {e}")
-                    continue
+        # Determine strict workload for this shard
+        my_files = [f for i, f in enumerate(all_files) if i % args.total == args.shard]
+        total_count = len(my_files)
+        
+        print(f"[*] Batch Mode: Shard {args.shard + 1}/{args.total}")
+        print(f"[*] Workload: {total_count} images assigned to this machine.")
+        
+        for i, f in enumerate(my_files):
+            full_path = os.path.join(args.input, f)
+            print(f"\n[{i+1}/{total_count}] Processing: {f}")
+            try:
+                grinder.process_image(full_path)
+            except Exception as e:
+                print(f"[!] CRITICAL FAIL on {f}: {e}")
+                continue
     else:
+        # Single File Mode
         grinder.process_image(args.input)
 
 if __name__ == "__main__":
