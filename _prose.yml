@@ -6,20 +6,24 @@ prose:
     - index.md
   metadata:
     # ARTWORK METADATA
+   # ... inside assets/meta ...
     assets/meta:
       - name: "title"
         field:
           element: "text"
           label: "Title"
-      - name: "year"
+      - name: "category"   # <--- NEW
         field:
-          element: "text"
-          label: "Year"
-      - name: "description"
-        field:
-          element: "textarea"
-          label: "Description"
-          rows: 4
+          element: "select"
+          label: "Category"
+          options:
+            - name: "Paintings"
+              value: "painting"
+            - name: "Photography"
+              value: "photography"
+            - name: "Digital"
+              value: "digital"
+      # ... (year, description, etc)
     
     # NEW: STATIC PAGES
     assets/pages:
