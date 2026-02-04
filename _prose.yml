@@ -5,19 +5,31 @@ prose:
   ignore:
     - index.md
   metadata:
+    # ARTWORK METADATA
     assets/meta:
       - name: "title"
         field:
           element: "text"
           label: "Title"
-          placeholder: "The Mona Lisa"
       - name: "year"
         field:
           element: "text"
           label: "Year"
-          placeholder: "2024"
       - name: "description"
         field:
           element: "textarea"
           label: "Description"
           rows: 4
+    
+    # NEW: STATIC PAGES
+    assets/pages:
+      - name: "title"
+        field:
+          element: "text"
+          label: "Page Title"
+          placeholder: "About"
+      - name: "slug"
+        field:
+          element: "text"
+          label: "URL Slug"
+          placeholder: "about"
