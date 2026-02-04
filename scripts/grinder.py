@@ -1,161 +1,200 @@
 import os
-import sys
 import argparse
 import json
-import torch
 import cv2
 import numpy as np
+import torch
+import warnings
 from PIL import Image
-from pillow_heif import register_heif_opener
-from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 
-# Register HEIC opener for Pillow
-register_heif_opener()
-
-# --- CONFIGURATION ---
-ZOE_MODEL_TYPE = "ZoeD_N"
-SAM_CHECKPOINT_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
-SAM_CHECKPOINT_PATH = "weights/sam_vit_b_01ec64.pth"
-SAM_MODEL_TYPE = "vit_b"
-OUTPUT_DIR = "public/data"
+# Suppress the noise
+warnings.filterwarnings("ignore")
 
 class ArtGrinder:
     def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"[*] Initializing ArtGrinder on {self.device}...")
-        self._ensure_weights()
-        self.depth_model = self._load_depth_model()
-        self.mask_generator = self._load_sam()
-
-    def _ensure_weights(self):
-        if not os.path.exists("weights"):
-            os.makedirs("weights")
-        if not os.path.exists(SAM_CHECKPOINT_PATH):
-            print(f"[*] Downloading SAM weights...")
-            torch.hub.download_url_to_file(SAM_CHECKPOINT_URL, SAM_CHECKPOINT_PATH)
-
-    def _load_depth_model(self):
-        print("[*] Loading ZoeDepth...")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[*] Grinder initialized on: {self.device}")
+        
+        # 1. Load Depth Model (MiDaS Small for efficiency)
         try:
-            model = torch.hub.load("isl-org/ZoeDepth", ZOE_MODEL_TYPE, pretrained=True, trust_repo=True)
+            print("[*] Loading Depth Model (MiDaS)...")
+            self.depth_model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small").to(self.device)
+            self.depth_model.eval()
+            
+            # MiDaS transforms
+            midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+            self.depth_transform = midas_transforms.small_transform
+            self.has_depth = True
         except Exception as e:
-            print(f"[!] ZoeDepth failed ({e}). Fallback to MiDaS.")
-            model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
-        model.to(self.device).eval()
-        return model
+            print(f"[!] Failed to load Depth Model: {e}")
+            self.has_depth = False
 
-    def _load_sam(self):
-        print("[*] Loading SAM...")
-        sam = sam_model_registry[SAM_MODEL_TYPE](checkpoint=SAM_CHECKPOINT_PATH)
-        sam.to(self.device)
-        return SamAutomaticMaskGenerator(
-            model=sam,
-            points_per_side=32,
-            pred_iou_thresh=0.86,
-            stability_score_thresh=0.92,
-            crop_n_layers=1,
-            crop_n_points_downscale_factor=2,
-            min_mask_region_area=100,
-        )
+        # 2. Load SAM (Segment Anything)
+        try:
+            print("[*] Loading SAM (Segment Anything)...")
+            from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+            
+            # Use 'vit_b' (base) or 'vit_l' depending on what you downloaded. 
+            # For GitHub Actions CPU, we might need to rely on a smaller checkpoint or fallback.
+            # Assuming the workflow installs the default, we'll try to load 'vit_b'.
+            # If no checkpoint file is present, we might need to download it or fallback.
+            
+            # NOTE: In a CI env without a checkpoint file, SAM will fail. 
+            # We will implement a fallback segmenter (Grid/Contours) just in case.
+            
+            # Check for checkpoint, otherwise fallback immediately to save time
+            chk_path = "sam_vit_b_01ec64.pth"
+            if not os.path.exists(chk_path):
+                # Auto-download if missing (optional, but good for CI)
+                print("    -> Downloading SAM Checkpoint...")
+                torch.hub.download_url_to_file("https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth", chk_path)
 
-    def _heal_canvas(self, img, mask):
-        # Dilate mask slightly to ensure clean edges
-        kernel = np.ones((3,3), np.uint8)
-        dilated_mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=2)
-        # Inpaint (Radius 3, Navier-Stokes)
-        return cv2.inpaint(img, dilated_mask, 3, cv2.INPAINT_NS)
+            sam = sam_model_registry["vit_b"](checkpoint=chk_path)
+            sam.to(device=self.device)
+            self.mask_generator = SamAutomaticMaskGenerator(sam)
+            self.has_sam = True
+        except Exception as e:
+            print(f"[!] SAM load failed (running in fallback mode): {e}")
+            self.has_sam = False
 
-    def process_image(self, image_path):
-        filename = os.path.basename(image_path)
+    def estimate_depth(self, img_rgb):
+        if not self.has_depth:
+            h, w, _ = img_rgb.shape
+            return np.ones((h, w), dtype=np.float32) * 0.5
+
+        try:
+            input_batch = self.depth_transform(img_rgb).to(self.device)
+            with torch.no_grad():
+                prediction = self.depth_model(input_batch)
+                prediction = torch.nn.functional.interpolate(
+                    prediction.unsqueeze(1),
+                    size=img_rgb.shape[:2],
+                    mode="bicubic",
+                    align_corners=False,
+                ).squeeze()
+            return prediction.cpu().numpy()
+        except Exception as e:
+            print(f"    [!] Depth inference error: {e}")
+            h, w, _ = img_rgb.shape
+            return np.ones((h, w), dtype=np.float32) * 0.5
+
+    def get_segments(self, img_rgb):
+        """
+        Returns a list of masks (binary arrays) or bounding boxes.
+        """
+        if self.has_sam:
+            try:
+                masks = self.mask_generator.generate(img_rgb)
+                return masks # SAM returns list of dicts with 'segmentation', 'bbox', etc.
+            except Exception as e:
+                print(f"    [!] SAM inference error: {e}")
+        
+        # FALLBACK: Grid Segmentation (Deconstructivism via Brutalism)
+        print("    -> Using Fallback Grid Segmentation")
+        h, w, _ = img_rgb.shape
+        grid_size = 32
+        masks = []
+        for y in range(0, h, grid_size):
+            for x in range(0, w, grid_size):
+                # Create a fake SAM-like object
+                bbox = [x, y, min(grid_size, w-x), min(grid_size, h-y)]
+                masks.append({
+                    'bbox': bbox,
+                    'area': bbox[2] * bbox[3],
+                    'predicted_iou': 1.0,
+                    'stability_score': 1.0,
+                    # We don't need the full boolean mask for the simple grinder, just bbox
+                    # but if we needed it:
+                    # 'segmentation': ...
+                })
+        return masks
+
+    def process_image(self, input_path):
+        filename = os.path.basename(input_path)
         print(f"[*] Processing {filename}...")
-        
-        # 1. Load Image (Pillow handles HEIC via pillow-heif)
-        try:
-            pil_img = Image.open(image_path)
-            pil_img = pil_img.convert('RGB') # Ensure 3 channels
-            img_rgb = np.array(pil_img)
-            # OpenCV expects BGR for internal processing if needed, 
-            # but we work mostly in RGB for ML models. 
-            # We only need BGR for the final cv2.inpaint if we use it directly, 
-            # but cv2 functions usually accept numpy arrays regardless of color space logic
-            # providing we are consistent.
-        except Exception as e:
-            print(f"[!] Could not read {image_path}: {e}")
+
+        # 1. Read Image
+        img_cv2 = cv2.imread(input_path)
+        if img_cv2 is None:
+            print(f"[!] Could not read file: {input_path}")
             return
-        
-        # 2. Estimate Depth (Zoe)
+
+        img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
+        h, w, _ = img_rgb.shape
+
+        # 2. Depth
         print("    -> Estimating Depth...")
-        with torch.no_grad():
-            if hasattr(self.depth_model, 'infer_pil'):
-                depth_map = self.depth_model.infer_pil(pil_img)
-            else:
-                # MiDaS Fallback
-                # Need to resize/transform manually if not using infer_pil
-                pass # (Simplified for brevity, assuming Zoe loads)
+        depth_map = self.estimate_depth(img_rgb) # Guaranteed to return something now
 
-        # Normalize Depth (0=Close, 1=Far)
+        # Normalize Depth (0 to 1)
         d_min, d_max = depth_map.min(), depth_map.max()
-        depth_normalized = (depth_map - d_min) / (d_max - d_min)
+        if d_max - d_min > 0:
+            depth_map = (depth_map - d_min) / (d_max - d_min)
+        else:
+            depth_map = np.zeros_like(depth_map)
 
-        # 3. Segment (SAM)
+        # 3. Segmentation
         print("    -> Segmenting...")
-        masks = self.mask_generator.generate(img_rgb)
+        masks = self.get_segments(img_rgb)
         
-        # 4. SORT MASKS BY DEPTH (Closest First)
-        for m in masks:
-            m['avg_z'] = np.mean(depth_normalized[m['segmentation']])
-        masks.sort(key=lambda x: x['avg_z'])
-
-        print(f"    -> Found {len(masks)} layers. Beginning surgery...")
-
-        # 5. Extract & Heal
-        strokes_data = []
-        working_canvas = img_rgb.copy() 
-
-        for i, mask_data in enumerate(masks):
-            mask = mask_data['segmentation']
-            bbox = mask_data['bbox'] # [x, y, w, h]
-            
-            masked_pixels = working_canvas[mask]
-            if masked_pixels.size == 0: continue
-            
-            avg_color = np.mean(masked_pixels, axis=0)
-
-            stroke = {
-                "id": i,
-                "bbox": [int(v) for v in bbox],
-                "z": float(mask_data['avg_z']),
-                "area": int(mask_data['area']),
-                "color": [int(c) for c in avg_color],
-                "stability": float(mask_data['stability_score'])
-            }
-            strokes_data.append(stroke)
-            
-            # Heal the canvas (using OpenCV, which expects numpy array)
-            working_canvas = self._heal_canvas(working_canvas, mask)
-
-        # 6. Save Output
-        if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
-        out_path = os.path.join(OUTPUT_DIR, os.path.splitext(filename)[0] + ".json")
+        strokes = []
         
-        payload = {
+        # 4. Grind Data
+        print(f"    -> Grinding {len(masks)} fragments...")
+        for mask_data in masks:
+            # Extract Bounding Box
+            x, y, mw, mh = map(int, mask_data['bbox'])
+            
+            # Safety Check
+            if mw <= 0 or mh <= 0: continue
+            
+            # Extract Average Color
+            # We treat the bbox as the "stroke" area
+            roi = img_rgb[y:y+mh, x:x+mw]
+            avg_color = roi.mean(axis=(0,1)).astype(int).tolist()
+            
+            # Extract Average Depth in this region
+            roi_depth = depth_map[y:y+mh, x:x+mw]
+            avg_z = float(roi_depth.mean())
+            
+            # Stability (Entropy)
+            stability = float(mask_data.get('stability_score', 0.5))
+
+            strokes.append({
+                "color": avg_color,
+                "bbox": [x, y, mw, mh],
+                "z": avg_z,
+                "stability": stability
+            })
+
+        # 5. Output JSON
+        output_data = {
             "meta": {
-                "original_file": filename,
-                "resolution": img_rgb.shape[:2],
-                "stroke_count": len(strokes_data)
+                "file": filename,
+                "resolution": [w, h],
+                "stroke_count": len(strokes)
             },
-            "strokes": strokes_data
+            "strokes": strokes
         }
+
+        output_dir = "public/data"
+        os.makedirs(output_dir, exist_ok=True)
         
-        with open(out_path, 'w') as f:
-            json.dump(payload, f)
-        print(f"[*] Saved volumetric analysis to {out_path}")
+        name_no_ext = os.path.splitext(filename)[0]
+        output_path = os.path.join(output_dir, f"{name_no_ext}.json")
+        
+        with open(output_path, 'w') as f:
+            json.dump(output_data, f)
+            
+        print(f"[*] Saved artifact: {output_path}")
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=str, required=True)
+    parser.add_argument('--input', required=True, help='Path to input image')
     args = parser.parse_args()
-    ArtGrinder().process_image(args.input)
+
+    grinder = ArtGrinder()
+    grinder.process_image(args.input)
 
 if __name__ == "__main__":
     main()
