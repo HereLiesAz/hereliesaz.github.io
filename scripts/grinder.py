@@ -12,7 +12,7 @@ from PIL import Image
 warnings.filterwarnings("ignore")
 
 # CONFIGURATION
-MIN_RESOLUTION = 1080  # Minimum pixels on the shortest side
+MIN_RESOLUTION = 1080 
 
 class ArtGrinder:
     def __init__(self):
@@ -94,16 +94,34 @@ class ArtGrinder:
                 masks.append({'bbox': bbox, 'area': bbox[2]*bbox[3], 'stability_score': 0.5})
         return masks
 
+    def create_metadata_stub(self, file_id, filename):
+        # Creates a YAML frontmatter file for Prose.io
+        meta_dir = "assets/meta"
+        os.makedirs(meta_dir, exist_ok=True)
+        meta_path = os.path.join(meta_dir, f"{file_id}.md")
+        
+        if not os.path.exists(meta_path):
+            print(f"    -> Creating Prose stub: {meta_path}")
+            with open(meta_path, 'w') as f:
+                f.write(f"---\n")
+                f.write(f"title: {file_id}\n")
+                f.write(f"year: \"\"\n")
+                f.write(f"description: \"\"\n")
+                f.write(f"---\n")
+
     def process_image(self, input_path):
         filename = os.path.basename(input_path)
         name_no_ext = os.path.splitext(filename)[0]
         output_path = os.path.join("public/data", f"{name_no_ext}.json")
 
+        # 1. ALWAYS ensure metadata stub exists (even if already ground)
+        self.create_metadata_stub(name_no_ext, filename)
+
         if os.path.exists(output_path):
-            print(f"    -> Skipping (Already Ground)")
+            print(f"    -> Skipping Grinding (Already Done)")
             return
 
-        # READ & CHECK RESOLUTION
+        # READ & CHECK
         img_cv2 = cv2.imread(input_path)
         if img_cv2 is None:
             print(f"    [!] Skipped: Corrupt file.")
@@ -114,16 +132,15 @@ class ArtGrinder:
             print(f"    [X] REJECTED: Too small ({w}x{h}). Deleting.")
             try:
                 os.remove(input_path)
-            except OSError as e:
-                print(f"    [!] Failed to delete: {e}")
+            except: pass
             return
 
-        # RESIZE (Cap max size for RAM, but we know it's at least MIN_RES)
+        # RESIZE
         max_dim = 1500
         if max(h, w) > max_dim:
             scale = max_dim / max(h, w)
             img_cv2 = cv2.resize(img_cv2, (0,0), fx=scale, fy=scale)
-            print(f"    -> Resized to {img_cv2.shape[1]}x{img_cv2.shape[0]} for processing.")
+            print(f"    -> Resized to {img_cv2.shape[1]}x{img_cv2.shape[0]}.")
 
         img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
 
