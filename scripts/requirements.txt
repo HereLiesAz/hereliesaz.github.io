@@ -5,7 +5,7 @@ scipy
 timm
 huggingface_hub
 git+https://github.com/facebookresearch/segment-anything.git
-# We use the CPU version of torch explicitly in the workflow, 
-# but we list standard torch here for local dev.
+# Note: Torch/Torchvision are installed via command line in CI for CPU optimization,
+# but listed here for local development compatibility.
 torch
 torchvision
