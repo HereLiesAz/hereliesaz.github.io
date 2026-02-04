@@ -11,17 +11,19 @@ from PIL import Image
 # Suppress the noise
 warnings.filterwarnings("ignore")
 
+# CONFIGURATION
+MIN_RESOLUTION = 1080  # Minimum pixels on the shortest side
+
 class ArtGrinder:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"[*] Grinder initialized on: {self.device}")
         
-        # 1. Load Depth Model (MiDaS Small - Low RAM)
+        # 1. Load Depth Model
         try:
             print("[*] Loading Depth Model (MiDaS)...")
             self.depth_model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small").to(self.device)
             self.depth_model.eval()
-            
             midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
             self.depth_transform = midas_transforms.small_transform
             self.has_depth = True
@@ -29,12 +31,11 @@ class ArtGrinder:
             print(f"[!] Failed to load Depth Model: {e}")
             self.has_depth = False
 
-        # 2. Load SAM (Segment Anything)
+        # 2. Load SAM
         try:
             print("[*] Loading SAM (Segment Anything)...")
             from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
             
-            # Use 'vit_b' (Base) - Good balance. 
             chk_path = "sam_vit_b_01ec64.pth"
             if not os.path.exists(chk_path):
                 print("    -> Downloading SAM Checkpoint...")
@@ -47,7 +48,7 @@ class ArtGrinder:
                 points_per_side=32,
                 pred_iou_thresh=0.86,
                 stability_score_thresh=0.92,
-                crop_n_layers=0, # Disable crop layers to save RAM
+                crop_n_layers=0,
                 crop_n_points_downscale_factor=1,
                 min_mask_region_area=100,
             )
@@ -79,24 +80,18 @@ class ArtGrinder:
     def get_segments(self, img_rgb):
         if self.has_sam:
             try:
-                # Running inference
                 return self.mask_generator.generate(img_rgb)
             except Exception as e:
-                print(f"    [!] SAM Error (Switching to fallback for this image): {e}")
-                # Fall through to grid
+                print(f"    [!] SAM Error: {e}")
         
-        # Fallback: Grid Deconstruction
+        # Fallback
         h, w, _ = img_rgb.shape
-        grid_size = 64 # Larger grid to save RAM
+        grid_size = 64
         masks = []
         for y in range(0, h, grid_size):
             for x in range(0, w, grid_size):
                 bbox = [x, y, min(grid_size, w-x), min(grid_size, h-y)]
-                masks.append({
-                    'bbox': bbox,
-                    'area': bbox[2] * bbox[3],
-                    'stability_score': 0.5
-                })
+                masks.append({'bbox': bbox, 'area': bbox[2]*bbox[3], 'stability_score': 0.5})
         return masks
 
     def process_image(self, input_path):
@@ -104,34 +99,37 @@ class ArtGrinder:
         name_no_ext = os.path.splitext(filename)[0]
         output_path = os.path.join("public/data", f"{name_no_ext}.json")
 
-        # SKIP IF EXISTS
         if os.path.exists(output_path):
             print(f"    -> Skipping (Already Ground)")
             return
 
-        # READ
+        # READ & CHECK RESOLUTION
         img_cv2 = cv2.imread(input_path)
         if img_cv2 is None:
-            print(f"    [!] Skipped: Cannot read file.")
+            print(f"    [!] Skipped: Corrupt file.")
             return
 
-        # RESIZE (Crucial for RAM saving)
-        # If image is massive (e.g. > 2k), shrink it.
-        max_dim = 1500
         h, w = img_cv2.shape[:2]
+        if w < MIN_RESOLUTION or h < MIN_RESOLUTION:
+            print(f"    [X] REJECTED: Too small ({w}x{h}). Deleting.")
+            try:
+                os.remove(input_path)
+            except OSError as e:
+                print(f"    [!] Failed to delete: {e}")
+            return
+
+        # RESIZE (Cap max size for RAM, but we know it's at least MIN_RES)
+        max_dim = 1500
         if max(h, w) > max_dim:
             scale = max_dim / max(h, w)
             img_cv2 = cv2.resize(img_cv2, (0,0), fx=scale, fy=scale)
-            print(f"    -> Resized to {img_cv2.shape[1]}x{img_cv2.shape[0]} to save memory.")
+            print(f"    -> Resized to {img_cv2.shape[1]}x{img_cv2.shape[0]} for processing.")
 
         img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
-        h, w, _ = img_rgb.shape
 
         # DEPTH
         print("    -> Depth Map...")
         depth_map = self.estimate_depth(img_rgb)
-        
-        # Normalize Depth
         d_min, d_max = depth_map.min(), depth_map.max()
         if d_max - d_min > 0:
             depth_map = (depth_map - d_min) / (d_max - d_min)
@@ -149,13 +147,10 @@ class ArtGrinder:
             x, y, mw, mh = map(int, mask_data['bbox'])
             if mw <= 0 or mh <= 0: continue
             
-            # Simple average color
             roi = img_rgb[y:y+mh, x:x+mw]
             if roi.size == 0: continue
             
             avg_color = roi.mean(axis=(0,1)).astype(int).tolist()
-            
-            # Depth
             roi_depth = depth_map[y:y+mh, x:x+mw]
             avg_z = float(roi_depth.mean()) if roi_depth.size > 0 else 0.5
             
@@ -166,7 +161,6 @@ class ArtGrinder:
                 "stability": float(mask_data.get('stability_score', 0.5))
             })
 
-        # SAVE
         output_data = {
             "meta": {
                 "file": filename,
@@ -182,7 +176,6 @@ class ArtGrinder:
         with open(output_path, 'w') as f:
             json.dump(output_data, f)
 
-        # CLEANUP (Crucial for Batch)
         del img_cv2, img_rgb, depth_map, masks, output_data
         gc.collect()
         if torch.cuda.is_available():
@@ -191,33 +184,29 @@ class ArtGrinder:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', required=True, help='Path to image OR folder')
-    parser.add_argument('--shard', type=int, default=0, help='Index of this machine (0, 1, 2...)')
-    parser.add_argument('--total', type=int, default=1, help='Total number of machines')
+    parser.add_argument('--shard', type=int, default=0, help='Machine Index')
+    parser.add_argument('--total', type=int, default=1, help='Total Machines')
     args = parser.parse_args()
 
     grinder = ArtGrinder()
 
     if os.path.isdir(args.input):
-        # Sort files to ensure every machine agrees on the order
         all_files = sorted([f for f in os.listdir(args.input) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))])
-        
-        # Determine strict workload for this shard
         my_files = [f for i, f in enumerate(all_files) if i % args.total == args.shard]
         total_count = len(my_files)
         
         print(f"[*] Batch Mode: Shard {args.shard + 1}/{args.total}")
-        print(f"[*] Workload: {total_count} images assigned to this machine.")
+        print(f"[*] Workload: {total_count} images.")
         
         for i, f in enumerate(my_files):
-            full_path = os.path.join(args.input, f)
             print(f"\n[{i+1}/{total_count}] Processing: {f}")
             try:
+                full_path = os.path.join(args.input, f)
                 grinder.process_image(full_path)
             except Exception as e:
                 print(f"[!] CRITICAL FAIL on {f}: {e}")
                 continue
     else:
-        # Single File Mode
         grinder.process_image(args.input)
 
 if __name__ == "__main__":
