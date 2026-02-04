@@ -1,0 +1,23 @@
+prose:
+  rooturl: 'assets/meta'
+  siteurl: 'https://hereliesaz.com'
+  media: 'assets/raw'
+  ignore:
+    - index.md
+  metadata:
+    assets/meta:
+      - name: "title"
+        field:
+          element: "text"
+          label: "Title"
+          placeholder: "The Mona Lisa"
+      - name: "year"
+        field:
+          element: "text"
+          label: "Year"
+          placeholder: "2024"
+      - name: "description"
+        field:
+          element: "textarea"
+          label: "Description"
+          rows: 4
