@@ -60,16 +60,23 @@ def main():
 
                 # PROSE.IO MERGE
                 # Look for assets/meta/{id}.md
+               # ... inside main() ...
+
+                # PROSE.IO MERGE
                 cms_data = {}
                 meta_path = os.path.join(META_DIR, f"{file_id}.md")
                 if os.path.exists(meta_path):
-                    cms_data = parse_frontmatter(meta_path)
+                    cms_data, _ = parse_frontmatter(meta_path)
                 
                 entry = {
                     "id": file_id,
                     "file": f,
                     "title": cms_data.get("title", file_id),
+                    "category": cms_data.get("category", "uncategorized").lower(), # <--- NEW
                     "year": cms_data.get("year", ""),
+                    # ... rest of the fields
+                }
+# ...
                     "description": cms_data.get("description", ""),
                     "resolution": meta.get('resolution', [1024, 1024]),
                     "color": meta['dominant_color'],
