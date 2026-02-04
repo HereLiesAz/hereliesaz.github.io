@@ -6,6 +6,8 @@ scipy
 timm
 huggingface_hub
 git+https://github.com/facebookresearch/segment-anything.git
-# Torch/Torchvision for local dev (CI uses command line for CPU)
+# Torch is installed via command line for CPU optimization in CI,
+# but we list it here for local dev compatibility.
 torch
 torchvision
+

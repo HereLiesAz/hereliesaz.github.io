@@ -1,60 +1,71 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { useScroll } from '@react-three/drei';
 import * as THREE from 'three';
-import { easing } from 'maath';
-import { useStore } from '../store';
+import useStore from '../store/useStore';
 
-const CameraRig = ({ totalDepth = 5000 }) => {
-  const scroll = useScroll(); // From <ScrollControls>
-  const { setScrollZ } = useStore();
-  const cameraRef = useRef();
+const CameraRig = () => {
+  const { camera } = useThree();
+  const transitionProgress = useStore(state => state.transitionProgress);
+  const setTransitionProgress = useStore(state => state.setTransitionProgress);
   
-  // Vectors to avoid garbage collection
-  const vec = new THREE.Vector3();
-  const lookAtTarget = new THREE.Vector3(0, 0, -10000); // Look into the void
+  const scrollVelocity = useRef(0);
+  const targetProgress = useRef(transitionProgress); // Sync ref with state initially
+
+  const FLIGHT_SPEED = 0.0005;
+  const DAMPING = 0.05;
+  
+  // Sync Ref if external state changes (e.g. after a swap)
+  useEffect(() => {
+    targetProgress.current = transitionProgress;
+  }, [transitionProgress]);
+
+  useEffect(() => {
+    const handleWheel = (e) => {
+      // DeltaY is positive when scrolling down (Forward), negative up (Backward)
+      scrollVelocity.current += e.deltaY * FLIGHT_SPEED;
+    };
+    window.addEventListener('wheel', handleWheel, { passive: true });
+    return () => window.removeEventListener('wheel', handleWheel);
+  }, []);
 
   useFrame((state, delta) => {
-    // 1. Map Scroll to Z-Depth
-    // offset is 0.0 (top) to 1.0 (bottom)
-    const currentZ = -scroll.offset * totalDepth;
+    // 1. Apply Friction
+    scrollVelocity.current *= 0.95; 
     
-    // Update global store for the Shaders/UI to react
-    setScrollZ(currentZ);
-
-    // 2. Parallax (The "Volumetric Proof")
-    // Move camera X/Y based on mouse position
-    // dampened by 0.1 for a "heavy" feel
-    easing.damp3(
-      state.camera.position,
-      [
-        state.pointer.x * 2.0,      // Move X with mouse
-        state.pointer.y * 2.0,      // Move Y with mouse
-        currentZ + 10               // The Scroll Z (offset +10 so we don't clip)
-      ],
-      0.1,
-      delta
-    );
-
-    // 3. Camera Roll (Subtle vertigo effect)
-    // Tilt the head slightly when moving mouse left/right
-    easing.dampE(
-      state.camera.rotation,
-      [
-        state.pointer.y * 0.05,     // Pitch
-        state.pointer.x * 0.05,     // Yaw
-        0                           // Roll (Keep 0 for now to maintain horizon)
-      ],
-      0.2,
-      delta
-    );
+    // 2. Apply Velocity
+    if (Math.abs(scrollVelocity.current) > 0.00001) {
+       targetProgress.current += scrollVelocity.current;
+    }
     
-    // Ensure we always face the void
-    // We manually set rotation above, but lookAt ensures directionality
-    // state.camera.lookAt(0, 0, currentZ - 100); 
+    // NOTE: We do NOT clamp targetProgress here anymore.
+    // We let it go > 1 or < 0 so the Store can detect the boundary crossing.
+
+    // 3. Smooth Interpolation
+    // We strictly interpolate the VISUAL progress, but we send the RAW target to the store
+    // so it knows we crossed the line.
+    
+    const smoothed = THREE.MathUtils.lerp(transitionProgress, targetProgress.current, DAMPING);
+    
+    // Update Store
+    if (Math.abs(smoothed - transitionProgress) > 0.0001) {
+      setTransitionProgress(smoothed);
+    }
+    
+    // 4. Move Camera
+    // Forward Flight: Z goes 5 -> -5
+    // At 0.0, we are at 5. At 1.0, we are at -5.
+    const zPos = THREE.MathUtils.lerp(5, -5, transitionProgress); // Use state, not ref, for visual consistency
+    camera.position.set(0, 0, zPos);
+    
+    // Handheld motion
+    const time = state.clock.elapsedTime;
+    camera.position.x = Math.sin(time * 0.5) * 0.1;
+    camera.position.y = Math.cos(time * 0.3) * 0.1;
+    
+    camera.lookAt(0, 0, -10);
   });
 
-  return null; // The camera is controlled via state, no mesh needed
+  return null;
 };
 
 export default CameraRig;

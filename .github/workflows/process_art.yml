@@ -1,78 +1,77 @@
-name: Process Art Pipeline
+name: Art Processor (The Grinder)
 
 on:
-  schedule:
-    - cron: '0 */6 * * *' # Run every 6 hours
-  workflow_dispatch:      # Run manually
   push:
     paths:
-      - 'scripts/**'      # Run if logic changes
-      - 'assets/raw/**'   # Run if you manually upload
+      - 'assets/raw/**'
+      - 'scripts/grinder.py'
+      - 'scripts/indexer.py'    
 
 permissions:
   contents: write
 
-concurrency:
-  group: "art-processing"
-  cancel-in-progress: true
-
 jobs:
-  refine-and-grind:
+  grind:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Source
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
 
-      # ----------------------------------------------------------------
-      # PHASE 0: THE HEIST (Scraping)
-      # ----------------------------------------------------------------
-      - name: Install Scraper
-        run: pip install gallery-dl
-
-      - name: Create Landing Zone
-        run: mkdir -p assets/raw
-
-      - name: Scrape Album
-        continue-on-error: true
-        # FIXED: Changed --destination to --directory
-        # FIXED: Added path filter to ensure it doesn't create subfolders
+      - name: Install Dependencies
         run: |
-          gallery-dl "${{ secrets.GOOGLE_PHOTOS_ALBUM_LINK }}" \
-          --directory "assets/raw" \
-          --filename "{filename}.{extension}" \
-          --user-agent "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0" \
-          --no-mtime
-
-      # ----------------------------------------------------------------
-      # PHASE 1: THE JANITOR (Deduplication)
-      # ----------------------------------------------------------------
-      - name: Install Processing Dependencies
-        run: |
+          # CPU-only Torch to save massive bandwidth/time
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install opencv-python-headless numpy timm scipy imagehash Pillow
+          # Install other tools directly
+          pip install numpy opencv-python-headless Pillow pillow-heif scipy timm huggingface_hub git+https://github.com/facebookresearch/segment-anything.git
 
-      - name: Run The Janitor
-        run: python scripts/deduplicate.py
-
-      # ----------------------------------------------------------------
-      # PHASE 2: THE GRINDER (3D Depth Processing)
-      # ----------------------------------------------------------------
-      - name: Run The Grinder
-        run: python scripts/grinder.py
-
-      # ----------------------------------------------------------------
-      # PHASE 3: COMMIT RESULTS
-      # ----------------------------------------------------------------
-      - name: Commit Data Artifacts
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Get Changed Files
+        id: changed-files
+        uses: tj-actions/changed-files@v44
         with:
-          commit_message: "🎨 Volumetric Data Update"
-          # No file_pattern = "git add ." (Catches everything)
+          files: assets/raw/**
+
+      - name: Process New Art
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+        run: |
+          echo "Processing the following files:"
+          echo "$CHANGED_FILES"
+          
+          for file in $CHANGED_FILES; do
+            echo "------------------------------------------------"
+            echo "Grinding: $file"
+            python scripts/grinder.py --input "$file"
+            echo "Finished: $file"
+          done
+
+      - name: Scan for Ghosts (Pareidolia)
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          echo "Hallucinating faces in the noise..."
+          python scripts/pareidolia.py
+
+      - name: Rebuild Index
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          echo "Regenerating Global Manifest..."
+          python scripts/indexer.py
+
+      - name: Commit & Push Results
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          git config --global user.name "ArtGrinder Bot"
+          git config --global user.email "bot@hereliesaz.com"
+          git add public/data/*.json
+          git add public/manifest.json
+          git diff --staged --quiet || git commit -m "Generated structural data and manifest"
+          git push
+
