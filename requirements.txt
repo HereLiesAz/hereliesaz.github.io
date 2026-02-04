@@ -1,0 +1,13 @@
+numpy
+opencv-python-headless
+Pillow
+pillow-heif
+scipy
+timm
+huggingface_hub
+git+https://github.com/facebookresearch/segment-anything.git
+# Torch is installed via command line for CPU optimization in CI,
+# but we list it here for local dev compatibility.
+torch
+torchvision
+
