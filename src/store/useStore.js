@@ -8,82 +8,62 @@ const useStore = create((set, get) => ({
   // State
   activeId: null,
   nextId: null,
-  history: [], // The trail of breadcrumbs (Stack)
+  history: [], 
   transitionProgress: 0, 
   
   // Interaction
   isHoveringSignature: false,
   showMenu: false,
   
+  setActiveId: (id) => set({ activeId: id }),
+
   setManifest: (nodes) => {
+    // FIX: Guard against null/undefined
+    if (!nodes || !Array.isArray(nodes)) {
+        console.error("Store received invalid manifest:", nodes);
+        return;
+    }
+
     const graph = {};
     nodes.forEach(node => graph[node.id] = node);
     
-    const startId = nodes[0]?.id;
-    const firstNode = graph[startId];
-    // Determine the next node immediately
-    const nextId = firstNode.neighbors?.[0] || nodes[1]?.id;
-
-    set({ manifest: nodes, graph, activeId: startId, nextId, history: [] });
+    // We do NOT set activeId here anymore; App.jsx does it randomly
+    set({ manifest: nodes, graph });
   },
 
   setTransitionProgress: (val) => {
     let progress = val;
     const { activeId, nextId, history, graph } = get();
 
-    // --- MOVE FORWARD (1.0+) ---
     if (progress >= 1.0) {
       if (!nextId) {
-        // End of the line, clamp to 1
         set({ transitionProgress: 1 });
         return;
       }
-
-      // 1. Push current Active to History
       const newHistory = [...history, activeId];
-      
-      // 2. Next becomes Active
       const newActiveId = nextId;
       const newActiveNode = graph[newActiveId];
       
-      // 3. Find NEW Next (Avoid backtracking immediately)
-      // We look for a neighbor that isn't the one we just came from
-      let newNextId = newActiveNode.neighbors.find(id => id !== activeId) || newActiveNode.neighbors[0];
+      let newNextId = null;
+      if (newActiveNode && newActiveNode.neighbors) {
+         newNextId = newActiveNode.neighbors.find(id => id !== activeId) || newActiveNode.neighbors[0];
+      }
       
-      set({ 
-        activeId: newActiveId, 
-        nextId: newNextId, 
-        history: newHistory,
-        transitionProgress: 0 // Reset to start of new segment
-      });
+      set({ activeId: newActiveId, nextId: newNextId, history: newHistory, transitionProgress: 0 });
       return;
     }
 
-    // --- MOVE BACKWARD (< 0.0) ---
     if (progress < 0) {
       if (history.length === 0) {
-        // Start of the line, clamp to 0
         set({ transitionProgress: 0 });
         return;
       }
-
-      // 1. Pop from History
       const newHistory = [...history];
-      const prevId = newHistory.pop(); // This becomes our Active
-      
-      // 2. Current Active becomes Next (because we are backing away from it)
-      const newNextId = activeId;
-      
-      set({ 
-        activeId: prevId, 
-        nextId: newNextId, 
-        history: newHistory,
-        transitionProgress: 0.99 // Place us at the END of the previous segment
-      });
+      const prevId = newHistory.pop(); 
+      set({ activeId: prevId, nextId: activeId, history: newHistory, transitionProgress: 0.99 });
       return;
     }
 
-    // Normal movement
     set({ transitionProgress: progress });
   },
 
