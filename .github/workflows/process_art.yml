@@ -27,14 +27,10 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-                - name: Install Dependencies
-        
           # CPU-only Torch to save massive bandwidth/time
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           # Install other tools directly
           pip install numpy opencv-python-headless Pillow pillow-heif scipy timm huggingface_hub git+https://github.com/facebookresearch/segment-anything.git
-
 
       - name: Get Changed Files
         id: changed-files
@@ -68,18 +64,6 @@ jobs:
         run: |
           echo "Regenerating Global Manifest..."
           python scripts/indexer.py
-          for file in $CHANGED_FILES; do
-            echo "------------------------------------------------"
-            echo "Grinding: $file"
-            python scripts/grinder.py --input "$file"
-            echo "Finished: $file"
-          done
-
-      - name: Rebuild Index
-        if: steps.changed-files.outputs.any_changed == 'true'
-        run: |
-          echo "Regenerating Global Manifest..."
-          python scripts/indexer.py
 
       - name: Commit & Push Results
         if: steps.changed-files.outputs.any_changed == 'true'
@@ -90,3 +74,4 @@ jobs:
           git add public/manifest.json
           git diff --staged --quiet || git commit -m "Generated structural data and manifest"
           git push
+
