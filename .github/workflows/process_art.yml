@@ -51,6 +51,24 @@ jobs:
             echo "Finished: $file"
           done
 
+      - name: Scan for Ghosts (Pareidolia)
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          echo "Hallucinating faces in the noise..."
+          python scripts/pareidolia.py
+
+      - name: Rebuild Index
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          echo "Regenerating Global Manifest..."
+          python scripts/indexer.py
+          for file in $CHANGED_FILES; do
+            echo "------------------------------------------------"
+            echo "Grinding: $file"
+            python scripts/grinder.py --input "$file"
+            echo "Finished: $file"
+          done
+
       - name: Rebuild Index
         if: steps.changed-files.outputs.any_changed == 'true'
         run: |
