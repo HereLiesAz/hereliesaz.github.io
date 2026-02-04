@@ -6,6 +6,7 @@ on:
     paths:
       - 'assets/raw/**'   # Run when new images are uploaded
       - 'assets/meta/**'  # Run when you edit text in Prose.io
+      - 'assets/pages/**' # <--- ADD THIS
   workflow_dispatch:      # Allows manual run button
 
 # 2. PERMISSIONS (Required to commit changes back)
@@ -44,11 +45,10 @@ jobs:
         run: |
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
-          # Add the generated data
           git add public/data/*.json
           git add public/manifest.json
-          # Add the metadata stubs (so they show up in Prose)
           git add assets/meta/*.md
-          # Only commit if something actually changed
+          git add assets/pages/*.md # <--- AND THIS
           git diff --staged --quiet || git commit -m "Auto-processed art and metadata"
+          git push
           git push
