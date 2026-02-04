@@ -196,23 +196,29 @@ def process_image(self, input_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', required=True, help='Path to image OR folder')
+    parser.add_argument('--shard', type=int, default=0, help='Index of this machine (0, 1, 2...)')
+    parser.add_argument('--total', type=int, default=1, help='Total number of machines')
     args = parser.parse_args()
 
     grinder = ArtGrinder()
 
     if os.path.isdir(args.input):
-        # BATCH MODE
-        print(f"[*] Batch Mode: Scanning {args.input}")
-        for f in os.listdir(args.input):
-            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+        print(f"[*] Batch Mode: Shard {args.shard + 1}/{args.total}")
+        
+        # Sort files to ensure every machine agrees on the order
+        all_files = sorted([f for f in os.listdir(args.input) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))])
+        
+        for i, f in enumerate(all_files):
+            # THE SHARDING LOGIC
+            # Only process if the file index belongs to this machine
+            if i % args.total == args.shard:
                 full_path = os.path.join(args.input, f)
                 try:
                     grinder.process_image(full_path)
                 except Exception as e:
                     print(f"[!] CRITICAL FAIL on {f}: {e}")
-                    continue # Keep grinding the others
+                    continue
     else:
-        # SINGLE FILE
         grinder.process_image(args.input)
 
 if __name__ == "__main__":
