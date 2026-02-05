@@ -6,15 +6,12 @@ DATA_DIR = "public/data"
 MANIFEST_PATH = "public/manifest.json"
 
 def calculate_distance(c1, c2):
-    # Euclidean distance between two RGB colors
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(c1, c2)))
 
 def main():
     print("[*] Indexing processed art data...")
-    
-    # Ensure data directory exists
+
     if not os.path.exists(DATA_DIR):
-        print(f"[!] Data directory {DATA_DIR} not found. Creating empty manifest.")
         with open(MANIFEST_PATH, 'w') as f:
             json.dump({"nodes": []}, f)
         return
@@ -22,79 +19,82 @@ def main():
     files = [f for f in os.listdir(DATA_DIR) if f.endswith('.json') and f != 'manifest.json']
     library = []
 
-    # 1. Load all metadata
     for f in files:
-        path = os.path.join(DATA_DIR, f)
         try:
-            with open(path, 'r') as json_file:
-                data = json.load(json_file)
+            with open(os.path.join(DATA_DIR, f), 'r') as jf:
+                data = json.load(jf)
                 
-                meta = data.get('meta', {})
-                strokes = data.get('strokes', [])
-                ghosts = data.get('pareidolia', [])
-                
-                # Determine "Sweet Spot" (Target View)
-                # If we found a ghost, look at the first one. Otherwise center.
+                # --- SCAVENGER LOGIC ---
+                # Recover files that are raw lists (legacy/broken format)
+                if isinstance(data, list):
+                    # Assume the list is the strokes data
+                    strokes = data
+                    # Create fake metadata since we can't read it
+                    meta = {
+                        "resolution": [1024, 1024], # Default assumption
+                        "stroke_count": len(strokes),
+                        "dominant_color": [100, 100, 100] # Default grey
+                    }
+                    ghosts = []
+                else:
+                    # Standard Format
+                    meta = data.get('meta', {})
+                    strokes = data.get('strokes', [])
+                    ghosts = data.get('pareidolia', [])
+                # -----------------------
+
+                # Determine View Target
                 if len(ghosts) > 0:
-                    # Offset to center (0.5, 0.5)
                     target = [ghosts[0]['x'] - 0.5, ghosts[0]['y'] - 0.5, 0] 
                 else:
                     target = [0, 0, 0]
 
-                # Ensure dominant color exists
+                # Ensure Color Exists
                 if 'dominant_color' not in meta:
+                    # Calculate from strokes if missing
                     if len(strokes) > 0:
-                        sample = strokes[:100]
-                        avg_r = sum(s['color'][0] for s in sample) / len(sample)
-                        avg_g = sum(s['color'][1] for s in sample) / len(sample)
-                        avg_b = sum(s['color'][2] for s in sample) / len(sample)
-                        meta['dominant_color'] = [int(avg_r), int(avg_g), int(avg_b)]
+                        try:
+                            # Handle case where stroke is not a dict (legacy)
+                            sample = strokes[:50]
+                            # Check if stroke is dict or list/other
+                            if isinstance(sample[0], dict) and 'color' in sample[0]:
+                                avg_r = sum(s['color'][0] for s in sample) / len(sample)
+                                avg_g = sum(s['color'][1] for s in sample) / len(sample)
+                                avg_b = sum(s['color'][2] for s in sample) / len(sample)
+                                meta['dominant_color'] = [int(avg_r), int(avg_g), int(avg_b)]
+                            else:
+                                meta['dominant_color'] = [128, 128, 128]
+                        except:
+                            meta['dominant_color'] = [128, 128, 128]
                     else:
                         meta['dominant_color'] = [0, 0, 0]
 
-                entry = {
+                library.append({
                     "id": os.path.splitext(f)[0],
                     "file": f,
                     "resolution": meta.get('resolution', [1024, 1024]),
                     "color": meta['dominant_color'],
-                    "stroke_count": meta.get('stroke_count', 0),
+                    "stroke_count": meta.get('stroke_count', len(strokes)),
                     "view_origin": [0, 0, 5], 
                     "view_target": target,
                     "ghost_count": len(ghosts)
-                }
-                library.append(entry)
-                
+                })
         except Exception as e:
-            print(f"[!] Error reading {f}: {e}")
+            # Only print error if it's truly unreadable
+            # print(f"[!] Skipped {f}: {e}")
+            pass
 
-    # 2. Build the Graph
+    # Build Graph
     print(f"[*] Building graph for {len(library)} nodes...")
-    
     for item in library:
         my_color = item['color']
-        distances = []
-        
-        for potential_match in library:
-            if item['id'] == potential_match['id']:
-                continue
-            
-            dist = calculate_distance(my_color, potential_match['color'])
-            distances.append({
-                "id": potential_match['id'],
-                "weight": dist
-            })
-        
-        # Sort by similarity (lowest distance)
-        distances.sort(key=lambda x: x['weight'])
-        
-        # Link to top 3 matches
-        item['neighbors'] = [d['id'] for d in distances[:3]]
+        dists = sorted(library, key=lambda x: calculate_distance(my_color, x['color']))
+        item['neighbors'] = [x['id'] for x in dists if x['id'] != item['id']][:3]
 
-    # 3. Save Manifest
     with open(MANIFEST_PATH, 'w') as f:
         json.dump({"nodes": library}, f, indent=2)
     
-    print(f"[*] Manifest generated at {MANIFEST_PATH} with {len(library)} items.")
+    print(f"[*] RECOVERED Manifest with {len(library)} items.")
 
 if __name__ == "__main__":
     main()
