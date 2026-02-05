@@ -46,7 +46,7 @@ jobs:
 
       - name: Grind Shard ${{ matrix.shard_id }}
         # We pass the matrix ID and the total count (4) to the script
-        run: python scripts/grinder.py --input assets/raw --shard ${{ matrix.shard_id }} --total 4
+        run: python scripts/grinder.py --input assets/raw --shard ${{ matrix.shard_id }} --total 8
 
       - name: Upload Artifacts (Data)
         uses: actions/upload-artifact@v4
