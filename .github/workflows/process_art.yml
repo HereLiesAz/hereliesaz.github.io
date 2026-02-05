@@ -1,117 +1,120 @@
-name: Process Art (Parallel)
+name: Art Processor (The Grinder)
 
 on:
   push:
     paths:
       - 'assets/raw/**'
-      - 'assets/meta/**'
-      - 'assets/pages/**'
-  workflow_dispatch:
-    inputs:
-      shards:
-        description: 'Number of parallel runners'
-        required: true
-        default: '4'
+      - 'scripts/grinder.py'
+      - 'scripts/indexer.py'
+      - 'scripts/pareidolia.py'
 
 permissions:
   contents: write
 
 jobs:
-  # PHASE 1: THE SWARM
   grind:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
-        # We define a static list of potential IDs. 
-        # If you want 4 runners, we use 0,1,2,3.
-        # You can increase this list if you want more power later.
-        shard_id: [0, 1, 2, 3, 4, 5, 6, 7] 
-    
+        shard: [0, 1] # DOUBLE BARREL
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.10'
+          cache: 'pip'
 
       - name: Install Dependencies
         run: |
-          pip install opencv-python numpy torch torchvision Pillow scipy timm huggingface_hub
-          pip install git+https://github.com/facebookresearch/segment-anything.git
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy opencv-python-headless Pillow pillow-heif scipy timm huggingface_hub git+https://github.com/facebookresearch/segment-anything.git
 
-      - name: Grind Shard ${{ matrix.shard_id }}
-        # We pass the matrix ID and the total count (4) to the script
-        run: python scripts/grinder.py --input assets/raw --shard ${{ matrix.shard_id }} --total 8
-
-      - name: Upload Artifacts (Data)
-        uses: actions/upload-artifact@v4
+      - name: Get Changed Files
+        id: changed-files
+        uses: tj-actions/changed-files@v44
         with:
-          name: shard-${{ matrix.shard_id }}-data
-          path: public/data/*.json
-          if-no-files-found: ignore
+          files: assets/raw/**
 
-      - name: Upload Artifacts (Meta)
-        uses: actions/upload-artifact@v4
-        with:
-          name: shard-${{ matrix.shard_id }}-meta
-          path: assets/meta/*.md
-          if-no-files-found: ignore
-
-  # PHASE 2: THE COLLAPSE
-  finalize:
-    needs: grind
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: temp_artifacts
-          merge-multiple: true
-
-      - name: Restore Data
-        # Move the downloaded artifacts into the correct folders
+      - name: Process New Art
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
         run: |
-          mkdir -p public/data
-          mkdir -p assets/meta
+          echo "Processing files for Shard ${{ matrix.shard }} of 2..."
           
-          # Copy JSONs if they exist
-          if ls temp_artifacts/*.json 1> /dev/null 2>&1; then
-            cp temp_artifacts/*.json public/data/
-          fi
-          
-          # Copy MDs if they exist
-          if ls temp_artifacts/*.md 1> /dev/null 2>&1; then
-            cp temp_artifacts/*.md assets/meta/
+          for file in $CHANGED_FILES; do
+            echo "------------------------------------------------"
+            echo "Candidate: $file"
+            # We pass the shard info to the python script
+            python scripts/grinder.py --input "$file" --shard_index ${{ matrix.shard }} --total_shards 2
+          done
+
+      - name: Scan for Ghosts (Pareidolia)
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          # Only run pareidolia if files were actually processed (simple check)
+          # Actually, both runners can try to scan ghosts, it's fast enough.
+          python scripts/pareidolia.py
+
+      - name: Rebuild Index (Force Fix)
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          # Only Runner 0 needs to rebuild the index to avoid race conditions
+          if [ "${{ matrix.shard }}" != "0" ]; then
+            echo "Shard ${{ matrix.shard }} skipping index rebuild."
+            exit 0
           fi
 
-      - name: Index Everything
-        run: python scripts/indexer.py
+          # Overwrite indexer.py with clean code
+          cat > scripts/indexer.py << 'EOF'
+          import os, json, math
+          DATA_DIR, MANIFEST = "public/data", "public/manifest.json"
+          if not os.path.exists(DATA_DIR):
+              with open(MANIFEST, 'w') as f: json.dump({"nodes": []}, f)
+              exit()
+          library = []
+          for f in [x for x in os.listdir(DATA_DIR) if x.endswith('.json') and x != 'manifest.json']:
+              try:
+                  with open(os.path.join(DATA_DIR, f)) as jf:
+                      d = json.load(jf)
+                      m = d.get('meta', {})
+                      library.append({
+                          "id": os.path.splitext(f)[0],
+                          "file": f,
+                          "resolution": m.get('resolution', [1000,1000]),
+                          "color": m.get('dominant_color', [0,0,0]),
+                          "stroke_count": m.get('stroke_count', 0),
+                          "view_origin": [0,0,5],
+                          "view_target": [0,0,0],
+                          "neighbors": []
+                      })
+              except: pass
+          # Simple Color Linking
+          for node in library:
+              dists = sorted(library, key=lambda x: math.dist(node['color'], x['color']))
+              node['neighbors'] = [x['id'] for x in dists if x['id'] != node['id']][:3]
+          
+          with open(MANIFEST, 'w') as f: json.dump({"nodes": library}, f)
+          print(f"Manifest built with {len(library)} items.")
+          EOF
+          
+          python scripts/indexer.py
 
       - name: Commit & Push Results
         if: steps.changed-files.outputs.any_changed == 'true'
         run: |
+          # Race condition mitigation: Pull before push
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
+          git pull --rebase || true
           
-          # Force add the critical data (ignore errors if missing)
           git add public/data/*.json || true
           git add public/manifest.json || true
           
-          # Only commit if we actually have something
-          git diff --staged --quiet || git commit -m "Grind Complete: Updated data and manifest"
+          git diff --staged --quiet || git commit -m "Grind Shard ${{ matrix.shard }}: Data Update"
           git push
