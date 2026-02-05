@@ -1,88 +1,67 @@
-import React, { useEffect, Suspense } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { Loader } from '@react-three/drei';
+/**
+ * APP COMPONENT
+ * =============
+ * The root React component.
+ * Responsible for:
+ * 1. Bootstrapping the application.
+ * 2. Fetching the manifest.json.
+ * 3. Initializing the Zustand store.
+ * 4. Rendering the UI and the 3D Canvas.
+ */
+
+import { useEffect, useState } from 'react';
+import InfiniteVoid from './canvas/InfiniteVoid';
+import Interface from './ui/Interface';
 import useStore from './store/useStore';
-import CameraRig from './canvas/CameraRig';
-import InfiniteCanvas from './canvas/InfiniteCanvas';
-import Overlay from './components/Overlay';
 
-const App = () => {
+function App() {
+  // Local loading state
+  const [loaded, setLoaded] = useState(false);
+
+  // Access store actions
   const setManifest = useStore(state => state.setManifest);
-  const setActiveId = useStore(state => state.setActiveId);
-  const activeId = useStore(state => state.activeId);
-  const nextId = useStore(state => state.nextId);
-  const transitionProgress = useStore(state => state.transitionProgress);
 
-  // 1. Fetch Manifest on Mount & Randomize Start
+  // --- BOOTSTRAP ---
   useEffect(() => {
+    // 1. Fetch the Manifest
+    // This file contains the graph of all artworks.
     fetch('/manifest.json')
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
-        return res.json();
-      })
+      .then(res => res.json())
       .then(data => {
-        if (!data.nodes || Object.keys(data.nodes).length === 0) {
-          console.error("Manifest is empty or invalid.");
-          return;
-        }
-
+        // 2. Hydrate the Store
+        // The store will calculate the initial path and setup the graph.
         setManifest(data.nodes);
-
-        // Chaos selection: Pick a random starting point
-        const keys = Object.keys(data.nodes);
-        const randomId = keys[Math.floor(Math.random() * keys.length)];
         
-        if (setActiveId) {
-            setActiveId(randomId);
-        } else {
-            useStore.setState({ activeId: randomId });
-        }
-        
-        console.log("System Initialized. Random Start:", randomId);
+        // 3. Signal Ready
+        setLoaded(true);
       })
-      .catch(err => console.error("Manifest Load Failed:", err));
-  }, [setManifest, setActiveId]);
+      .catch(err => {
+        console.error("Failed to load manifest:", err);
+      });
+  }, [setManifest]);
+
+  if (!loaded) {
+    return (
+      <div className="loader">
+        <h1>INITIALIZING VOID...</h1>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#050505' }}>
-      <Canvas 
-        camera={{ position: [0, 0, 5], fov: 75 }}
-        gl={{ antialias: false, alpha: false }}
-        dpr={[1, 2]} 
-      >
-        <color attach="background" args={['#050505']} />
-        
-        <Suspense fallback={null}>
-          <CameraRig />
-          
-          {activeId && (
-            <group position={[0, 0, 0]}>
-              <InfiniteCanvas 
-                activePaintingId={activeId} 
-                transitionProgress={transitionProgress}
-              />
-            </group>
-          )}
+    <div className="app-container">
+      {/* The 2D UI Overlay (HUD) */}
+      <Interface />
 
-          {nextId && (
-            <group position={[0, 0, -20]}> 
-              <InfiniteCanvas 
-                activePaintingId={nextId} 
-                transitionProgress={0} 
-              />
-            </group>
-          )}
-          
-          <ambientLight intensity={0.2} />
-          <spotLight position={[10, 10, 10]} intensity={1} angle={0.5} penumbra={1} />
-          
-        </Suspense>
-      </Canvas>
+      {/* The 3D Scene */}
+      <InfiniteVoid />
       
-      <Loader />
-      <Overlay />
+      {/* Background Audio (Optional) */}
+      <audio loop>
+        <source src="/ambient_hum.mp3" type="audio/mpeg" />
+      </audio>
     </div>
   );
-};
+}
 
 export default App;
