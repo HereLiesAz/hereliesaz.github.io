@@ -1,87 +1,96 @@
 /**
  * CAMERA RIG
  * ==========
- * Controls the camera movement and translates user scroll input into 3D navigation.
+ * The physics-based camera controller.
+ *
+ * Responsibilities:
+ * 1. Listen for user input (Wheel for scroll/flight).
+ * 2. Manage "Scroll Velocity" for smooth momentum.
+ * 3. Update the global 'transitionProgress' in the store.
+ * 4. Move the Three.js camera based on the progress.
+ * 5. Apply subtle handheld motion/noise.
  */
 
 import React, { useRef, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { useScroll } from '@react-three/drei'; // Standard R3F ScrollControls
 import useStore from '../store/useStore';
 
-const CameraRig = ({ spacing }) => {
+const CameraRig = () => {
   const { camera } = useThree();
-  const setTransitionProgress = useStore(state => state.setTransitionProgress);
   const transitionProgress = useStore(state => state.transitionProgress);
+  const setTransitionProgress = useStore(state => state.setTransitionProgress);
   
-  // Ref to track smooth scroll position
-  const scrollRef = useRef(0);
+  // Physics State
+  const scrollVelocity = useRef(0);
+  const targetProgress = useRef(transitionProgress); // Local tracker for smooth dampening
 
-  // --- MOUSE PARALLAX ---
-  // We want the camera to slightly look towards the mouse cursor.
-  // This adds a feeling of "depth" and responsiveness.
-  const mouse = useRef(new THREE.Vector2());
+  // Tuning Constants
+  const FLIGHT_SPEED = 0.0005; // How fast we fly per wheel tick
+  const DAMPING = 0.05;        // Friction/Lerp factor (Lower = Smoother/Slower)
 
+  // Sync Ref if external state changes (e.g. after a hard jump to a new artwork)
   useEffect(() => {
-    const onMouseMove = (e) => {
-        // Normalize mouse to -1 to +1
-        mouse.current.x = (e.clientX / window.innerWidth) * 2 - 1;
-        mouse.current.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    targetProgress.current = transitionProgress;
+  }, [transitionProgress]);
+
+  // --- INPUT HANDLING ---
+  useEffect(() => {
+    const handleWheel = (e) => {
+      // DeltaY is positive when scrolling down (Forward), negative up (Backward)
+      // We accumulate velocity rather than position for momentum.
+      scrollVelocity.current += e.deltaY * FLIGHT_SPEED;
     };
-    window.addEventListener('mousemove', onMouseMove);
-    return () => window.removeEventListener('mousemove', onMouseMove);
+
+    // Passive listener for performance
+    window.addEventListener('wheel', handleWheel, { passive: true });
+    return () => window.removeEventListener('wheel', handleWheel);
   }, []);
 
   // --- ANIMATION LOOP ---
   useFrame((state, delta) => {
-    // 1. UPDATE SCROLL
-    // In a real implementation, we would hook into 'useScroll()' or 'lenis' here.
-    // For this demo, let's simulate a scroll or assume 'transitionProgress' is driven elsewhere.
+    // 1. APPLY FRICTION
+    // Decay velocity over time (0.95 per frame is a simple friction model)
+    scrollVelocity.current *= 0.95;
+    
+    // 2. APPLY VELOCITY
+    // Only update if moving significantly to save calc
+    if (Math.abs(scrollVelocity.current) > 0.00001) {
+       targetProgress.current += scrollVelocity.current;
+    }
+    
+    // NOTE: We do NOT clamp targetProgress here.
+    // We let it go > 1.0 or < 0.0 so the Store can detect the boundary crossing
+    // and trigger the "Next Artwork" or "Previous Artwork" logic.
 
-    // Let's say we interpolate the camera Z based on the store's progress.
-    // If activeIndex is 0 and progress is 0.5, we are at Z = 0 + (200 * 0.5) = 100.
+    // 3. SMOOTH INTERPOLATION
+    // We strictly interpolate the VISUAL progress.
+    const smoothed = THREE.MathUtils.lerp(transitionProgress, targetProgress.current, DAMPING);
     
-    // We need to know WHICH index we are at.
-    // The store has 'activeId'. We need to find its index in the manifest.
-    const manifest = useStore.getState().manifest;
-    const activeId = useStore.getState().activeId;
-    const activeIndex = manifest.findIndex(n => n.id === activeId);
+    // Update Store only if changed
+    if (Math.abs(smoothed - transitionProgress) > 0.0001) {
+      setTransitionProgress(smoothed);
+    }
     
-    if (activeIndex === -1) return;
-
-    // Target Z Position
-    const currentZ = activeIndex * spacing;
-    const nextZ = (activeIndex + 1) * spacing; // Simplified: assumes next is always index+1
+    // 4. MOVE CAMERA
+    // Map progress (0->1) to Z-position (5 -> -5).
+    // The artwork is typically centered at Z=0.
+    // Start (0.0): Z=5 (Viewing position).
+    // End (1.0): Z=-5 (Passed through).
+    const zPos = THREE.MathUtils.lerp(5, -5, transitionProgress);
+    camera.position.set(0, 0, zPos);
     
-    // Interpolate Z based on transitionProgress (0.0 -> 1.0)
-    const targetZ = THREE.MathUtils.lerp(currentZ, nextZ, transitionProgress);
+    // 5. HANDHELD MOTION (Noise)
+    // Adds a subtle breathing/floating effect using sine waves.
+    const time = state.clock.elapsedTime;
+    camera.position.x += Math.sin(time * 0.5) * 0.1;
+    camera.position.y += Math.cos(time * 0.3) * 0.1;
     
-    // Smooth dampening
-    // scrollRef.current = THREE.MathUtils.damp(scrollRef.current, targetZ, 4, delta);
-    // Direct assignment for responsiveness in this example:
-    camera.position.z = targetZ;
-    
-    // 2. MOUSE LOOK
-    // Create a target point for the camera to look at.
-    // It looks at (0,0, targetZ - 10) but offset by mouse.
-    const lookAtTarget = new THREE.Vector3(
-        mouse.current.x * 5, // Parallax X strength
-        mouse.current.y * 5, // Parallax Y strength
-        targetZ - 20         // Look slightly ahead
-    );
-    
-    // Smoothly interpolate the camera's lookAt
-    // Note: We manipulate quaternion or just use lookAt with damping
-    const currentLook = new THREE.Vector3(0, 0, targetZ - 20); // Placeholder
-    currentLook.lerp(lookAtTarget, 0.1);
-    camera.lookAt(currentLook);
-    
-    // 3. SHAKE / NOISE (Optional)
-    // Adding subtle perlin noise to the camera position makes it feel organic.
+    // Always look slightly ahead
+    camera.lookAt(0, 0, -10);
   });
 
-  return null; // This component has no visual representation
+  return null; // Logic-only component
 };
 
 export default CameraRig;

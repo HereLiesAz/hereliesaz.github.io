@@ -1,7 +1,16 @@
+/**
+ * OVERLAY COMPONENT
+ * =================
+ * The 2D Heads-Up Display (HUD).
+ * Renders the interface elements on top of the 3D canvas.
+ * Includes the Signature, Info Panel, and Glass Menu.
+ */
+
 import React from 'react';
 import useStore from '../store/useStore';
 
 const Overlay = () => {
+  // Access global state
   const activeId = useStore(state => state.activeId);
   const graph = useStore(state => state.graph);
   const transitionProgress = useStore(state => state.transitionProgress);
@@ -10,15 +19,16 @@ const Overlay = () => {
   
   const activeNode = graph[activeId];
   
-  // Calculate Opacity for Info
-  // Fade in when progress is near 0 (Sweet Spot), fade out as we fly away
-  // 0.0 -> 1.0 opacity
-  // 0.2 -> 0.0 opacity
+  // --- OPACITY CALCULATION ---
+  // Fade out UI when moving between artworks.
+  // 1.0 at Sweet Spot (progress 0.0 or 1.0)
+  // 0.0 during flight (progress ~0.5)
+  // Formula: Max(0, 1 - (progress * 5)) -> Fades out very quickly (by 0.2 progress)
   const infoOpacity = Math.max(0, 1 - (transitionProgress * 5));
 
   return (
     <div className="overlay-container">
-      {/* 1. Signature (Top Left) */}
+      {/* 1. SIGNATURE (Top Left) - Acts as Menu Button */}
       <div 
         className="signature"
         onClick={toggleMenu}
@@ -29,14 +39,15 @@ const Overlay = () => {
         </h1>
       </div>
 
-      {/* 2. Info Panel (Bottom, Fades) */}
+      {/* 2. INFO PANEL (Bottom Center) - Displays Title/Meta */}
       {activeNode && (
         <div 
           className="info-panel"
           style={{ opacity: infoOpacity }}
         >
+          {/* Display ID/Title (Stripping ID formatting if needed) */}
           <h2 style={{ fontSize: '1rem', fontWeight: 600, textTransform: 'uppercase' }}>
-            {activeNode.id.split('~')[0]} {/* Clean up filename ID */}
+            {activeNode.id.split('~')[0]}
           </h2>
           <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>
             {activeNode.stroke_count} STROKES // {activeNode.resolution[0]}x{activeNode.resolution[1]}
@@ -44,7 +55,7 @@ const Overlay = () => {
         </div>
       )}
 
-      {/* 3. Glass Menu (Center) */}
+      {/* 3. GLASS MENU (Modal) - Fullscreen Navigation */}
       {showMenu && (
         <div className="glass-modal">
           <div className="glass-content">
@@ -66,7 +77,9 @@ const Overlay = () => {
   );
 };
 
-// CSS Injection for simplicity in this file output
+// --- CSS INJECTION ---
+// In a larger app, this would be in a .css or .module.css file.
+// For this portfolio, we inject styles dynamically for portability.
 const styles = `
   .overlay-container {
     position: absolute;

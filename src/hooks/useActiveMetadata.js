@@ -1,12 +1,26 @@
+/**
+ * HOOK: Active Metadata
+ * =====================
+ * Determines which artwork is currently in focus based on scroll position.
+ * Returns the metadata (Title, Year) and an opacity value for fading UI.
+ */
+
 import { useMemo } from 'react';
-import { useStore } from '../store';
-import manifest from '../../public/data/manifest.json'; // Direct import or fetch
+import useStore from '../store/useStore';
+
+// Note: Direct import from public might require build tool config.
+// Ideally this data should come from the Store which fetched it.
+import manifest from '../../public/data/manifest.json';
 
 const PAINTING_SPACING = 500;
 const FOCUS_WINDOW = 50; // Range +/- where text is visible
 
 export const useActiveMetadata = () => {
-  const scrollZ = useStore((state) => state.scrollZ);
+  // We track the raw scrollZ from the store (not transitionProgress)
+  // Note: Ensure useStore actually exposes scrollZ if this hook is used.
+  // The current useStore implementation uses 'transitionProgress'.
+  // This hook might be legacy or need refactoring to use 'transitionProgress'.
+  const scrollZ = useStore((state) => state.scrollZ || 0);
 
   return useMemo(() => {
     // Iterate through manifest to find if we are near a sweet spot

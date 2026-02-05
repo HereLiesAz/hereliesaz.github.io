@@ -10,3 +10,4 @@ git+https://github.com/facebookresearch/segment-anything.git
 torch
 torchvision
 imagehash
+opencv-python

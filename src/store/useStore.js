@@ -1,22 +1,18 @@
 /**
- * GLOBAL STATE STORE (Zustand)
- * ============================
- * This is the "Brain" of the application. It handles:
- * 1. Data Management: Storing the artwork manifest and graph.
- * 2. Navigation Logic: Deciding which artwork comes next based on visual similarity.
- * 3. Camera State: Tracking scroll progress and transition history.
- * 4. UI State: Managing overlays and menus.
+ * GLOBAL STORE (Zustand)
+ * ======================
+ * Manages the application state, specifically the "Graph" of artworks
+ * and the user's traversal through it.
  */
 
 import { create } from 'zustand';
 
 /**
- * Calculates the Euclidean distance between the colors of two nodes.
- * Used for finding the "nearest neighbor" in color space.
- *
+ * Helper: Calculate Euclidean distance between two color vectors.
+ * Used to find the "Nearest Neighbor" in color space.
  * @param {Object} nodeA - Source node { color: [r,g,b] }
  * @param {Object} nodeB - Target node { color: [r,g,b] }
- * @returns {number} Distance value.
+ * @returns {number} Distance
  */
 const getDist = (nodeA, nodeB) => {
   if (!nodeA || !nodeB) return Infinity;
@@ -29,36 +25,29 @@ const getDist = (nodeA, nodeB) => {
 
 const useStore = create((set, get) => ({
   // --- DATA ---
-  manifest: [], // Array of all artwork nodes
-  graph: {},    // Map of { id: node } for O(1) lookup
-
-  // --- NAVIGATION STATE ---
-  activeId: null, // The ID of the artwork currently in focus (Sweet Spot)
-  nextId: null,   // The ID of the upcoming artwork (where the path leads)
-  history: [],    // Stack of previously visited IDs (for back navigation)
+  manifest: [], // List of all nodes
+  graph: {},    // Map { id: node } for O(1) access
   
-  // 0.0 = At activeId
-  // 1.0 = At nextId
-  transitionProgress: 0,
+  // --- STATE ---
+  activeId: null,      // The artwork currently in focus
+  nextId: null,        // The artwork loading in the background (forward path)
+  history: [],         // Stack of visited IDs (for back button logic)
+  transitionProgress: 0, // 0.0 (At Active) -> 1.0 (At Next)
   
   // --- FILTERS ---
-  activeCategory: 'all', // Filter: 'all', 'painting', 'photography', etc.
+  activeCategory: 'all', // Filter: 'all', 'painting', 'photography'
   
-  // --- UI STATE ---
-  isHoveringSignature: false, // For easter eggs
-  showMenu: false,            // Toggle the glass menu
+  // --- UI ---
+  isHoveringSignature: false,
+  showMenu: false,
 
   // --- ACTIONS ---
 
   /**
-   * Initializes the store with the loaded manifest.
-   * Called by App.jsx after fetch.
-   * @param {Array} nodes - The list of artworks from manifest.json
+   * Initialize the store with data from manifest.json
    */
   setManifest: (nodes) => {
     if (!nodes || !Array.isArray(nodes)) return;
-
-    // Build the lookup graph
     const graph = {};
     nodes.forEach(node => graph[node.id] = node);
     
@@ -66,14 +55,18 @@ const useStore = create((set, get) => ({
     const startId = nodes[0]?.id;
     set({ manifest: nodes, graph, activeId: startId, history: [] });
     
-    // Immediately calculate the first path
+    // Determine the first path
     get().calcNextNode(); 
   },
 
+  setActiveId: (id) => {
+      set({ activeId: id });
+      get().calcNextNode();
+  },
+
   /**
-   * Changes the active category filter and recalculates the path.
-   * This allows the "Infinite Scroll" to dynamically adapt.
-   * e.g. If you switch to "Blue", the next node will be the nearest blue artwork.
+   * Filter the graph by category.
+   * Immediately recalculates the path to "bridge" to the new category.
    */
   setCategory: (category) => {
     const currentCat = get().activeCategory;
@@ -81,21 +74,20 @@ const useStore = create((set, get) => ({
 
     set({ activeCategory: category });
     
-    // Recalculate path immediately to create a "Bridge"
+    // Recalculate path immediately
     get().calcNextNode();
   },
 
   /**
    * THE PATHFINDER
-   * Determines the 'nextId' based on the current node's neighbors
-   * and the active category filter.
+   * Determines 'nextId' based on visual similarity and filters.
    */
   calcNextNode: () => {
     const { activeId, graph, manifest, activeCategory } = get();
     const current = graph[activeId];
     if (!current) return;
 
-    // 1. Start with pre-calculated neighbors (from indexer.py)
+    // 1. Get pre-calculated neighbors (from indexer.py)
     let candidates = current.neighbors || [];
     
     // 2. Apply Category Filter
@@ -103,95 +95,85 @@ const useStore = create((set, get) => ({
       const filtered = candidates.filter(id => graph[id]?.category === activeCategory);
       
       if (filtered.length > 0) {
-        // Ideally, one of the neighbors is in the category.
         candidates = filtered;
       } else {
-        // HARD BRIDGE:
-        // If no direct neighbors match the category, we must search the ENTIRE manifest.
-        // We find the node in the target category that is closest in color to the current node.
+        // BRIDGE: Search entire manifest if local neighbors fail
         const allInCategory = manifest.filter(n => n.category === activeCategory && n.id !== activeId);
         
         if (allInCategory.length > 0) {
-            // Sort by visual similarity (color distance)
+            // Sort by color distance
             allInCategory.sort((a, b) => getDist(current, a) - getDist(current, b));
-            candidates = [allInCategory[0].id]; // Force jump to best match
+            candidates = [allInCategory[0].id];
         }
       }
     }
 
-    // 3. Avoid Backtracking
-    // Try not to suggest the node we literally just came from.
+    // 3. Avoid Backtracking (don't suggest where we just came from)
     const prevId = get().history[get().history.length - 1];
     
     let next = candidates.find(id => id !== prevId);
-
-    // Fallback: If all candidates are the previous node (dead end), just go back.
     if (!next && candidates.length > 0) next = candidates[0];
 
-    // 4. Update State
+    // 4. Update Next ID
     if (next) set({ nextId: next });
   },
 
   /**
-   * Updates the scroll progress and handles "Page Turns".
-   * This is called every frame by the CameraRig.
-   * @param {number} val - New progress value.
+   * Handles the "Page Turn" when transition crosses 0 or 1.
+   * Driven by CameraRig.
    */
   setTransitionProgress: (val) => {
     let progress = val;
     const { activeId, nextId, history } = get();
 
-    // --- CASE 1: MOVING FORWARD (Passes 100%) ---
+    // --- CASE 1: MOVING FORWARD (Finish Line) ---
     if (progress >= 1.0) {
       if (!nextId) {
-        set({ transitionProgress: 1 }); // End of the line
+        set({ transitionProgress: 1 }); // End of world
         return;
       }
 
-      // Commit current node to history
+      // Commit to history
       const newHistory = [...history, activeId];
       
-      // The Next node becomes the Active node
+      // Step Forward
       set({ 
         activeId: nextId, 
         history: newHistory,
-        transitionProgress: 0 // Reset scroll for the new section
+        transitionProgress: 0 // Reset to start of new section
       });
       
-      // Find the path from this new location
+      // Calculate new path
       get().calcNextNode();
       return;
     }
 
-    // --- CASE 2: MOVING BACKWARD (Below 0%) ---
+    // --- CASE 2: MOVING BACKWARD (Start Line) ---
     if (progress < 0) {
       if (history.length === 0) {
         set({ transitionProgress: 0 }); // Already at start
         return;
       }
 
-      // Pop the last node from history
+      // Step Back
       const newHistory = [...history];
       const prevId = newHistory.pop(); 
       
-      // The Previous node becomes the Active node
       set({ 
         activeId: prevId, 
         history: newHistory,
-        transitionProgress: 0.99 // Set scroll to end of that section
+        transitionProgress: 0.99 // Set to end of previous section
       });
       
-      // Crucial: When going back, the "Next" must be where we just came from.
-      // This preserves the timeline continuity.
+      // Restore the forward path (Next = what used to be Active)
       set({ nextId: activeId });
       return;
     }
 
-    // --- CASE 3: NORMAL SCROLLING ---
+    // --- CASE 3: SCROLLING ---
     set({ transitionProgress: progress });
   },
 
-  // --- UI ACTIONS ---
   toggleMenu: () => set(state => ({ showMenu: !state.showMenu })),
   setHoverSignature: (hover) => set({ isHoveringSignature: hover }),
 }));

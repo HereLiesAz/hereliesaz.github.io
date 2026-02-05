@@ -1,31 +1,26 @@
 /**
- * UI INTERFACE
- * ============
- * The Heads-Up Display (HUD) overlaying the 3D scene.
- * It renders the artwork title/year when in focus, and provides access to the menu.
+ * LEGACY INTERFACE (Unused)
+ * =========================
+ * This component represents an alternative UI implementation.
+ * It is currently not imported by App.jsx (which uses Overlay.jsx).
+ * Kept for reference or future V2 implementation.
  */
 
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useActiveMetadata } from '../hooks/useActiveMetadata';
 import GlassMenu from './GlassMenu';
-import Signature from './Signature'; // Your SVG component
+import Signature from './Signature';
 
 const Interface = () => {
-  // Local state for the menu overlay
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Hook that queries the store to find out which artwork is currently "Sweet Spotted".
-  // It returns opacity 1.0 when perfectly aligned, fading to 0.0 as you scroll away.
+  // Uses the legacy hook
   const { visible, opacity, data } = useActiveMetadata();
 
   return (
     <>
-      {/*
-        1. Fixed Signature (Top Left)
-        Functions as the "Hamburger Menu" button.
-        Uses 'mix-blend-mode: difference' to ensure visibility against bright/dark backgrounds.
-      */}
+      {/* 1. Fixed Signature (Top Left) */}
       <div 
         style={{ position: 'fixed', top: 30, left: 30, zIndex: 50, cursor: 'pointer', mixBlendMode: 'difference' }}
         onClick={() => setMenuOpen(true)}
@@ -33,11 +28,7 @@ const Interface = () => {
         <Signature width={120} color="#ffffff" />
       </div>
 
-      {/*
-        2. Dynamic Metadata (Bottom Center)
-        Displays the Title and Year of the current artwork.
-        Fades in/out based on the 'opacity' returned by the hook.
-      */}
+      {/* 2. Dynamic Metadata (Bottom Center) */}
       <motion.div
         animate={{ opacity: visible ? opacity : 0 }}
         transition={{ duration: 0.2 }}
@@ -47,7 +38,7 @@ const Interface = () => {
           left: 0,
           right: 0,
           textAlign: 'center',
-          pointerEvents: 'none', // Allows clicks to pass through to the canvas
+          pointerEvents: 'none',
           zIndex: 40,
           fontFamily: "'Helvetica Neue', sans-serif",
           letterSpacing: '0.2em',
@@ -63,10 +54,7 @@ const Interface = () => {
         )}
       </motion.div>
 
-      {/*
-        3. The Glass Menu Overlay
-        Full-screen navigation menu (hidden by default).
-      */}
+      {/* 3. The Overlay */}
       <GlassMenu isOpen={menuOpen} onClose={() => setMenuOpen(false)} />
     </>
   );
