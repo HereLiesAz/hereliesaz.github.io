@@ -26,7 +26,7 @@ jobs:
         # We define a static list of potential IDs. 
         # If you want 4 runners, we use 0,1,2,3.
         # You can increase this list if you want more power later.
-        shard_id: [0, 1, 2, 3] 
+        shard_id: [0, 1, 2, 3, 4, 5, 6, 7] 
     
     steps:
       - name: Checkout Code
@@ -102,15 +102,16 @@ jobs:
       - name: Index Everything
         run: python scripts/indexer.py
 
-      - name: Commit & Push
+      - name: Commit & Push Results
+        if: steps.changed-files.outputs.any_changed == 'true'
         run: |
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
           
-          git add public/data/*.json
-          git add public/manifest.json
-          git add assets/meta/*.md
-          git add assets/pages/*.md
+          # Force add the critical data (ignore errors if missing)
+          git add public/data/*.json || true
+          git add public/manifest.json || true
           
-          git diff --staged --quiet || git commit -m "Parallel Grind Complete (4x Speed)"
+          # Only commit if we actually have something
+          git diff --staged --quiet || git commit -m "Grind Complete: Updated data and manifest"
           git push
