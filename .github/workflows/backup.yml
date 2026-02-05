@@ -234,7 +234,7 @@ jobs:
           
           # Export path for artifact upload
           echo "BACKUP_PATH=$BackupFile" >> $env:GITHUB_ENV
-          Write-Host "✅ Backup complete." -ForegroundColor Green
+          Write-Host "Backup complete." -ForegroundColor Green
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
