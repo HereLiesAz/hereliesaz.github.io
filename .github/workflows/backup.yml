@@ -162,6 +162,15 @@ jobs:
                   [string]$RootPath
               )
 
+              # Define Tree Characters via Hex to bypass YAML/Runner encoding stupidity
+              # └──
+              $g_last   = "$([char]0x2514)$([char]0x2500)$([char]0x2500) "
+              # ├──
+              $g_branch = "$([char]0x251C)$([char]0x2500)$([char]0x2500) "
+              # │
+              $g_vert   = "$([char]0x2502)   "
+              $g_empty  = "    "
+
               $items = Get-ChildItem -Path $Path -Force | Where-Object {
                   $isExcluded = $false
                   if ($_.PSIsContainer) {
@@ -180,12 +189,14 @@ jobs:
               foreach ($item in $items) {
                   $i++
                   $isLastItem = ($i -eq $count)
-                  if ($isLastItem) { $marker = "└── " } else { $marker = "├── " }
+                  
+                  if ($isLastItem) { $marker = $g_last } else { $marker = $g_branch }
+                  
                   $line = "$Indent$marker$($item.Name)"
                   Add-Content -Path $BackupFile -Value $line
 
                   if ($item.PSIsContainer) {
-                      if ($isLastItem) { $nextIndent = "    " } else { $nextIndent = "│   " }
+                      if ($isLastItem) { $nextIndent = $g_empty } else { $nextIndent = $g_vert }
                       $newIndent = $Indent + $nextIndent
                       Write-FileTree -Path $item.FullName -Indent $newIndent -IsLast $isLastItem -RootPath $RootPath
                   }
@@ -193,6 +204,9 @@ jobs:
           }
 
           # --- Execution ---
+          # Force Output Encoding to UTF8 so the logs don't look like garbage
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
           Write-Host "Initializing Backup..." -ForegroundColor Green
           Write-Host "Target: $BackupFile"
 
@@ -234,7 +248,7 @@ jobs:
           
           # Export path for artifact upload
           echo "BACKUP_PATH=$BackupFile" >> $env:GITHUB_ENV
-          Write-Host "Backup complete." -ForegroundColor Green
+          Write-Host "✅ Backup complete." -ForegroundColor Green
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
