@@ -201,7 +201,8 @@ class ArtGrinder:
             print(f"    [X] REJECTED: Too small ({w}x{h}). Deleting.")
             try:
                 os.remove(input_path)
-            except: pass
+            except OSError as e:
+                print(f"    [!] Failed to delete small image {input_path}: {e}")
             return
 
         # 4. RESIZE (If too massive)
