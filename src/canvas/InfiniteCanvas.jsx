@@ -1,229 +1,170 @@
-import React, { useRef, useEffect, useMemo, useState } from 'react';
-import { useFrame } from '@react-three/fiber';
+import React, { useMemo, useEffect, useState, useRef } from 'react';
+import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import useStore from '../store/useStore';
+import { AnamorphicShader } from '../shaders/AnamorphicShader';
 
-// --- EMBEDDED SHADERS (No external files needed) ---
+// Helper to fetch JSON data
+const useArtworkData = (id) => {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
 
-const vertexShader = `
-  uniform float uTime;
-  uniform float uProgress;
-
-  // Instanced Attributes
-  attribute vec3 aOffset;
-  attribute vec3 aColor;
-  attribute vec2 aSize;
-  attribute float aMeta;
-
-  varying vec3 vColor;
-  varying float vAlpha;
-
-  void main() {
-    vColor = aColor;
-    
-    // Pass UV to fragment
-    vec3 transformed = position;
-
-    // SCALING
-    // Scale the quad based on the stroke width/height
-    transformed.x *= aSize.x;
-    transformed.y *= aSize.y;
-
-    // POSITIONING
-    // Apply the offset (x, y, z) from the JSON data
-    vec3 finalPos = transformed + aOffset;
-
-    // ANIMATION (The "Z-Fly" Effect)
-    // As uProgress moves 0 -> 1, things fly toward camera
-    float zDist = finalPos.z + (uProgress * 10.0);
-    
-    // Wrap around loop (Infinite Tunnel Illusion)
-    // if (zDist > 5.0) zDist -= 20.0; 
-
-    finalPos.z = zDist;
-
-    // FADE LOGIC
-    // Fade out if too close or too far
-    float dist = -finalPos.z;
-    vAlpha = smoothstep(0.0, 1.0, 1.0 - abs(finalPos.z / 10.0));
-
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
-  }
-`;
-
-const fragmentShader = `
-  varying vec3 vColor;
-  varying float vAlpha;
-
-  void main() {
-    // CIRCULAR BRUSH TIP
-    // Calculate distance from center of the quad (0.5, 0.5)
-    vec2 uv = gl_PointCoord - vec2(0.5);
-    float dist = length(uv);
-
-    // Soft edge circle
-    float shape = 1.0 - smoothstep(0.45, 0.5, dist);
-
-    // Discard transparent pixels
-    if (shape < 0.01) discard;
-
-    // Final Color
-    gl_FragColor = vec4(vColor, vAlpha * shape);
-  }
-`;
-
-// --- COMPONENT ---
-
-const InfiniteCanvas = ({ activePaintingId, transitionProgress }) => {
-  const meshRef = useRef();
-  const [paintingData, setPaintingData] = useState(null);
-
-  // 1. Load Data
   useEffect(() => {
-    let isMounted = true;
-    if (!activePaintingId) return;
-
-    // Sanitize ID to prevent path traversal
-    const safeId = activePaintingId.replace(/[^a-zA-Z0-9_\-.~]/g, ''); 
-    const url = `data/${safeId}.json`;
-
-    console.log(`[Canvas] Loading ${safeId}...`);
-
-    fetch(url)
+    if (!id) return;
+    
+    console.log(`[Canvas] Loading ${id}...`);
+    setData(null); // Reset while loading
+    
+    fetch(`/data/${id}.json`)
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then(data => {
-        if (isMounted) {
-           // Handle Legacy: If root is array, wrap it in object structure
-           if (Array.isArray(data)) {
-             setPaintingData({ strokes: data, meta: {} });
-           } else {
-             setPaintingData(data);
-           }
+      .then(json => {
+        // Handle both legacy (list) and new (object) formats
+        if (Array.isArray(json)) {
+            setData({ strokes: json });
+        } else {
+            setData(json);
         }
       })
-      .catch(err => {
-        console.warn(`[Canvas] Failed to load ${safeId}:`, err);
+      .catch(e => {
+        console.error(`[Canvas] Failed to load ${id}:`, e);
+        setError(e);
       });
+  }, [id]);
 
-    return () => { isMounted = false; };
-  }, [activePaintingId]);
+  return { data, error };
+};
 
-  // 2. Generate Geometry (The Sanitizer)
-  const meshData = useMemo(() => {
-    if (!paintingData || !paintingData.strokes) return null;
-
-    const strokes = paintingData.strokes;
-    const count = strokes.length;
-    
-    if (count === 0) return null;
-
-    const positionBuffer = new Float32Array(count * 3);
-    const colorBuffer = new Float32Array(count * 3);
-    const sizeBuffer = new Float32Array(count * 2); 
-    const metaBuffer = new Float32Array(count * 1); // Depth/Z
-
-    for (let i = 0; i < count; i++) {
-      const s = strokes[i];
-      
-      // --- DEFENSIVE CODING START ---
-      // If stroke is null/undefined, skip it
-      if (!s) continue;
-
-      let r=0.5, g=0.5, b=0.5;
-      let x=0, y=0, w=100, h=100;
-      let z = 0;
-
-      // Case A: Standard Object { color: [r,g,b], bbox: [x,y,w,h] }
-      if (s.color && s.bbox) {
-          r = (s.color[0] || 0) / 255;
-          g = (s.color[1] || 0) / 255;
-          b = (s.color[2] || 0) / 255;
-          x = s.bbox[0] || 0;
-          y = s.bbox[1] || 0;
-          w = s.bbox[2] || 10;
-          h = s.bbox[3] || 10;
-          z = s.z || 0.5;
-      }
-      // Case B: Legacy Array [r, g, b, x, y, w, h] (Hypothetical fallback)
-      else if (Array.isArray(s) && s.length >= 7) {
-          r = s[0] / 255; g = s[1] / 255; b = s[2] / 255;
-          x = s[3]; y = s[4]; w = s[5]; h = s[6];
-      }
-      // Case C: Just color (fallback)
-      else if (s.color) {
-          r = (s.color[0] || 0)/255; 
-          g = (s.color[1] || 0)/255; 
-          b = (s.color[2] || 0)/255;
-      }
-      // --- DEFENSIVE CODING END ---
-
-      // Fill Buffers
-      const i3 = i * 3;
-      const i2 = i * 2;
-
-      // Center the stroke (Mapping 1024x1024 to approx -5..5 space)
-      const SCALE = 0.01;
-      const cx = (x + w/2 - 512) * SCALE;
-      const cy = -(y + h/2 - 512) * SCALE; // Flip Y for 3D
-
-      positionBuffer[i3] = cx;
-      positionBuffer[i3 + 1] = cy;
-      positionBuffer[i3 + 2] = (z * 5) - 2.5; 
-
-      colorBuffer[i3] = r;
-      colorBuffer[i3 + 1] = g;
-      colorBuffer[i3 + 2] = b;
-
-      sizeBuffer[i2] = w * SCALE;
-      sizeBuffer[i2 + 1] = h * SCALE;
-      
-      metaBuffer[i] = Math.random(); 
-    }
-
-    return {
-      count,
-      positions: positionBuffer,
-      colors: colorBuffer,
-      sizes: sizeBuffer,
-      meta: metaBuffer
-    };
-  }, [paintingData]);
-
-  // 3. Animation Uniforms
+const ArtworkInstance = ({ id, isActive, progress }) => {
+  const meshRef = useRef();
+  const { data } = useArtworkData(id);
+  
+  // UNIFORMS
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
-    uProgress: { value: 0 },
-    uTexture: { value: null } 
+    uScroll: { value: 0 },
+    uChaos: { value: 0 }, // 0 = Ordered, 1 = Exploded
+    uColor: { value: new THREE.Color(1, 1, 1) }
   }), []);
 
+  // UPDATE LOOP
   useFrame((state) => {
     if (meshRef.current) {
       meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
-      meshRef.current.material.uniforms.uProgress.value = transitionProgress;
+      
+      // Calculate chaos based on progress
+      // If we are active (0.0), chaos is 0. 
+      // As we move to 1.0, chaos increases.
+      // If we are 'next' (incoming), we start high chaos and settle to 0.
+      
+      let chaos = 0;
+      if (isActive) {
+          chaos = progress; // 0 -> 1
+      } else {
+          chaos = 1.0 - progress; // 1 -> 0
+      }
+      
+      meshRef.current.material.uniforms.uChaos.value = chaos;
     }
   });
 
-  if (!meshData) return null;
+  // GEOMETRY GENERATION
+  const attributes = useMemo(() => {
+    // CRITICAL FIX: Guard against null data to prevent crash
+    if (!data || !data.strokes) return null;
+
+    const count = data.strokes.length;
+    const offsets = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const sizes = new Float32Array(count);
+    const randoms = new Float32Array(count); // For unique noise per particle
+
+    data.strokes.forEach((stroke, i) => {
+      // Position (X, Y, Z)
+      offsets[i * 3] = stroke.bbox ? stroke.bbox[0] : 0; // Simplified mapping
+      offsets[i * 3 + 1] = stroke.bbox ? stroke.bbox[1] : 0;
+      offsets[i * 3 + 2] = stroke.z || 0;
+
+      // Color (R, G, B) - Normalized 0-1
+      if (stroke.color) {
+          colors[i * 3] = stroke.color[0] / 255;
+          colors[i * 3 + 1] = stroke.color[1] / 255;
+          colors[i * 3 + 2] = stroke.color[2] / 255;
+      }
+
+      // Size
+      sizes[i] = stroke.bbox ? stroke.bbox[2] : 1.0; 
+      
+      // Stability/Randomness
+      randoms[i] = Math.random();
+    });
+
+    return { offsets, colors, sizes, randoms, count };
+  }, [data]);
+
+  // CRITICAL FIX: Do not render Mesh until attributes are ready
+  if (!attributes) return null;
 
   return (
-    <instancedMesh ref={meshRef} args={[null, null, meshData.count]}>
+    <instancedMesh ref={meshRef} args={[null, null, attributes.count]}>
       <planeGeometry args={[1, 1]} />
       <shaderMaterial
-        vertexShader={vertexShader}
-        fragmentShader={fragmentShader}
+        vertexShader={AnamorphicShader.vertexShader}
+        fragmentShader={AnamorphicShader.fragmentShader}
         uniforms={uniforms}
         transparent={true}
         depthWrite={false}
-        blending={THREE.AdditiveBlending}
+        side={THREE.DoubleSide}
       />
-      {/* Attach Attributes Directly to Geometry */}
-      <instancedBufferAttribute attach="attributes-aOffset" args={[meshData.positions, 3]} />
-      <instancedBufferAttribute attach="attributes-aColor" args={[meshData.colors, 3]} />
-      <instancedBufferAttribute attach="attributes-aSize" args={[meshData.sizes, 2]} />
-      <instancedBufferAttribute attach="attributes-aMeta" args={[meshData.meta, 1]} />
+      
+      {/* ATTRIBUTE BUFFERS */}
+      <instancedBufferAttribute 
+        attach="geometry-attributes-aOffset" 
+        args={[attributes.offsets, 3]} 
+      />
+      <instancedBufferAttribute 
+        attach="geometry-attributes-aColor" 
+        args={[attributes.colors, 3]} 
+      />
+      <instancedBufferAttribute 
+        attach="geometry-attributes-aSize" 
+        args={[attributes.sizes, 1]} 
+      />
+      <instancedBufferAttribute 
+        attach="geometry-attributes-aRandom" 
+        args={[attributes.randoms, 1]} 
+      />
     </instancedMesh>
+  );
+};
+
+const InfiniteCanvas = () => {
+  const activeId = useStore(state => state.activeId);
+  const nextId = useStore(state => state.nextId);
+  const transitionProgress = useStore(state => state.transitionProgress);
+
+  return (
+    <group>
+      {/* Render the Active (Departing) Artwork */}
+      {activeId && (
+        <ArtworkInstance 
+            id={activeId} 
+            isActive={true} 
+            progress={transitionProgress} 
+        />
+      )}
+
+      {/* Render the Next (Arriving) Artwork */}
+      {nextId && (
+        <ArtworkInstance 
+            id={nextId} 
+            isActive={false} 
+            progress={transitionProgress} 
+        />
+      )}
+    </group>
   );
 };
 
