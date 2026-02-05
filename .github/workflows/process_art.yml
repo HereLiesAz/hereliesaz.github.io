@@ -30,9 +30,8 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install numpy opencv-python-headless Pillow pillow-heif scipy timm huggingface_hub git+https://github.com/facebookresearch/segment-anything.git
 
-      # --- THE SCAVENGER INDEXER (EMBEDDED) ---
-      # This forces the correct script to exist, even if the file is wrong.
-      - name: Rebuild Index (The Scavenger)
+      # --- THE AGGRESSIVE SCAVENGER (REWRITES BROKEN FILES) ---
+      - name: Repair Data & Rebuild Index
         run: |
           cat > scripts/indexer.py << 'EOF'
           import os, json, math
@@ -46,34 +45,51 @@ jobs:
               library = []
               files = [f for f in os.listdir(DATA_DIR) if f.endswith('.json') and f != 'manifest.json']
               
-              print(f"[*] Scanning {len(files)} files...")
+              print(f"[*] Scanning {len(files)} files for repair...")
               
               for f in files:
+                  path = os.path.join(DATA_DIR, f)
                   try:
-                      with open(os.path.join(DATA_DIR, f)) as jf:
+                      with open(path, 'r') as jf:
                           data = json.load(jf)
                           
-                          # SCAVENGER LOGIC: Handle Lists (Old Format) vs Dicts (New Format)
-                          if isinstance(data, list):
-                              meta = {"resolution": [1024,1024], "stroke_count": len(data), "dominant_color": [100,100,100]}
-                          else:
-                              meta = data.get('meta', {})
-                              if 'dominant_color' not in meta: meta['dominant_color'] = [100,100,100]
+                      # LOGIC: Check if file is broken (Legacy List Format)
+                      if isinstance(data, list):
+                          print(f"    -> Repairing {f} (converting list to object)...")
+                          # Create the correct structure
+                          fixed_data = {
+                              "meta": {
+                                  "original_file": f,
+                                  "resolution": [1024, 1024],
+                                  "stroke_count": len(data),
+                                  "dominant_color": [100, 100, 100]
+                              },
+                              "strokes": data,
+                              "pareidolia": []
+                          }
+                          # OVERWRITE THE FILE WITH THE FIX
+                          with open(path, 'w') as out:
+                              json.dump(fixed_data, out)
+                          data = fixed_data # Use fixed data for indexing
+                      
+                      # Parse Metadata for Manifest
+                      meta = data.get('meta', {})
+                      if 'dominant_color' not in meta: meta['dominant_color'] = [100, 100, 100]
 
-                          library.append({
-                              "id": os.path.splitext(f)[0],
-                              "file": f,
-                              "resolution": meta.get('resolution', [1024,1024]),
-                              "color": meta.get('dominant_color', [0,0,0]),
-                              "stroke_count": meta.get('stroke_count', 0),
-                              "view_origin": [0,0,5],
-                              "view_target": [0,0,0],
-                              "neighbors": []
-                          })
+                      library.append({
+                          "id": os.path.splitext(f)[0],
+                          "file": f,
+                          "resolution": meta.get('resolution', [1024, 1024]),
+                          "color": meta.get('dominant_color', [0,0,0]),
+                          "stroke_count": meta.get('stroke_count', 0),
+                          "view_origin": [0, 0, 5], 
+                          "view_target": [0, 0, 0], 
+                          "neighbors": []
+                      })
                   except Exception as e:
-                      print(f"[!] Failed {f}: {e}")
+                      print(f"[!] Corrupt file {f}: {e}")
               
-              # Build Graph (Simple Color Distance)
+              # Build Graph
               for node in library:
                   dists = sorted(library, key=lambda x: math.dist(node['color'], x['color']))
                   node['neighbors'] = [x['id'] for x in dists if x['id'] != node['id']][:3]
@@ -84,14 +100,17 @@ jobs:
           if __name__ == "__main__": main()
           EOF
           
-          # Run the script we just wrote
           python scripts/indexer.py
 
-      - name: Commit & Push Results
+      - name: Commit & Push Repairs
         run: |
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
           git pull --rebase || true
+          
+          # Force add ALL JSON files (including the ones we just rewrote)
+          git add public/data/*.json
           git add public/manifest.json
-          git diff --staged --quiet || git commit -m "Scavenger Hunt Complete: Manifest Repaired"
+          
+          git diff --staged --quiet || git commit -m "Aggressive Repair: Converted legacy files"
           git push
