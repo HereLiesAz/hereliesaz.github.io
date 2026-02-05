@@ -4,16 +4,14 @@ import * as THREE from 'three';
 import useStore from '../store/useStore';
 import { AnamorphicShader } from '../shaders/AnamorphicShader';
 
-// Helper to fetch JSON data
 const useArtworkData = (id) => {
   const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
 
   useEffect(() => {
     if (!id) return;
     
-    console.log(`[Canvas] Loading ${id}...`);
-    setData(null); // Reset while loading
+    // Guard against corrupted IDs (e.g., missing parens)
+    console.log(`[Canvas] Fetching: /data/${id}.json`);
     
     fetch(`/data/${id}.json`)
       .then(res => {
@@ -21,95 +19,86 @@ const useArtworkData = (id) => {
         return res.json();
       })
       .then(json => {
-        // Handle both legacy (list) and new (object) formats
-        if (Array.isArray(json)) {
-            setData({ strokes: json });
-        } else {
-            setData(json);
-        }
+        // Handle legacy array format vs new object format
+        const cleanData = Array.isArray(json) ? { strokes: json } : json;
+        setData(cleanData);
       })
       .catch(e => {
-        console.error(`[Canvas] Failed to load ${id}:`, e);
-        setError(e);
+        console.warn(`[Canvas] Failed to load ${id}. This artwork may not exist or the ID is corrupt.`);
+        setData(null); // Ensure we don't hold onto stale data
       });
   }, [id]);
 
-  return { data, error };
+  return data;
 };
 
 const ArtworkInstance = ({ id, isActive, progress }) => {
   const meshRef = useRef();
-  const { data } = useArtworkData(id);
+  const data = useArtworkData(id);
   
   // UNIFORMS
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
     uScroll: { value: 0 },
-    uChaos: { value: 0 }, // 0 = Ordered, 1 = Exploded
+    uChaos: { value: 0 },
     uColor: { value: new THREE.Color(1, 1, 1) }
   }), []);
 
-  // UPDATE LOOP
+  // ANIMATION LOOP
   useFrame((state) => {
     if (meshRef.current) {
       meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
-      
-      // Calculate chaos based on progress
-      // If we are active (0.0), chaos is 0. 
-      // As we move to 1.0, chaos increases.
-      // If we are 'next' (incoming), we start high chaos and settle to 0.
-      
-      let chaos = 0;
-      if (isActive) {
-          chaos = progress; // 0 -> 1
-      } else {
-          chaos = 1.0 - progress; // 1 -> 0
-      }
-      
+      // Calculate chaos: Active = 0->1, Next = 1->0
+      const chaos = isActive ? progress : (1.0 - progress);
       meshRef.current.material.uniforms.uChaos.value = chaos;
     }
   });
 
-  // GEOMETRY GENERATION
+  // DATA PROCESSING
   const attributes = useMemo(() => {
-    // CRITICAL FIX: Guard against null data to prevent crash
     if (!data || !data.strokes) return null;
 
     const count = data.strokes.length;
     const offsets = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
-    const randoms = new Float32Array(count); // For unique noise per particle
+    const randoms = new Float32Array(count);
 
     data.strokes.forEach((stroke, i) => {
-      // Position (X, Y, Z)
-      offsets[i * 3] = stroke.bbox ? stroke.bbox[0] : 0; // Simplified mapping
+      offsets[i * 3] = stroke.bbox ? stroke.bbox[0] : 0;
       offsets[i * 3 + 1] = stroke.bbox ? stroke.bbox[1] : 0;
       offsets[i * 3 + 2] = stroke.z || 0;
 
-      // Color (R, G, B) - Normalized 0-1
       if (stroke.color) {
           colors[i * 3] = stroke.color[0] / 255;
           colors[i * 3 + 1] = stroke.color[1] / 255;
           colors[i * 3 + 2] = stroke.color[2] / 255;
+      } else {
+          colors[i * 3] = 1; colors[i * 3+1] = 1; colors[i * 3+2] = 1;
       }
 
-      // Size
       sizes[i] = stroke.bbox ? stroke.bbox[2] : 1.0; 
-      
-      // Stability/Randomness
       randoms[i] = Math.random();
     });
 
     return { offsets, colors, sizes, randoms, count };
   }, [data]);
 
-  // CRITICAL FIX: Do not render Mesh until attributes are ready
+  // RENDER GUARD: If no attributes, render nothing.
   if (!attributes) return null;
 
   return (
     <instancedMesh ref={meshRef} args={[null, null, attributes.count]}>
-      <planeGeometry args={[1, 1]} />
+      {/* CRITICAL FIX: Attributes are children of geometry.
+         This prevents "Cannot read properties of undefined" errors.
+      */}
+      <planeGeometry args={[1, 1]}>
+        <instancedBufferAttribute attach="attributes-aOffset" args={[attributes.offsets, 3]} />
+        <instancedBufferAttribute attach="attributes-aColor" args={[attributes.colors, 3]} />
+        <instancedBufferAttribute attach="attributes-aSize" args={[attributes.sizes, 1]} />
+        <instancedBufferAttribute attach="attributes-aRandom" args={[attributes.randoms, 1]} />
+      </planeGeometry>
+      
       <shaderMaterial
         vertexShader={AnamorphicShader.vertexShader}
         fragmentShader={AnamorphicShader.fragmentShader}
@@ -117,24 +106,6 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
         transparent={true}
         depthWrite={false}
         side={THREE.DoubleSide}
-      />
-      
-      {/* ATTRIBUTE BUFFERS */}
-      <instancedBufferAttribute 
-        attach="geometry-attributes-aOffset" 
-        args={[attributes.offsets, 3]} 
-      />
-      <instancedBufferAttribute 
-        attach="geometry-attributes-aColor" 
-        args={[attributes.colors, 3]} 
-      />
-      <instancedBufferAttribute 
-        attach="geometry-attributes-aSize" 
-        args={[attributes.sizes, 1]} 
-      />
-      <instancedBufferAttribute 
-        attach="geometry-attributes-aRandom" 
-        args={[attributes.randoms, 1]} 
       />
     </instancedMesh>
   );
@@ -147,23 +118,8 @@ const InfiniteCanvas = () => {
 
   return (
     <group>
-      {/* Render the Active (Departing) Artwork */}
-      {activeId && (
-        <ArtworkInstance 
-            id={activeId} 
-            isActive={true} 
-            progress={transitionProgress} 
-        />
-      )}
-
-      {/* Render the Next (Arriving) Artwork */}
-      {nextId && (
-        <ArtworkInstance 
-            id={nextId} 
-            isActive={false} 
-            progress={transitionProgress} 
-        />
-      )}
+      {activeId && <ArtworkInstance id={activeId} isActive={true} progress={transitionProgress} />}
+      {nextId && <ArtworkInstance id={nextId} isActive={false} progress={transitionProgress} />}
     </group>
   );
 };
