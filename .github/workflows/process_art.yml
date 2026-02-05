@@ -1,27 +1,38 @@
-name: Process Art
+name: Process Art (Parallel)
 
-# 1. TRIGGERS
 on:
   push:
     paths:
-      - 'assets/raw/**'   # Run when new images are uploaded
-      - 'assets/meta/**'  # Run when you edit text in Prose.io
-      - 'assets/pages/**' # <--- ADD THIS
-  workflow_dispatch:      # Allows manual run button
+      - 'assets/raw/**'
+      - 'assets/meta/**'
+      - 'assets/pages/**'
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: 'Number of parallel runners'
+        required: true
+        default: '4'
 
-# 2. PERMISSIONS (Required to commit changes back)
 permissions:
   contents: write
 
-# 3. JOBS
 jobs:
-  grind-and-index:
+  # PHASE 1: THE SWARM
+  grind:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # We define a static list of potential IDs. 
+        # If you want 4 runners, we use 0,1,2,3.
+        # You can increase this list if you want more power later.
+        shard_id: [0, 1, 2, 3] 
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # Get full history
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -33,22 +44,73 @@ jobs:
           pip install opencv-python numpy torch torchvision Pillow scipy timm huggingface_hub
           pip install git+https://github.com/facebookresearch/segment-anything.git
 
-      - name: Grind Images (Generate Data & Stubs)
-        # This will create JSONs in public/data AND .md stubs in assets/meta
-        run: python scripts/grinder.py --input assets/raw
+      - name: Grind Shard ${{ matrix.shard_id }}
+        # We pass the matrix ID and the total count (4) to the script
+        run: python scripts/grinder.py --input assets/raw --shard ${{ matrix.shard_id }} --total 4
 
-      - name: Index Metadata (Build Manifest)
-        # This merges the Prose edits into the final app manifest
+      - name: Upload Artifacts (Data)
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard_id }}-data
+          path: public/data/*.json
+          if-no-files-found: ignore
+
+      - name: Upload Artifacts (Meta)
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard_id }}-meta
+          path: assets/meta/*.md
+          if-no-files-found: ignore
+
+  # PHASE 2: THE COLLAPSE
+  finalize:
+    needs: grind
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: temp_artifacts
+          merge-multiple: true
+
+      - name: Restore Data
+        # Move the downloaded artifacts into the correct folders
+        run: |
+          mkdir -p public/data
+          mkdir -p assets/meta
+          
+          # Copy JSONs if they exist
+          if ls temp_artifacts/*.json 1> /dev/null 2>&1; then
+            cp temp_artifacts/*.json public/data/
+          fi
+          
+          # Copy MDs if they exist
+          if ls temp_artifacts/*.md 1> /dev/null 2>&1; then
+            cp temp_artifacts/*.md assets/meta/
+          fi
+
+      - name: Index Everything
         run: python scripts/indexer.py
 
-      - name: Commit Changes
+      - name: Commit & Push
         run: |
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
+          
           git add public/data/*.json
           git add public/manifest.json
           git add assets/meta/*.md
-          git add assets/pages/*.md # <--- AND THIS
-          git diff --staged --quiet || git commit -m "Auto-processed art and metadata"
-          git push
+          git add assets/pages/*.md
+          
+          git diff --staged --quiet || git commit -m "Parallel Grind Complete (4x Speed)"
           git push
