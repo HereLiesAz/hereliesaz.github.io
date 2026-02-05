@@ -1,11 +1,21 @@
+/**
+ * LEGACY INTERFACE (Unused)
+ * =========================
+ * This component represents an alternative UI implementation.
+ * It is currently not imported by App.jsx (which uses Overlay.jsx).
+ * Kept for reference or future V2 implementation.
+ */
+
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useActiveMetadata } from '../hooks/useActiveMetadata';
 import GlassMenu from './GlassMenu';
-import Signature from './Signature'; // Your SVG component
+import Signature from './Signature';
 
 const Interface = () => {
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Uses the legacy hook
   const { visible, opacity, data } = useActiveMetadata();
 
   return (

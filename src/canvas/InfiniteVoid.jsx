@@ -32,9 +32,9 @@ const SceneContent = () => {
         // Calculate the "Sweet Spot" Z
         // We start at -500 so the first one isn't in your face
         const zPos = -((index + 1) * PAINTING_SPACING);
-        
+
         return (
-          <StrokeCloud 
+          <StrokeCloud
             key={art.id}
             dataUrl={art.src}
             textureUrl="/assets/brush_stroke.png"
@@ -49,7 +49,7 @@ const SceneContent = () => {
 const InfiniteVoid = () => {
   return (
     <div style={{ width: '100vw', height: '100vh', background: '#050505' }}>
-      <Canvas 
+      <Canvas
         camera={{ position: [0, 0, 10], fov: 75 }}
         gl={{ antialias: false, alpha: false }} // Optimization
         dpr={[1, 1.5]} // Cap pixel ratio for performance

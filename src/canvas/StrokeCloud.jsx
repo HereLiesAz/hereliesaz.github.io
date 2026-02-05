@@ -67,8 +67,8 @@ const StrokeCloud = ({ dataUrl, sweetSpotZ, textureUrl }) => {
     
     // Get scroll from your store/state
     // Assuming a global Z scroll value is available
-    const currentScroll = state.camera.position.z; 
-    
+    const currentScroll = state.camera.position.z;
+
     meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
     meshRef.current.material.uniforms.uScroll.value = currentScroll;
   });
