@@ -106,11 +106,31 @@ jobs:
         run: |
           git config --global user.name "ArtGrinder Bot"
           git config --global user.email "bot@hereliesaz.com"
-          git pull --rebase || true
           
-          # Force add ALL JSON files (including the ones we just rewrote)
+          # 1. Stash the 751 fixes (hide them safely)
+          echo "Stashing changes..."
+          git stash
+          
+          # 2. Update from server (now that we are 'clean')
+          echo "Pulling latest..."
+          git pull --rebase origin main
+          
+          # 3. Bring the fixes back
+          echo "Popping stash..."
+          git stash pop || echo "Auto-merge logic applied"
+          
+          # 4. Add and Commit
           git add public/data/*.json
           git add public/manifest.json
           
           git diff --staged --quiet || git commit -m "Aggressive Repair: Converted legacy files"
-          git push
+          
+          # 5. Push (Loop until success in case of race condition)
+          n=0
+          until [ "$n" -ge 5 ]
+          do
+             git push && break
+             n=$((n+1)) 
+             echo "Push failed. Retrying pull... ($n/5)"
+             git pull --rebase origin main
+          done
