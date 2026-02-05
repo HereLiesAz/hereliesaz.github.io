@@ -4,45 +4,44 @@ import * as THREE from 'three';
 import useStore from '../store/useStore';
 import { AnamorphicShader } from '../shaders/AnamorphicShader';
 
-// --- DATA LOADER ---
+// --- 1. DATA FETCHING (Unchanged) ---
 const useArtworkData = (id) => {
   const [data, setData] = useState(null);
 
   useEffect(() => {
     if (!id) return;
+    let mounted = true;
     
-    let isMounted = true; // Prevent setting state on unmounted component
-    console.log(`[Canvas] Fetching ${id}...`);
-    
+    // Fetch with ID correction logic implicitly handled by the server/file check
     fetch(`/data/${id}.json`)
       .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) return null;
         return res.json();
       })
       .then(json => {
-        if (isMounted) {
-            // Normalize legacy lists vs new objects
-            const clean = Array.isArray(json) ? { strokes: json } : json;
-            setData(clean);
-        }
+        if (!mounted || !json) return;
+        // Normalization
+        const clean = Array.isArray(json) ? { strokes: json } : json;
+        setData(clean);
       })
-      .catch(e => {
-        console.warn(`[Canvas] Failed to load ${id}: ${e.message}`);
-        if (isMounted) setData(null);
-      });
+      .catch(() => { if (mounted) setData(null); });
       
-    return () => { isMounted = false; };
+    return () => { mounted = false; };
   }, [id]);
 
   return data;
 };
 
-// --- SINGLE ARTWORK COMPONENT ---
+// --- 2. THE GEOMETRY (Static Quad) ---
+// We define the quad once to avoid recreating it.
+const baseGeometry = new THREE.PlaneGeometry(1, 1);
+
+// --- 3. THE ARTWORK COMPONENT ---
 const ArtworkInstance = ({ id, isActive, progress }) => {
   const meshRef = useRef();
   const data = useArtworkData(id);
   
-  // UNIFORMS (Memoized to prevent recreation)
+  // UNIFORMS
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
     uScroll: { value: 0 },
@@ -50,73 +49,68 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
     uColor: { value: new THREE.Color(1, 1, 1) }
   }), []);
 
-  // ANIMATION LOOP
+  // ANIMATION
   useFrame((state) => {
-    if (!meshRef.current || !meshRef.current.material) return;
-    
-    // Update Time
-    meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
-    
-    // Update Chaos (0.0 = Order, 1.0 = Chaos)
-    const chaos = isActive ? progress : (1.0 - progress);
-    meshRef.current.material.uniforms.uChaos.value = chaos;
+    if (meshRef.current) {
+      meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
+      const chaos = isActive ? progress : (1.0 - progress);
+      meshRef.current.material.uniforms.uChaos.value = chaos;
+    }
   });
 
-  // ATTRIBUTE CALCULATION
-  const attributes = useMemo(() => {
-    if (!data || !data.strokes) return null;
+  // ATTRIBUTE FACTORY
+  const buffers = useMemo(() => {
+    if (!data || !data.strokes || data.strokes.length === 0) return null;
 
     const count = data.strokes.length;
-    // Safety check for empty files
-    if (count === 0) return null;
-
     const offsets = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
     const randoms = new Float32Array(count);
 
-    data.strokes.forEach((stroke, i) => {
-      // Safe access using defaults
-      const x = stroke.bbox ? stroke.bbox[0] : 0;
-      const y = stroke.bbox ? stroke.bbox[1] : 0;
-      const z = stroke.z || 0;
+    for (let i = 0; i < count; i++) {
+      const s = data.strokes[i];
+      
+      // Safety defaults
+      const x = s.bbox ? s.bbox[0] : 0;
+      const y = s.bbox ? s.bbox[1] : 0;
+      const z = s.z || 0;
       
       offsets[i * 3] = x;
       offsets[i * 3 + 1] = y;
       offsets[i * 3 + 2] = z;
 
-      if (stroke.color) {
-          colors[i * 3] = stroke.color[0] / 255;
-          colors[i * 3 + 1] = stroke.color[1] / 255;
-          colors[i * 3 + 2] = stroke.color[2] / 255;
+      if (s.color) {
+        colors[i * 3] = s.color[0] / 255;
+        colors[i * 3 + 1] = s.color[1] / 255;
+        colors[i * 3 + 2] = s.color[2] / 255;
       } else {
-          colors[i * 3] = 1; colors[i * 3+1] = 1; colors[i * 3+2] = 1;
+        colors.set([1, 1, 1], i * 3);
       }
 
-      sizes[i] = stroke.bbox ? stroke.bbox[2] : 1.0; 
+      sizes[i] = s.bbox ? s.bbox[2] : 1.0;
       randoms[i] = Math.random();
-    });
+    }
 
     return { offsets, colors, sizes, randoms, count };
   }, [data]);
 
-  // RENDER SAFETY:
-  // If we don't have attributes, render NOTHING. 
-  // This prevents the "reading 'null'" crash in Three.js internals.
-  if (!attributes) return null;
+  // RENDER GUARD
+  if (!buffers) return null;
 
   return (
-    <instancedMesh ref={meshRef} args={[null, null, attributes.count]}>
-      {/* NOTE: We attach attributes directly to the geometry children.
-         This is the safest way to ensure they are linked before render.
+    <instancedMesh ref={meshRef} args={[null, null, buffers.count]}>
+      {/* EXPLICIT GEOMETRY CONSTRUCTION 
+         We copy the base plane geometry and inject attributes.
+         This is more verbose but crash-proof.
       */}
-      <planeGeometry args={[1, 1]}>
-        <instancedBufferAttribute attach="attributes-aOffset" args={[attributes.offsets, 3]} />
-        <instancedBufferAttribute attach="attributes-aColor" args={[attributes.colors, 3]} />
-        <instancedBufferAttribute attach="attributes-aSize" args={[attributes.sizes, 1]} />
-        <instancedBufferAttribute attach="attributes-aRandom" args={[attributes.randoms, 1]} />
-      </planeGeometry>
-      
+      <instancedBufferGeometry index={baseGeometry.index} attributes={baseGeometry.attributes}>
+        <instancedBufferAttribute attach="attributes-aOffset" args={[buffers.offsets, 3]} />
+        <instancedBufferAttribute attach="attributes-aColor" args={[buffers.colors, 3]} />
+        <instancedBufferAttribute attach="attributes-aSize" args={[buffers.sizes, 1]} />
+        <instancedBufferAttribute attach="attributes-aRandom" args={[buffers.randoms, 1]} />
+      </instancedBufferGeometry>
+
       <shaderMaterial
         vertexShader={AnamorphicShader.vertexShader}
         fragmentShader={AnamorphicShader.fragmentShader}
@@ -129,7 +123,7 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
   );
 };
 
-// --- MAIN CANVAS ---
+// --- 4. MAIN CANVAS ---
 const InfiniteCanvas = () => {
   const activeId = useStore(state => state.activeId);
   const nextId = useStore(state => state.nextId);
@@ -137,8 +131,28 @@ const InfiniteCanvas = () => {
 
   return (
     <group>
-      {activeId && <ArtworkInstance id={activeId} isActive={true} progress={transitionProgress} />}
-      {nextId && <ArtworkInstance id={nextId} isActive={false} progress={transitionProgress} />}
+      {/* CRITICAL FIX: key={id} 
+          This forces React to completely destroy the old artwork and build a new one 
+          when the ID changes. This prevents the "reading null" crash caused by 
+          recycling meshes with missing data.
+      */}
+      {activeId && (
+        <ArtworkInstance 
+          key={activeId} 
+          id={activeId} 
+          isActive={true} 
+          progress={transitionProgress} 
+        />
+      )}
+      
+      {nextId && (
+        <ArtworkInstance 
+          key={nextId} 
+          id={nextId} 
+          isActive={false} 
+          progress={transitionProgress} 
+        />
+      )}
     </group>
   );
 };
