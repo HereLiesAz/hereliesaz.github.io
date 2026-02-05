@@ -1,0 +1,39 @@
+prose:
+  rooturl: 'assets/meta'
+  siteurl: 'https://hereliesaz.com'
+  media: 'assets/raw'
+  ignore:
+    - index.md
+  metadata:
+    # ARTWORK METADATA
+   # ... inside assets/meta ...
+    assets/meta:
+      - name: "title"
+        field:
+          element: "text"
+          label: "Title"
+      - name: "category"   # <--- NEW
+        field:
+          element: "select"
+          label: "Category"
+          options:
+            - name: "Paintings"
+              value: "painting"
+            - name: "Photography"
+              value: "photography"
+            - name: "Digital"
+              value: "digital"
+      # ... (year, description, etc)
+    
+    # NEW: STATIC PAGES
+    assets/pages:
+      - name: "title"
+        field:
+          element: "text"
+          label: "Page Title"
+          placeholder: "About"
+      - name: "slug"
+        field:
+          element: "text"
+          label: "URL Slug"
+          placeholder: "about"
