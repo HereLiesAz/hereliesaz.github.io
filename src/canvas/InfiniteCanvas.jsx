@@ -1,8 +1,77 @@
 import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import vertexShader from './shaders/vertexShader.glsl';
-import fragmentShader from './shaders/fragmentShader.glsl';
+
+// --- EMBEDDED SHADERS (No external files needed) ---
+
+const vertexShader = `
+  uniform float uTime;
+  uniform float uProgress;
+
+  // Instanced Attributes
+  attribute vec3 aOffset;
+  attribute vec3 aColor;
+  attribute vec2 aSize;
+  attribute float aMeta;
+
+  varying vec3 vColor;
+  varying float vAlpha;
+
+  void main() {
+    vColor = aColor;
+    
+    // Pass UV to fragment
+    vec3 transformed = position;
+
+    // SCALING
+    // Scale the quad based on the stroke width/height
+    transformed.x *= aSize.x;
+    transformed.y *= aSize.y;
+
+    // POSITIONING
+    // Apply the offset (x, y, z) from the JSON data
+    vec3 finalPos = transformed + aOffset;
+
+    // ANIMATION (The "Z-Fly" Effect)
+    // As uProgress moves 0 -> 1, things fly toward camera
+    float zDist = finalPos.z + (uProgress * 10.0);
+    
+    // Wrap around loop (Infinite Tunnel Illusion)
+    // if (zDist > 5.0) zDist -= 20.0; 
+
+    finalPos.z = zDist;
+
+    // FADE LOGIC
+    // Fade out if too close or too far
+    float dist = -finalPos.z;
+    vAlpha = smoothstep(0.0, 1.0, 1.0 - abs(finalPos.z / 10.0));
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
+  }
+`;
+
+const fragmentShader = `
+  varying vec3 vColor;
+  varying float vAlpha;
+
+  void main() {
+    // CIRCULAR BRUSH TIP
+    // Calculate distance from center of the quad (0.5, 0.5)
+    vec2 uv = gl_PointCoord - vec2(0.5);
+    float dist = length(uv);
+
+    // Soft edge circle
+    float shape = 1.0 - smoothstep(0.45, 0.5, dist);
+
+    // Discard transparent pixels
+    if (shape < 0.01) discard;
+
+    // Final Color
+    gl_FragColor = vec4(vColor, vAlpha * shape);
+  }
+`;
+
+// --- COMPONENT ---
 
 const InfiniteCanvas = ({ activePaintingId, transitionProgress }) => {
   const meshRef = useRef();
