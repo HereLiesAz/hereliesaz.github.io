@@ -1,81 +1,77 @@
 import { create } from 'zustand';
-import { MathUtils } from 'three';
 
 const useStore = create((set, get) => ({
-  // --- Data & Graph ---
-  manifest: [], // The full graph of artworks
-  
-  // --- Navigation State ---
-  activeId: null, // The artwork we are currently "inside"
-  nextId: null,   // The artwork we are moving towards
-  
-  // --- Animation State ---
-  // 0.0 = fully at activeId
-  // 1.0 = fully at nextId
+  manifest: [],
+  activeId: null,
+  nextId: null,
   transitionProgress: 0.0, 
-  direction: 1, // 1 for forward, -1 for backward
-
-  // --- Actions ---
+  direction: 1,
 
   setManifest: (nodes) => {
     set({ manifest: nodes });
-    // If no active ID is set, pick a random one to start
     if (!get().activeId && nodes.length > 0) {
+      // Pick random start
       const randomStart = nodes[Math.floor(Math.random() * nodes.length)].id;
       console.log(`System Initialized. Random Start: ${randomStart}`);
-      set({ activeId: randomStart, nextId: get().findNextId(randomStart) });
+      get().setActiveId(randomStart);
     }
   },
 
-  setActiveId: (id) => {
-    // CRITICAL FIX: Do NOT sanitize or strip characters here. 
-    // The ID must match the filename exactly, including parentheses.
-    console.log(`Navigation: Setting Active ID to ${id}`);
+  setActiveId: (rawId) => {
+    const { manifest, findNextId } = get();
     
-    // Find the node to ensure it exists
-    const node = get().manifest.find(n => n.id === id);
+    // 1. Validate: Does this ID actually exist in the manifest?
+    const exactMatch = manifest.find(n => n.id === rawId);
     
-    if (node) {
-      set({ activeId: id });
-      // Pre-calculate the next destination
-      set({ nextId: get().findNextId(id) });
+    if (exactMatch) {
+      // It's valid. Go there.
+      set({ activeId: rawId, nextId: findNextId(rawId) });
     } else {
-      console.warn(`Attempted to navigate to unknown ID: ${id}`);
+      // 2. Corruption Recovery
+      // If we got '2023-10-157', look for '2023-10-15(7)'
+      console.warn(`[Store] ID Mismatch: '${rawId}' not found. Attempting recovery...`);
+      
+      // Fuzzy match: ignore parens and spaces during comparison
+      const cleanRaw = rawId.replace(/[^a-zA-Z0-9]/g, "");
+      const fuzzyMatch = manifest.find(n => n.id.replace(/[^a-zA-Z0-9]/g, "") === cleanRaw);
+      
+      if (fuzzyMatch) {
+        console.log(`[Store] Recovered ID: Redirecting from '${rawId}' to '${fuzzyMatch.id}'`);
+        set({ activeId: fuzzyMatch.id, nextId: findNextId(fuzzyMatch.id) });
+      } else {
+        console.error(`[Store] Fatal: Could not find artwork for '${rawId}'.`);
+      }
     }
   },
 
   setTransitionProgress: (value) => {
     set({ transitionProgress: value });
-    
-    // Auto-switch when we pass the threshold
     const { activeId, nextId, findNextId } = get();
     
     if (value >= 1.0 && nextId) {
-      console.log("Transition Complete. Swapping buffers.");
+      console.log(`[Navigation] Arrived at ${nextId}`);
+      // Swap buffers
       set({
         activeId: nextId,
-        nextId: findNextId(nextId), // Find a new target
-        transitionProgress: 0.0 // Reset scroll
+        nextId: findNextId(nextId),
+        transitionProgress: 0.0
       });
     }
   },
 
-  // --- Graph Logic ---
   findNextId: (currentId) => {
     const { manifest } = get();
     if (!manifest || manifest.length === 0) return null;
 
     const currentNode = manifest.find(n => n.id === currentId);
-    if (!currentNode || !currentNode.neighbors || currentNode.neighbors.length === 0) {
-        // Fallback: Pick random if no neighbors defined
-        return manifest[Math.floor(Math.random() * manifest.length)].id;
+    
+    // Smart Neighbor Selection
+    if (currentNode && currentNode.neighbors && currentNode.neighbors.length > 0) {
+      return currentNode.neighbors[Math.floor(Math.random() * currentNode.neighbors.length)];
     }
-
-    // Pick a random neighbor from the pre-calculated list
-    // This allows for "curated randomness" based on color similarity
-    const neighbors = currentNode.neighbors;
-    const next = neighbors[Math.floor(Math.random() * neighbors.length)];
-    return next;
+    
+    // Fallback: Random
+    return manifest[Math.floor(Math.random() * manifest.length)].id;
   }
 }));
 
