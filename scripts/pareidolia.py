@@ -14,10 +14,16 @@ Usage:
     python scripts/pareidolia.py
 """
 
-import cv2
-import os
-import json
-import numpy as np
+# Standard Library Imports
+import os  # Filesystem access
+import json  # JSON manipulation
+import urllib.request  # For downloading weights
+
+# Third-Party Imports
+import cv2  # OpenCV for computer vision
+import numpy as np  # Numerical arrays (required by OpenCV)
+
+# --- CONFIGURATION ---
 
 # Directory containing the processed JSON data (outputs from Grinder).
 DATA_DIR = "public/data"
@@ -37,11 +43,12 @@ def download_weights():
     Checks if the Haar Cascade XML file exists locally.
     If not, it creates the directory and downloads it from the OpenCV repository.
     """
+    # Create weights directory if missing.
     if not os.path.exists("weights"):
         os.makedirs("weights")
 
+    # Download file if missing.
     if not os.path.exists(HAAR_PATH):
-        import urllib.request
         print(f"[*] Downloading Haar Cascade from {HAAR_URL}...")
         try:
             urllib.request.urlretrieve(HAAR_URL, HAAR_PATH)
@@ -66,6 +73,7 @@ def scan_for_ghosts():
     # 3. Find target files.
     # We iterate over the JSON files in public/data because those are the artworks
     # that have already been processed by the Grinder.
+    # We filter out 'manifest.json' as it is not an artwork.
     json_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.json') and f != 'manifest.json']
     
     print(f"[*] Scanning {len(json_files)} artifacts for pareidolia...")
@@ -78,6 +86,7 @@ def scan_for_ghosts():
             data = json.load(f)
         
         # Identify the source image from metadata.
+        # This was saved by the Grinder in step 8.
         img_name = data['meta']['original_file']
         img_path = os.path.join(IMG_DIR, img_name)
         
@@ -88,17 +97,21 @@ def scan_for_ghosts():
             
         print(f"[*] Scanning {img_name} for ghosts...")
 
-        # Read image and convert to Grayscale (Haar cascades work on intensity).
+        # Read image.
         img = cv2.imread(img_path)
         if img is None:
             print(f"[!] Error: Could not read image {img_path}")
             continue
 
+        # Convert to Grayscale.
+        # Haar cascades work on intensity differences, not color.
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         # --- DETECTION MAGIC ---
-        # scaleFactor=1.05: Scans image at scales increasing by 5%. Small steps = more detections.
+        # scaleFactor=1.05: Scans image at scales increasing by 5%. Small steps = more detections = slower.
         # minNeighbors=3: Lower threshold increases false positives (Hallucinations).
+        #   - 3 is quite low (prone to errors).
+        #   - 5 is standard.
         # minSize=(30, 30): Ignores tiny noise.
         faces = face_cascade.detectMultiScale(
             gray,
@@ -120,12 +133,13 @@ def scan_for_ghosts():
             # OpenCV has (0,0) at top-left. So we flip Y: 1.0 - y.
             center_y = 1.0 - ((y + h/2) / height)
             
+            # Store normalized data.
             ghosts.append({
                 "x": float(center_x),
                 "y": float(center_y),
                 "w": float(w / width),
                 "h": float(h / height),
-                "confidence": 0.8 # Arbitrary "fake" confidence for the lore.
+                "confidence": 0.8 # Arbitrary "fake" confidence for the lore (since Haar doesn't provide it).
             })
             
         if len(ghosts) > 0:
@@ -137,6 +151,7 @@ def scan_for_ghosts():
         # We modify the JSON file in place, adding the 'pareidolia' key.
         data['pareidolia'] = ghosts
         
+        # Write back to disk.
         with open(data_path, 'w') as f:
             json.dump(data, f)
 
