@@ -1,136 +1,41 @@
-name: Art Processor (The Grinder)
+name: Process Art & Index
 
 on:
   push:
     paths:
       - 'assets/raw/**'
       - 'scripts/**'
-      - '.github/workflows/**'
+      - 'public/data/**'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  grind:
+  process-and-index:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout Repo
+        uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-          cache: 'pip'
 
-      - name: Install Dependencies
+      # Note: We are currently SKIPPING the heavy 'grinder.py' processing 
+      # because GitHub Actions runners choke on the Segment Anything Model.
+      # If you want to enable the AI Grinder in the cloud, uncomment dependencies here.
+      
+      - name: Run Repair and Indexer
         run: |
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy opencv-python-headless Pillow pillow-heif scipy timm huggingface_hub git+https://github.com/facebookresearch/segment-anything.git
+          python scripts/repair_and_index.py
 
-      # --- THE AGGRESSIVE SCAVENGER (REWRITES BROKEN FILES) ---
-      - name: Repair Data & Rebuild Index
+      - name: Commit and Push Changes
         run: |
-          cat > scripts/indexer.py << 'EOF'
-          import os, json, math
-          DATA_DIR, MANIFEST = "public/data", "public/manifest.json"
-          
-          def main():
-              if not os.path.exists(DATA_DIR):
-                  with open(MANIFEST, 'w') as f: json.dump({"nodes": []}, f)
-                  return
-          
-              library = []
-              files = [f for f in os.listdir(DATA_DIR) if f.endswith('.json') and f != 'manifest.json']
-              
-              print(f"[*] Scanning {len(files)} files for repair...")
-              
-              for f in files:
-                  path = os.path.join(DATA_DIR, f)
-                  try:
-                      with open(path, 'r') as jf:
-                          data = json.load(jf)
-                          
-                      # LOGIC: Check if file is broken (Legacy List Format)
-                      if isinstance(data, list):
-                          print(f"    -> Repairing {f} (converting list to object)...")
-                          # Create the correct structure
-                          fixed_data = {
-                              "meta": {
-                                  "original_file": f,
-                                  "resolution": [1024, 1024],
-                                  "stroke_count": len(data),
-                                  "dominant_color": [100, 100, 100]
-                              },
-                              "strokes": data,
-                              "pareidolia": []
-                          }
-                          # OVERWRITE THE FILE WITH THE FIX
-                          with open(path, 'w') as out:
-                              json.dump(fixed_data, out)
-                          data = fixed_data # Use fixed data for indexing
-                      
-                      # Parse Metadata for Manifest
-                      meta = data.get('meta', {})
-                      if 'dominant_color' not in meta: meta['dominant_color'] = [100, 100, 100]
-
-                      library.append({
-                          "id": os.path.splitext(f)[0],
-                          "file": f,
-                          "resolution": meta.get('resolution', [1024, 1024]),
-                          "color": meta.get('dominant_color', [0,0,0]),
-                          "stroke_count": meta.get('stroke_count', 0),
-                          "view_origin": [0, 0, 5], 
-                          "view_target": [0, 0, 0], 
-                          "neighbors": []
-                      })
-                  except Exception as e:
-                      print(f"[!] Corrupt file {f}: {e}")
-              
-              # Build Graph
-              for node in library:
-                  dists = sorted(library, key=lambda x: math.dist(node['color'], x['color']))
-                  node['neighbors'] = [x['id'] for x in dists if x['id'] != node['id']][:3]
-              
-              with open(MANIFEST, 'w') as f: json.dump({"nodes": library}, f)
-              print(f"[*] Manifest built with {len(library)} items.")
-          
-          if __name__ == "__main__": main()
-          EOF
-          
-          python scripts/indexer.py
-
-      - name: Commit & Push Repairs
-        run: |
-          git config --global user.name "ArtGrinder Bot"
-          git config --global user.email "bot@hereliesaz.com"
-          
-          # 1. Stash the 751 fixes (hide them safely)
-          echo "Stashing changes..."
-          git stash
-          
-          # 2. Update from server (now that we are 'clean')
-          echo "Pulling latest..."
-          git pull --rebase origin main
-          
-          # 3. Bring the fixes back
-          echo "Popping stash..."
-          git stash pop || echo "Auto-merge logic applied"
-          
-          # 4. Add and Commit
+          git config --global user.name 'Az-Bot'
+          git config --global user.email 'bot@azrienoch.com'
           git add public/data/*.json
-          git add public/manifest.json
-          
-          git diff --staged --quiet || git commit -m "Aggressive Repair: Converted legacy files"
-          
-          # 5. Push (Loop until success in case of race condition)
-          n=0
-          until [ "$n" -ge 5 ]
-          do
-             git push && break
-             n=$((n+1)) 
-             echo "Push failed. Retrying pull... ($n/5)"
-             git pull --rebase origin main
-          done
+          git commit -m "Auto-repair and Index Update [skip ci]" || echo "No changes to commit"
+          git push
