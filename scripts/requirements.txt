@@ -9,3 +9,4 @@ git+https://github.com/facebookresearch/segment-anything.git
 # Torch/Torchvision for local dev (CI uses command line for CPU)
 torch
 torchvision
+imagehash
