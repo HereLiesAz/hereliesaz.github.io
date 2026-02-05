@@ -11,7 +11,103 @@ on:
 permissions:
   contents: write
 
+jobs:name: Art Processor (The Grinder)
+
+on:
+  push:
+    paths:
+      - 'assets/raw/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+
 jobs:
+  grind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy opencv-python-headless Pillow pillow-heif scipy timm huggingface_hub git+https://github.com/facebookresearch/segment-anything.git
+
+      # --- THE SCAVENGER INDEXER (EMBEDDED) ---
+      # This forces the correct script to exist, even if the file is wrong.
+      - name: Rebuild Index (The Scavenger)
+        run: |
+          cat > scripts/indexer.py << 'EOF'
+          import os, json, math
+          DATA_DIR, MANIFEST = "public/data", "public/manifest.json"
+          
+          def main():
+              if not os.path.exists(DATA_DIR):
+                  with open(MANIFEST, 'w') as f: json.dump({"nodes": []}, f)
+                  return
+          
+              library = []
+              files = [f for f in os.listdir(DATA_DIR) if f.endswith('.json') and f != 'manifest.json']
+              
+              print(f"[*] Scanning {len(files)} files...")
+              
+              for f in files:
+                  try:
+                      with open(os.path.join(DATA_DIR, f)) as jf:
+                          data = json.load(jf)
+                          
+                          # SCAVENGER LOGIC: Handle Lists (Old Format) vs Dicts (New Format)
+                          if isinstance(data, list):
+                              meta = {"resolution": [1024,1024], "stroke_count": len(data), "dominant_color": [100,100,100]}
+                          else:
+                              meta = data.get('meta', {})
+                              if 'dominant_color' not in meta: meta['dominant_color'] = [100,100,100]
+
+                          library.append({
+                              "id": os.path.splitext(f)[0],
+                              "file": f,
+                              "resolution": meta.get('resolution', [1024,1024]),
+                              "color": meta.get('dominant_color', [0,0,0]),
+                              "stroke_count": meta.get('stroke_count', 0),
+                              "view_origin": [0,0,5],
+                              "view_target": [0,0,0],
+                              "neighbors": []
+                          })
+                  except Exception as e:
+                      print(f"[!] Failed {f}: {e}")
+              
+              # Build Graph (Simple Color Distance)
+              for node in library:
+                  dists = sorted(library, key=lambda x: math.dist(node['color'], x['color']))
+                  node['neighbors'] = [x['id'] for x in dists if x['id'] != node['id']][:3]
+              
+              with open(MANIFEST, 'w') as f: json.dump({"nodes": library}, f)
+              print(f"[*] Manifest built with {len(library)} items.")
+          
+          if __name__ == "__main__": main()
+          EOF
+          
+          # Run the script we just wrote
+          python scripts/indexer.py
+
+      - name: Commit & Push Results
+        run: |
+          git config --global user.name "ArtGrinder Bot"
+          git config --global user.email "bot@hereliesaz.com"
+          git pull --rebase || true
+          git add public/manifest.json
+          git diff --staged --quiet || git commit -m "Scavenger Hunt Complete: Manifest Repaired"
+          git push
   grind:
     runs-on: ubuntu-latest
     strategy:
