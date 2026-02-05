@@ -4,14 +4,15 @@ import * as THREE from 'three';
 import useStore from '../store/useStore';
 import { AnamorphicShader } from '../shaders/AnamorphicShader';
 
+// --- DATA LOADER ---
 const useArtworkData = (id) => {
   const [data, setData] = useState(null);
 
   useEffect(() => {
     if (!id) return;
     
-    // Guard against corrupted IDs (e.g., missing parens)
-    console.log(`[Canvas] Fetching: /data/${id}.json`);
+    let isMounted = true; // Prevent setting state on unmounted component
+    console.log(`[Canvas] Fetching ${id}...`);
     
     fetch(`/data/${id}.json`)
       .then(res => {
@@ -19,24 +20,29 @@ const useArtworkData = (id) => {
         return res.json();
       })
       .then(json => {
-        // Handle legacy array format vs new object format
-        const cleanData = Array.isArray(json) ? { strokes: json } : json;
-        setData(cleanData);
+        if (isMounted) {
+            // Normalize legacy lists vs new objects
+            const clean = Array.isArray(json) ? { strokes: json } : json;
+            setData(clean);
+        }
       })
       .catch(e => {
-        console.warn(`[Canvas] Failed to load ${id}. This artwork may not exist or the ID is corrupt.`);
-        setData(null); // Ensure we don't hold onto stale data
+        console.warn(`[Canvas] Failed to load ${id}: ${e.message}`);
+        if (isMounted) setData(null);
       });
+      
+    return () => { isMounted = false; };
   }, [id]);
 
   return data;
 };
 
+// --- SINGLE ARTWORK COMPONENT ---
 const ArtworkInstance = ({ id, isActive, progress }) => {
   const meshRef = useRef();
   const data = useArtworkData(id);
   
-  // UNIFORMS
+  // UNIFORMS (Memoized to prevent recreation)
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
     uScroll: { value: 0 },
@@ -46,28 +52,38 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
 
   // ANIMATION LOOP
   useFrame((state) => {
-    if (meshRef.current) {
-      meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
-      // Calculate chaos: Active = 0->1, Next = 1->0
-      const chaos = isActive ? progress : (1.0 - progress);
-      meshRef.current.material.uniforms.uChaos.value = chaos;
-    }
+    if (!meshRef.current || !meshRef.current.material) return;
+    
+    // Update Time
+    meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
+    
+    // Update Chaos (0.0 = Order, 1.0 = Chaos)
+    const chaos = isActive ? progress : (1.0 - progress);
+    meshRef.current.material.uniforms.uChaos.value = chaos;
   });
 
-  // DATA PROCESSING
+  // ATTRIBUTE CALCULATION
   const attributes = useMemo(() => {
     if (!data || !data.strokes) return null;
 
     const count = data.strokes.length;
+    // Safety check for empty files
+    if (count === 0) return null;
+
     const offsets = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
     const randoms = new Float32Array(count);
 
     data.strokes.forEach((stroke, i) => {
-      offsets[i * 3] = stroke.bbox ? stroke.bbox[0] : 0;
-      offsets[i * 3 + 1] = stroke.bbox ? stroke.bbox[1] : 0;
-      offsets[i * 3 + 2] = stroke.z || 0;
+      // Safe access using defaults
+      const x = stroke.bbox ? stroke.bbox[0] : 0;
+      const y = stroke.bbox ? stroke.bbox[1] : 0;
+      const z = stroke.z || 0;
+      
+      offsets[i * 3] = x;
+      offsets[i * 3 + 1] = y;
+      offsets[i * 3 + 2] = z;
 
       if (stroke.color) {
           colors[i * 3] = stroke.color[0] / 255;
@@ -84,13 +100,15 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
     return { offsets, colors, sizes, randoms, count };
   }, [data]);
 
-  // RENDER GUARD: If no attributes, render nothing.
+  // RENDER SAFETY:
+  // If we don't have attributes, render NOTHING. 
+  // This prevents the "reading 'null'" crash in Three.js internals.
   if (!attributes) return null;
 
   return (
     <instancedMesh ref={meshRef} args={[null, null, attributes.count]}>
-      {/* CRITICAL FIX: Attributes are children of geometry.
-         This prevents "Cannot read properties of undefined" errors.
+      {/* NOTE: We attach attributes directly to the geometry children.
+         This is the safest way to ensure they are linked before render.
       */}
       <planeGeometry args={[1, 1]}>
         <instancedBufferAttribute attach="attributes-aOffset" args={[attributes.offsets, 3]} />
@@ -111,6 +129,7 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
   );
 };
 
+// --- MAIN CANVAS ---
 const InfiniteCanvas = () => {
   const activeId = useStore(state => state.activeId);
   const nextId = useStore(state => state.nextId);
