@@ -70,8 +70,8 @@ const App = () => {
         // CHAOS SELECTION:
         // Pick a random artwork to start with, rather than a fixed homepage.
         // This ensures every visit is unique and encourages exploration.
-        const keys = Object.keys(data.nodes);
-        const randomId = keys[Math.floor(Math.random() * keys.length)];
+        const randomNode = data.nodes[Math.floor(Math.random() * data.nodes.length)];
+        const randomId = randomNode.id;
 
         // Initialize the active artwork.
         // We use the store's action if available, or fallback to direct state manipulation if needed.
