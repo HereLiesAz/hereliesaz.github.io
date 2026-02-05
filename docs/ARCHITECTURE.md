@@ -7,7 +7,11 @@ The "Infinite Void" is designed as a hybrid static-dynamic site. The heavy lifti
 ```mermaid
 graph TD
     A[Raw Images] -->|scripts/grinder.py| B(Stroke Data .json)
-    A -->|scripts/pareidolia.py| B
+    subgraph Pareidolia Enhancement
+        B -- reads --> P[scripts/pareidolia.py]
+        A -- reads --> P
+    end
+    P -.-> B
     B -->|scripts/indexer.py| C(manifest.json)
     D[Markdown Metadata] -->|scripts/indexer.py| C
 
@@ -19,7 +23,6 @@ graph TD
     F --> G[Three.js Scene]
     G --> H[Custom Shaders]
     end
-```
 
 ## Key Concepts
 
