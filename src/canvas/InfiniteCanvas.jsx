@@ -1,138 +1,143 @@
-import React, { useMemo, useEffect, useState, useRef } from 'react';
-import { useThree, useFrame } from '@react-three/fiber';
+import React, { useEffect, useRef, useState } from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import useStore from '../store/useStore';
 import { AnamorphicShader } from '../shaders/AnamorphicShader';
 
-// Static base to avoid garbage collection
-const BASE_GEOMETRY = new THREE.PlaneGeometry(1, 1);
+// --- FALLBACK SHADER (In case import fails) ---
+const FALLBACK_SHADER = {
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    varying vec2 vUv;
+    void main() {
+      gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0); // Bright Magenta Error Color
+    }
+  `
+};
 
+// --- DATA HOOK ---
 const useArtworkData = (id) => {
   const [data, setData] = useState(null);
-
   useEffect(() => {
     if (!id) return;
     let mounted = true;
+    console.log(`[BlackBox] Fetching: ${id}`);
     
-    // Explicitly fetch the JSON
     fetch(`/data/${id}.json`)
-      .then(res => {
-        if (!res.ok) return null;
-        return res.json();
-      })
+      .then(r => r.ok ? r.json() : null)
       .then(json => {
-        if (!mounted || !json) return;
-        // Handle legacy arrays vs new objects
-        const clean = Array.isArray(json) ? { strokes: json } : json;
-        setData(clean);
+        if (mounted && json) {
+          setData(Array.isArray(json) ? { strokes: json } : json);
+        }
       })
-      .catch(() => { if (mounted) setData(null); });
+      .catch(e => console.warn(`[BlackBox] Load failed: ${e}`));
       
     return () => { mounted = false; };
   }, [id]);
-
   return data;
 };
 
-const ArtworkInstance = ({ id, isActive, progress }) => {
+// --- THE BLACK BOX COMPONENT ---
+// This component manages its own Three.js objects manually.
+const BlackBoxArtwork = ({ id, isActive, progress }) => {
+  const groupRef = useRef();
   const meshRef = useRef();
   const data = useArtworkData(id);
-  
-  // UNIFORMS
-  const uniforms = useMemo(() => ({
-    uTime: { value: 0 },
-    uScroll: { value: 0 },
-    uChaos: { value: 0 },
-    uColor: { value: new THREE.Color(1, 1, 1) }
-  }), []);
 
-  // ANIMATION
-  useFrame((state) => {
-    if (meshRef.current) {
-      meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
-      const chaos = isActive ? progress : (1.0 - progress);
-      meshRef.current.material.uniforms.uChaos.value = chaos;
-    }
-  });
-
-  // ATOMIC GEOMETRY CONSTRUCTION
-  // We build the entire geometry block in memory. 
-  // This bypasses React's child reconciliation which is causing the 'reading null' crash.
-  const geometry = useMemo(() => {
-    if (!data || !data.strokes || data.strokes.length === 0) return null;
+  // 1. SETUP: Create the Mesh manually when data arrives
+  useEffect(() => {
+    if (!data || !data.strokes || !groupRef.current) return;
 
     const count = data.strokes.length;
-    
-    // 1. Create a fresh InstancedBufferGeometry
+    console.log(`[BlackBox] Constructing ${id} with ${count} particles.`);
+
+    // A. GEOMETRY
     const geo = new THREE.InstancedBufferGeometry();
-    
-    // 2. Copy the base Plane attributes (position, uv, normal, index)
-    geo.copy(BASE_GEOMETRY);
-    
-    // 3. Create Data Buffers
+    geo.copy(new THREE.PlaneGeometry(1, 1)); // Base Quad
+
     const offsets = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
     const randoms = new Float32Array(count);
 
-    // 4. Fill Buffers
     for (let i = 0; i < count; i++) {
-      const s = data.strokes[i] || {}; // Handle potential null strokes safely
-      
-      // Position
+      const s = data.strokes[i];
       const x = s.bbox ? s.bbox[0] : 0;
       const y = s.bbox ? s.bbox[1] : 0;
       const z = s.z || 0;
+
+      offsets[i * 3] = x; offsets[i * 3 + 1] = y; offsets[i * 3 + 2] = z;
       
-      offsets[i * 3] = x;
-      offsets[i * 3 + 1] = y;
-      offsets[i * 3 + 2] = z;
-
-      // Color
       if (s.color) {
-        colors[i * 3] = s.color[0] / 255;
-        colors[i * 3 + 1] = s.color[1] / 255;
-        colors[i * 3 + 2] = s.color[2] / 255;
+        colors[i * 3] = s.color[0]/255; colors[i * 3 + 1] = s.color[1]/255; colors[i * 3 + 2] = s.color[2]/255;
       } else {
-        colors[i * 3] = 1; colors[i * 3+1] = 1; colors[i * 3+2] = 1;
+        colors.set([1,1,1], i*3);
       }
-
-      // Size & Random
+      
       sizes[i] = s.bbox ? s.bbox[2] : 1.0;
       randoms[i] = Math.random();
     }
 
-    // 5. Attach Attributes
     geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets, 3));
     geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(colors, 3));
     geo.setAttribute('aSize', new THREE.InstancedBufferAttribute(sizes, 1));
     geo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(randoms, 1));
 
-    return geo;
-  }, [data]);
+    // B. MATERIAL
+    // Use imported shader or fallback if missing
+    const shader = AnamorphicShader || FALLBACK_SHADER;
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: shader.vertexShader,
+      fragmentShader: shader.fragmentShader,
+      uniforms: {
+        uTime: { value: 0 },
+        uScroll: { value: 0 },
+        uChaos: { value: 0 }, // Will update in loop
+        uColor: { value: new THREE.Color(1, 1, 1) }
+      },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
 
-  // If geometry failed to build, render nothing.
-  if (!geometry) return null;
+    // C. MESH
+    const mesh = new THREE.InstancedMesh(geo, mat, count);
+    mesh.frustumCulled = false;
 
-  return (
-    <instancedMesh 
-      ref={meshRef} 
-      args={[null, null, geometry.instanceCount]} 
-      geometry={geometry} // <--- Pass the complete object
-      frustumCulled={false} // Prevent flickering at edges
-    >
-      <shaderMaterial
-        vertexShader={AnamorphicShader.vertexShader}
-        fragmentShader={AnamorphicShader.fragmentShader}
-        uniforms={uniforms}
-        transparent={true}
-        depthWrite={false}
-        side={THREE.DoubleSide}
-      />
-    </instancedMesh>
-  );
+    // Mount
+    groupRef.current.add(mesh);
+    meshRef.current = mesh;
+
+    // Cleanup Function
+    return () => {
+      console.log(`[BlackBox] Disposing ${id}`);
+      if (groupRef.current) groupRef.current.remove(mesh);
+      geo.dispose();
+      mat.dispose();
+      meshRef.current = null;
+    };
+  }, [data]); // Re-run ONLY if data (id) changes
+
+  // 2. LOOP: Update Uniforms
+  useFrame((state) => {
+    if (meshRef.current) {
+      meshRef.current.material.uniforms.uTime.value = state.clock.elapsedTime;
+      // Logic: Active = 0->1, Next = 1->0
+      const chaos = isActive ? progress : (1.0 - progress);
+      meshRef.current.material.uniforms.uChaos.value = chaos;
+    }
+  });
+
+  return <group ref={groupRef} />;
 };
 
+// --- MAIN CANVAS ---
 const InfiniteCanvas = () => {
   const activeId = useStore(state => state.activeId);
   const nextId = useStore(state => state.nextId);
@@ -140,9 +145,9 @@ const InfiniteCanvas = () => {
 
   return (
     <group>
-      {/* Key-based unmounting ensures we never update a dead mesh */}
+      {/* Key forces complete remount on change */}
       {activeId && (
-        <ArtworkInstance 
+        <BlackBoxArtwork 
           key={activeId} 
           id={activeId} 
           isActive={true} 
@@ -151,7 +156,7 @@ const InfiniteCanvas = () => {
       )}
       
       {nextId && (
-        <ArtworkInstance 
+        <BlackBoxArtwork 
           key={nextId} 
           id={nextId} 
           isActive={false} 
