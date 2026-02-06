@@ -1,100 +1,101 @@
 import os
 import json
+import re
 import math
+from datetime import datetime
 
 DATA_DIR = "public/data"
-MANIFEST_PATH = "public/manifest.json"
+MANIFEST_DIR = "public"
+CHUNK_SIZE = 50  # Items per page
 
-def calculate_distance(c1, c2):
-    return math.sqrt(sum((a - b) ** 2 for a, b in zip(c1, c2)))
-
-def main():
-    print("[*] Indexing processed art data...")
-
-    if not os.path.exists(DATA_DIR):
-        with open(MANIFEST_PATH, 'w') as f:
-            json.dump({"nodes": []}, f)
-        return
-
-    files = [f for f in os.listdir(DATA_DIR) if f.endswith('.json') and f != 'manifest.json']
-    library = []
-
-    for f in files:
+def normalize_date(filename, metadata):
+    """
+    Standardizes time. Truth is relative, but time should be ISO 8601.
+    Tries to extract date from filename patterns or fallback to file creation time.
+    """
+    # Pattern 1: YYYY-MM-DD
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", filename)
+    if match:
+        return match.group(1)
+    
+    # Pattern 2: YYYYMMDD (PXL/IMG prefixes)
+    match = re.search(r"(\d{4})(\d{2})(\d{2})", filename)
+    if match:
+        return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+    
+    # Pattern 3: Unix Timestamp (Digits > 9 chars)
+    match = re.search(r"(\d{10,})", filename)
+    if match:
         try:
-            with open(os.path.join(DATA_DIR, f), 'r') as jf:
-                data = json.load(jf)
-                
-                # --- SCAVENGER LOGIC ---
-                # Recover files that are raw lists (legacy/broken format)
-                if isinstance(data, list):
-                    # Assume the list is the strokes data
-                    strokes = data
-                    # Create fake metadata since we can't read it
-                    meta = {
-                        "resolution": [1024, 1024], # Default assumption
-                        "stroke_count": len(strokes),
-                        "dominant_color": [100, 100, 100] # Default grey
-                    }
-                    ghosts = []
-                else:
-                    # Standard Format
-                    meta = data.get('meta', {})
-                    strokes = data.get('strokes', [])
-                    ghosts = data.get('pareidolia', [])
-                # -----------------------
-
-                # Determine View Target
-                if len(ghosts) > 0:
-                    target = [ghosts[0]['x'] - 0.5, ghosts[0]['y'] - 0.5, 0] 
-                else:
-                    target = [0, 0, 0]
-
-                # Ensure Color Exists
-                if 'dominant_color' not in meta:
-                    # Calculate from strokes if missing
-                    if len(strokes) > 0:
-                        try:
-                            # Handle case where stroke is not a dict (legacy)
-                            sample = strokes[:50]
-                            # Check if stroke is dict or list/other
-                            if isinstance(sample[0], dict) and 'color' in sample[0]:
-                                avg_r = sum(s['color'][0] for s in sample) / len(sample)
-                                avg_g = sum(s['color'][1] for s in sample) / len(sample)
-                                avg_b = sum(s['color'][2] for s in sample) / len(sample)
-                                meta['dominant_color'] = [int(avg_r), int(avg_g), int(avg_b)]
-                            else:
-                                meta['dominant_color'] = [128, 128, 128]
-                        except:
-                            meta['dominant_color'] = [128, 128, 128]
-                    else:
-                        meta['dominant_color'] = [0, 0, 0]
-
-                library.append({
-                    "id": os.path.splitext(f)[0],
-                    "file": f,
-                    "resolution": meta.get('resolution', [1024, 1024]),
-                    "color": meta['dominant_color'],
-                    "stroke_count": meta.get('stroke_count', len(strokes)),
-                    "view_origin": [0, 0, 5], 
-                    "view_target": target,
-                    "ghost_count": len(ghosts)
-                })
-        except Exception as e:
-            # Only print error if it's truly unreadable
-            # print(f"[!] Skipped {f}: {e}")
+            ts = int(match.group(1)) / 1000 if len(match.group(1)) > 10 else int(match.group(1))
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        except:
             pass
 
-    # Build Graph
-    print(f"[*] Building graph for {len(library)} nodes...")
-    for item in library:
-        my_color = item['color']
-        dists = sorted(library, key=lambda x: calculate_distance(my_color, x['color']))
-        item['neighbors'] = [x['id'] for x in dists if x['id'] != item['id']][:3]
+    # Fallback: Git blame or File Stat (Local only)
+    return "1970-01-01"
 
-    with open(MANIFEST_PATH, 'w') as f:
-        json.dump({"nodes": library}, f, indent=2)
+def build_index():
+    print("The Librarian is organizing the chaos...")
     
-    print(f"[*] RECOVERED Manifest with {len(library)} items.")
+    nodes = []
+    
+    # Scan JSON files
+    for f in os.listdir(DATA_DIR):
+        if not f.endswith(".json"): continue
+        
+        path = os.path.join(DATA_DIR, f)
+        
+        try:
+            with open(path, 'r', encoding='utf-8') as json_file:
+                data = json.load(json_file)
+                
+                # Check minimum viability
+                if "stroke_count" not in data: continue
+
+                node = {
+                    "id": f.replace(".json", ""),
+                    "file": f,
+                    "date": normalize_date(f, data),
+                    "stroke_count": data.get("stroke_count", 0),
+                    "color": data.get("color", [128, 128, 128]),
+                    "resolution": data.get("resolution", [1024, 1024]),
+                    "neighbors": data.get("neighbors", [])
+                }
+                
+                # Metadata override if exists (stub for markdown parsing)
+                # ... (Logic to read assets/meta would go here)
+                
+                nodes.append(node)
+        except Exception as e:
+            print(f"Failed to index {f}: {e}")
+
+    # Sort by Date (Descending)
+    nodes.sort(key=lambda x: x['date'], reverse=True)
+
+    # Pagination
+    total_pages = math.ceil(len(nodes) / CHUNK_SIZE)
+    
+    # Master Manifest (Lightweight)
+    master = {
+        "total_nodes": len(nodes),
+        "total_pages": total_pages,
+        "generated_at": datetime.now().isoformat(),
+        "pages": [f"manifest_{i}.json" for i in range(total_pages)]
+    }
+    
+    with open(os.path.join(MANIFEST_DIR, "manifest.json"), 'w') as f:
+        json.dump(master, f)
+        
+    # Chunked Pages
+    for i in range(total_pages):
+        chunk = nodes[i*CHUNK_SIZE : (i+1)*CHUNK_SIZE]
+        page_data = {"page": i, "nodes": chunk}
+        
+        with open(os.path.join(MANIFEST_DIR, f"manifest_{i}.json"), 'w') as f:
+            json.dump(page_data, f)
+            
+    print(f"Index complete. {len(nodes)} nodes across {total_pages} pages.")
 
 if __name__ == "__main__":
-    main()
+    build_index()
