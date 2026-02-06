@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   process-and-index:
@@ -24,29 +25,29 @@ jobs:
         with:
           python-version: '3.10'
 
-      # Note: We are currently SKIPPING the heavy 'grinder.py' processing 
-      # because GitHub Actions runners choke on the Segment Anything Model.
-      # If you want to enable the AI Grinder in the cloud, uncomment dependencies here.
-      
       - name: Run Repair and Indexer
+        id: processing
         run: |
-          python scripts/repair_and_index.py
+          python scripts/repair_and_index.py 2> error.log
+        continue-on-error: false
+
+      - name: Summon Jules (On Failure)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Processing failed. Reporting to Jules..."
+          if [ -f error.log ]; then
+            cat error.log | python scripts/jules.py
+          else
+            echo "Unknown error occurred during processing." | python scripts/jules.py
+          fi
 
       - name: Commit and Push Changes
+        if: success()
         run: |
           git config --global user.name 'Az-Bot'
           git config --global user.email 'bot@azrienoch.com'
           git add public/data/*.json
           git commit -m "Auto-repair and Index Update [skip ci]" || echo "No changes to commit"
           git push
-      - name: Run Processing
-        run: |
-          python scripts/process.py 2> error.log
-        id: process
-      
-      - name: Summon Jules (On Failure)
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cat error.log | python scripts/jules.py
