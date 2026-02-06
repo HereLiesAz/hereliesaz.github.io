@@ -4,7 +4,9 @@ import * as THREE from 'three';
 import useStore from '../store/useStore';
 import { AnamorphicShader } from '../shaders/AnamorphicShader';
 
-// --- 1. DATA FETCHING (Unchanged) ---
+// Static base to avoid garbage collection
+const BASE_GEOMETRY = new THREE.PlaneGeometry(1, 1);
+
 const useArtworkData = (id) => {
   const [data, setData] = useState(null);
 
@@ -12,7 +14,7 @@ const useArtworkData = (id) => {
     if (!id) return;
     let mounted = true;
     
-    // Fetch with ID correction logic implicitly handled by the server/file check
+    // Explicitly fetch the JSON
     fetch(`/data/${id}.json`)
       .then(res => {
         if (!res.ok) return null;
@@ -20,7 +22,7 @@ const useArtworkData = (id) => {
       })
       .then(json => {
         if (!mounted || !json) return;
-        // Normalization
+        // Handle legacy arrays vs new objects
         const clean = Array.isArray(json) ? { strokes: json } : json;
         setData(clean);
       })
@@ -32,11 +34,6 @@ const useArtworkData = (id) => {
   return data;
 };
 
-// --- 2. THE GEOMETRY (Static Quad) ---
-// We define the quad once to avoid recreating it.
-const baseGeometry = new THREE.PlaneGeometry(1, 1);
-
-// --- 3. THE ARTWORK COMPONENT ---
 const ArtworkInstance = ({ id, isActive, progress }) => {
   const meshRef = useRef();
   const data = useArtworkData(id);
@@ -58,20 +55,31 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
     }
   });
 
-  // ATTRIBUTE FACTORY
-  const buffers = useMemo(() => {
+  // ATOMIC GEOMETRY CONSTRUCTION
+  // We build the entire geometry block in memory. 
+  // This bypasses React's child reconciliation which is causing the 'reading null' crash.
+  const geometry = useMemo(() => {
     if (!data || !data.strokes || data.strokes.length === 0) return null;
 
     const count = data.strokes.length;
+    
+    // 1. Create a fresh InstancedBufferGeometry
+    const geo = new THREE.InstancedBufferGeometry();
+    
+    // 2. Copy the base Plane attributes (position, uv, normal, index)
+    geo.copy(BASE_GEOMETRY);
+    
+    // 3. Create Data Buffers
     const offsets = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
     const randoms = new Float32Array(count);
 
+    // 4. Fill Buffers
     for (let i = 0; i < count; i++) {
-      const s = data.strokes[i];
+      const s = data.strokes[i] || {}; // Handle potential null strokes safely
       
-      // Safety defaults
+      // Position
       const x = s.bbox ? s.bbox[0] : 0;
       const y = s.bbox ? s.bbox[1] : 0;
       const z = s.z || 0;
@@ -80,37 +88,39 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
       offsets[i * 3 + 1] = y;
       offsets[i * 3 + 2] = z;
 
+      // Color
       if (s.color) {
         colors[i * 3] = s.color[0] / 255;
         colors[i * 3 + 1] = s.color[1] / 255;
         colors[i * 3 + 2] = s.color[2] / 255;
       } else {
-        colors.set([1, 1, 1], i * 3);
+        colors[i * 3] = 1; colors[i * 3+1] = 1; colors[i * 3+2] = 1;
       }
 
+      // Size & Random
       sizes[i] = s.bbox ? s.bbox[2] : 1.0;
       randoms[i] = Math.random();
     }
 
-    return { offsets, colors, sizes, randoms, count };
+    // 5. Attach Attributes
+    geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets, 3));
+    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(colors, 3));
+    geo.setAttribute('aSize', new THREE.InstancedBufferAttribute(sizes, 1));
+    geo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(randoms, 1));
+
+    return geo;
   }, [data]);
 
-  // RENDER GUARD
-  if (!buffers) return null;
+  // If geometry failed to build, render nothing.
+  if (!geometry) return null;
 
   return (
-    <instancedMesh ref={meshRef} args={[null, null, buffers.count]}>
-      {/* EXPLICIT GEOMETRY CONSTRUCTION 
-         We copy the base plane geometry and inject attributes.
-         This is more verbose but crash-proof.
-      */}
-      <instancedBufferGeometry index={baseGeometry.index} attributes={baseGeometry.attributes}>
-        <instancedBufferAttribute attach="attributes-aOffset" args={[buffers.offsets, 3]} />
-        <instancedBufferAttribute attach="attributes-aColor" args={[buffers.colors, 3]} />
-        <instancedBufferAttribute attach="attributes-aSize" args={[buffers.sizes, 1]} />
-        <instancedBufferAttribute attach="attributes-aRandom" args={[buffers.randoms, 1]} />
-      </instancedBufferGeometry>
-
+    <instancedMesh 
+      ref={meshRef} 
+      args={[null, null, geometry.instanceCount]} 
+      geometry={geometry} // <--- Pass the complete object
+      frustumCulled={false} // Prevent flickering at edges
+    >
       <shaderMaterial
         vertexShader={AnamorphicShader.vertexShader}
         fragmentShader={AnamorphicShader.fragmentShader}
@@ -123,7 +133,6 @@ const ArtworkInstance = ({ id, isActive, progress }) => {
   );
 };
 
-// --- 4. MAIN CANVAS ---
 const InfiniteCanvas = () => {
   const activeId = useStore(state => state.activeId);
   const nextId = useStore(state => state.nextId);
@@ -131,11 +140,7 @@ const InfiniteCanvas = () => {
 
   return (
     <group>
-      {/* CRITICAL FIX: key={id} 
-          This forces React to completely destroy the old artwork and build a new one 
-          when the ID changes. This prevents the "reading null" crash caused by 
-          recycling meshes with missing data.
-      */}
+      {/* Key-based unmounting ensures we never update a dead mesh */}
       {activeId && (
         <ArtworkInstance 
           key={activeId} 
