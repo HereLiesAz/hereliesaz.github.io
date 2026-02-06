@@ -5,7 +5,6 @@ on:
     paths:
       - 'assets/raw/**'
       - 'scripts/**'
-      - 'public/data/**'
   workflow_dispatch:
 
 permissions:
@@ -17,19 +16,36 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout Repo
+      - name: Checkout Source
         uses: actions/checkout@v3
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          cache: 'pip'
 
-      - name: Run Repair and Indexer
-        id: processing
+      - name: Install Dependencies
         run: |
+          pip install -r scripts/requirements.txt
+
+      - name: The Grinder (Processing)
+        run: |
+          # 1. Repair/Process Logic
           python scripts/repair_and_index.py 2> error.log
-        continue-on-error: false
+
+      - name: The Ghost (Pareidolia Injection)
+        if: success()
+        run: |
+          # 2. Inject Watchers
+          echo "Scanning for ghosts..."
+          python scripts/pareidolia.py
+
+      - name: The Librarian (Indexing)
+        if: success()
+        run: |
+          # 3. Generate Manifest
+          python scripts/indexer.py
 
       - name: Summon Jules (On Failure)
         if: failure()
@@ -43,11 +59,12 @@ jobs:
             echo "Unknown error occurred during processing." | python scripts/jules.py
           fi
 
-      - name: Commit and Push Changes
+      - name: Deploy Data to Orphan Branch
         if: success()
-        run: |
-          git config --global user.name 'Az-Bot'
-          git config --global user.email 'bot@azrienoch.com'
-          git add public/data/*.json
-          git commit -m "Auto-repair and Index Update [skip ci]" || echo "No changes to commit"
-          git push
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public/data
+          publish_branch: art-data
+          keep_files: true
+          commit_message: "Auto-generated Art Data: ${{ github.sha }}"
