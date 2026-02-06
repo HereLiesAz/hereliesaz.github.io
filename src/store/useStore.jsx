@@ -4,7 +4,7 @@ import { MathUtils } from 'three'
 const useStore = create((set, get) => ({
   // --- State ---
   nodes: [],           // The flat list of all artwork nodes
-  nodeMap: {},         // O(1) Lookup by ID
+  graph: {},           // O(1) Lookup by ID
   totalNodes: 0,       // Expected total count (from master manifest)
   isHydrated: false,   // True once the first page is loaded
   isLoading: false,    // True during initial fetch
@@ -12,6 +12,7 @@ const useStore = create((set, get) => ({
   activeId: null,      // The artwork currently in focus
   nextId: null,        // The artwork waiting in the wings
   transitionProgress: 0, // 0.0 to 1.0 (Scroll depth)
+  showMenu: false,      // UI Toggle for the glass menu
 
   // --- Actions ---
 
@@ -77,7 +78,7 @@ const useStore = create((set, get) => ({
   processChunk: (newNodes) => {
     set((state) => {
       const updatedNodes = [...state.nodes];
-      const updatedMap = { ...state.nodeMap };
+      const updatedMap = { ...state.graph };
       let isFirstLoad = state.nodes.length === 0;
 
       newNodes.forEach(node => {
@@ -88,7 +89,7 @@ const useStore = create((set, get) => ({
       });
 
       // If this is the very first load, set the entry point
-      let changes = { nodes: updatedNodes, nodeMap: updatedMap };
+      let changes = { nodes: updatedNodes, graph: updatedMap };
       if (isFirstLoad && updatedNodes.length > 0) {
         changes.activeId = updatedNodes[0].id;
         // Pre-calculate next ID immediately
@@ -102,7 +103,7 @@ const useStore = create((set, get) => ({
   /**
    * Navigation Logic
    */
-  setScroll: (progress) => {
+  setTransitionProgress: (progress) => {
     set({ transitionProgress: progress });
     
     // Check for transition threshold
@@ -111,12 +112,27 @@ const useStore = create((set, get) => ({
     }
   },
 
+  toggleMenu: () => set((state) => ({ showMenu: !state.showMenu })),
+
+  setManifest: (nodes) => get().processChunk(nodes),
+
+  setActiveId: (id) => {
+    const { graph } = get();
+    const node = graph[id];
+    if (!node) return;
+    set({
+      activeId: id,
+      nextId: node.neighbors?.[0] || null,
+      transitionProgress: 0
+    });
+  },
+
   commitTransition: () => {
-    const { nextId, nodeMap } = get();
-    if (!nextId || !nodeMap[nextId]) return;
+    const { nextId, graph } = get();
+    if (!nextId || !graph[nextId]) return;
 
     // Move forward
-    const nextNode = nodeMap[nextId];
+    const nextNode = graph[nextId];
     const newNextId = nextNode.neighbors?.[0] || null; // Simplified traversal
 
     set({
@@ -127,7 +143,7 @@ const useStore = create((set, get) => ({
   },
   
   // Helpers
-  getNode: (id) => get().nodeMap[id]
+  getNode: (id) => get().graph[id]
 }));
 
 export default useStore;
