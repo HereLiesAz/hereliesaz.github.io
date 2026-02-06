@@ -10,7 +10,14 @@ const useStore = create((set, get) => ({
   direction: 1,
   showMenu: false,
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
+=======
+
+  // --- ACTIONS ---
+
+  toggleMenu: () => set((state) => ({ showMenu: !state.showMenu })),
+>>>>>>> Stashed changes
 
   // --- ACTIONS ---
 
@@ -25,12 +32,15 @@ const useStore = create((set, get) => ({
   setManifest: (nodes) => {
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     set({ manifest: nodes });
     
     // Initialize if empty
     const { activeId } = get();
     if (!activeId && nodes.length > 0) {
 =======
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
     // Build graph for fast lookup
@@ -53,6 +63,7 @@ const useStore = create((set, get) => ({
   setActiveId: (rawId) => {
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     if (!rawId) {
         console.warn("[Store] Attempted to set null ID. Ignoring.");
         return;
@@ -62,6 +73,13 @@ const useStore = create((set, get) => ({
     
     // 1. Direct Match
     const exactMatch = manifest.find(n => n.id === rawId);
+=======
+    // 1. TRUST THE ID.
+    const { manifest, graph, findNextId } = get();
+    
+    // 2. Validate existence via graph
+    const exactMatch = graph[rawId];
+>>>>>>> Stashed changes
 =======
     // 1. TRUST THE ID.
     const { manifest, graph, findNextId } = get();
@@ -104,8 +122,11 @@ const useStore = create((set, get) => ({
     set({ transitionProgress: value });
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     
     // Check for transition completion
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
 =======
@@ -127,10 +148,15 @@ const useStore = create((set, get) => ({
     if (!manifest || manifest.length === 0) return null;
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 
     const node = manifest.find(n => n.id === currentId);
 =======
 =======
+=======
+    
+    const node = graph[currentId];
+>>>>>>> Stashed changes
     
     const node = graph[currentId];
 >>>>>>> Stashed changes
@@ -146,7 +172,11 @@ const useStore = create((set, get) => ({
     
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     // Fallback to random
+=======
+    // Fallback: Pick random from manifest
+>>>>>>> Stashed changes
 =======
     // Fallback: Pick random from manifest
 >>>>>>> Stashed changes
