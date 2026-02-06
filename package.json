@@ -1,5 +1,5 @@
 {
-  "name": "infinite-void-portfolio",
+  "name": "hereliesaz",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -15,12 +15,16 @@
     "@react-three/fiber": "^8.15.14",
     "@react-three/drei": "^9.96.1",
     "zustand": "^4.5.0",
-    "uuid": "^9.0.1"
+    "framer-motion": "^10.18.0",
+    "maath": "^0.10.7",
+    "wouter": "^3.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
-    "vite": "^5.0.8"
+    "vite": "^5.0.8",
+    "vite-plugin-pwa": "^0.17.4",
+    "workbox-window": "^7.0.0"
   }
 }
