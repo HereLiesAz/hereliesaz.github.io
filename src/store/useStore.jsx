@@ -1,99 +1,133 @@
-import { create } from 'zustand';
+import { create } from 'zustand'
+import { MathUtils } from 'three'
 
 const useStore = create((set, get) => ({
-  // State
-  manifest: [],
-  graph: {}, // Map for O(1) lookups: { id: node }
-  activeId: null,
-  nextId: null,
-  transitionProgress: 0.0, 
-  direction: 1,
-  showMenu: false,
+  // --- State ---
+  nodes: [],           // The flat list of all artwork nodes
+  nodeMap: {},         // O(1) Lookup by ID
+  totalNodes: 0,       // Expected total count (from master manifest)
+  isHydrated: false,   // True once the first page is loaded
+  isLoading: false,    // True during initial fetch
+  
+  activeId: null,      // The artwork currently in focus
+  nextId: null,        // The artwork waiting in the wings
+  transitionProgress: 0, // 0.0 to 1.0 (Scroll depth)
 
-  // --- ACTIONS ---
+  // --- Actions ---
 
-  toggleMenu: () => set((state) => ({ showMenu: !state.showMenu })),
+  /**
+   * The Initializer. 
+   * Fetches the master manifest, loads the first page, 
+   * and triggers background loading for the rest.
+   */
+  init: async () => {
+    set({ isLoading: true });
 
-  setManifest: (nodes) => {
-    // Build graph for fast lookup
-    const graph = {};
-    nodes.forEach(node => {
-      graph[node.id] = node;
-    });
+    try {
+      // 1. Fetch the Master Manifest
+      const response = await fetch('/data/manifest.json');
+      const master = await response.json();
 
-    set({ manifest: nodes, graph });
+      // Handle the new paginated format
+      if (master.pages && Array.isArray(master.pages)) {
+        set({ totalNodes: master.total_nodes });
 
-    // Initialize if empty
-    if (!get().activeId && nodes.length > 0) {
-      // Pick random start
-      const randomStart = nodes[Math.floor(Math.random() * nodes.length)].id;
-      console.log(`[Store] System Init. Starting at: ${randomStart}`);
-      get().setActiveId(randomStart);
+        // 2. Load the first page immediately (Critical Path)
+        await get().loadPage(master.pages[0]);
+        
+        set({ isHydrated: true, isLoading: false });
+
+        // 3. Assimilate the rest in the background (The Void grows silently)
+        // We use a small delay to let the main thread breathe for rendering
+        setTimeout(() => {
+          master.pages.slice(1).forEach(pageUrl => {
+            get().loadPage(pageUrl);
+          });
+        }, 1000);
+
+      } else {
+        // Fallback for legacy/dev environments (if you revert to flat file)
+        console.warn("Legacy manifest detected.");
+        get().processChunk(master.nodes || master);
+      }
+
+    } catch (error) {
+      console.error("The Librarian failed to fetch the index:", error);
+      set({ isLoading: false });
     }
   },
 
-  setActiveId: (rawId) => {
-    if (!rawId) {
-        console.warn("[Store] Attempted to set null ID. Ignoring.");
-        return;
-    }
-
-    const { manifest, graph, findNextId } = get();
-    
-    // 1. Validate existence via graph
-    const exactMatch = graph[rawId];
-    
-    if (exactMatch) {
-      set({ activeId: rawId, nextId: findNextId(rawId) });
-      return;
-    }
-
-    // 2. Fuzzy Recovery (Fixes "157" vs "15(7)")
-    // Normalize string: remove parens, spaces, dashes for comparison
-    const normalize = (str) => str.replace(/[^a-zA-Z0-9]/g, "");
-    const cleanTarget = normalize(rawId);
-    
-    const fuzzyMatch = manifest.find(n => normalize(n.id) === cleanTarget);
-
-    if (fuzzyMatch) {
-      console.log(`[Store] ID Mismatch Recovery: '${rawId}' -> '${fuzzyMatch.id}'`);
-      set({ activeId: fuzzyMatch.id, nextId: findNextId(fuzzyMatch.id) });
-    } else {
-      console.error(`[Store] FATAL: Artwork ID '${rawId}' not found in manifest.`);
+  /**
+   * Loads a specific page chunk and merges it into the state.
+   */
+  loadPage: async (pageUrl) => {
+    try {
+      const res = await fetch(`/data/${pageUrl}`);
+      const data = await res.json();
+      get().processChunk(data.nodes);
+    } catch (e) {
+      console.warn(`Failed to load shard ${pageUrl}:`, e);
     }
   },
 
-  setTransitionProgress: (value) => {
-    set({ transitionProgress: value });
-    
-    // Check for transition completion
-    const { nextId, findNextId } = get();
-    
-    if (value >= 1.0 && nextId) {
-      console.log(`[Store] Transition Complete. Swapping to ${nextId}`);
-      set({
-        activeId: nextId,
-        nextId: findNextId(nextId),
-        transitionProgress: 0.0
+  /**
+   * Merges new nodes into the collective.
+   * Handles deduplication and updates the lookup map.
+   */
+  processChunk: (newNodes) => {
+    set((state) => {
+      const updatedNodes = [...state.nodes];
+      const updatedMap = { ...state.nodeMap };
+      let isFirstLoad = state.nodes.length === 0;
+
+      newNodes.forEach(node => {
+        if (!updatedMap[node.id]) {
+          updatedNodes.push(node);
+          updatedMap[node.id] = node;
+        }
       });
+
+      // If this is the very first load, set the entry point
+      let changes = { nodes: updatedNodes, nodeMap: updatedMap };
+      if (isFirstLoad && updatedNodes.length > 0) {
+        changes.activeId = updatedNodes[0].id;
+        // Pre-calculate next ID immediately
+        changes.nextId = updatedNodes[0].neighbors?.[0] || null;
+      }
+
+      return changes;
+    });
+  },
+
+  /**
+   * Navigation Logic
+   */
+  setScroll: (progress) => {
+    set({ transitionProgress: progress });
+    
+    // Check for transition threshold
+    if (progress >= 1.0) {
+      get().commitTransition();
     }
   },
 
-  findNextId: (currentId) => {
-    const { manifest, graph } = get();
-    if (!manifest || manifest.length === 0) return null;
+  commitTransition: () => {
+    const { nextId, nodeMap } = get();
+    if (!nextId || !nodeMap[nextId]) return;
 
-    const node = graph[currentId];
-    
-    // Prefer defined neighbors
-    if (node && node.neighbors && node.neighbors.length > 0) {
-      // Return random neighbor
-      return node.neighbors[Math.floor(Math.random() * node.neighbors.length)];
-    }
+    // Move forward
+    const nextNode = nodeMap[nextId];
+    const newNextId = nextNode.neighbors?.[0] || null; // Simplified traversal
 
-    // Fallback: Pick random from manifest
-    return manifest[Math.floor(Math.random() * manifest.length)].id;
-  }
+    set({
+      activeId: nextId,
+      nextId: newNextId,
+      transitionProgress: 0 // Reset physics
+    });
+  },
+  
+  // Helpers
+  getNode: (id) => get().nodeMap[id]
 }));
 
 export default useStore;
