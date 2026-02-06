@@ -9,20 +9,16 @@ const useStore = create((set, get) => ({
   transitionProgress: 0.0, 
   direction: 1,
   showMenu: false,
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-=======
-=======
+
 
   // --- ACTIONS ---
 
   toggleMenu: () => set((state) => ({ showMenu: !state.showMenu })),
->>>>>>> Stashed changes
 
   // --- ACTIONS ---
 
   toggleMenu: () => set((state) => ({ showMenu: !state.showMenu })),
->>>>>>> Stashed changes
+
 
   // --- ACTIONS ---
 
@@ -30,19 +26,13 @@ const useStore = create((set, get) => ({
 
   // Actions
   setManifest: (nodes) => {
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
+
     set({ manifest: nodes });
     
     // Initialize if empty
     const { activeId } = get();
     if (!activeId && nodes.length > 0) {
-=======
-=======
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
+
     // Build graph for fast lookup
     const graph = {};
     nodes.forEach(node => {
@@ -53,7 +43,6 @@ const useStore = create((set, get) => ({
 
     if (!get().activeId && nodes.length > 0) {
       // Pick random start
->>>>>>> Stashed changes
       const randomStart = nodes[Math.floor(Math.random() * nodes.length)].id;
       console.log(`[Store] System Init. Starting at: ${randomStart}`);
       get().setActiveId(randomStart);
@@ -61,9 +50,7 @@ const useStore = create((set, get) => ({
   },
 
   setActiveId: (rawId) => {
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
+
     if (!rawId) {
         console.warn("[Store] Attempted to set null ID. Ignoring.");
         return;
@@ -73,27 +60,23 @@ const useStore = create((set, get) => ({
     
     // 1. Direct Match
     const exactMatch = manifest.find(n => n.id === rawId);
-=======
     // 1. TRUST THE ID.
     const { manifest, graph, findNextId } = get();
     
     // 2. Validate existence via graph
     const exactMatch = graph[rawId];
->>>>>>> Stashed changes
-=======
+
     // 1. TRUST THE ID.
     const { manifest, graph, findNextId } = get();
     
     // 2. Validate existence via graph
     const exactMatch = graph[rawId];
->>>>>>> Stashed changes
-=======
+
     // 1. TRUST THE ID.
     const { manifest, graph, findNextId } = get();
     
     // 2. Validate existence via graph
     const exactMatch = graph[rawId];
->>>>>>> Stashed changes
     
     if (exactMatch) {
       set({ activeId: rawId, nextId: findNextId(rawId) });
@@ -120,17 +103,10 @@ const useStore = create((set, get) => ({
 
   setTransitionProgress: (value) => {
     set({ transitionProgress: value });
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
+
     
     // Check for transition completion
-=======
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
+
     const { nextId, findNextId } = get();
     
     if (value >= 1.0 && nextId) {
@@ -146,23 +122,16 @@ const useStore = create((set, get) => ({
   findNextId: (currentId) => {
     const { manifest, graph } = get();
     if (!manifest || manifest.length === 0) return null;
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
+
 
     const node = manifest.find(n => n.id === currentId);
-=======
-=======
-=======
+
     
     const node = graph[currentId];
->>>>>>> Stashed changes
     
     const node = graph[currentId];
->>>>>>> Stashed changes
     
     const node = graph[currentId];
->>>>>>> Stashed changes
     
     // Prefer defined neighbors
     if (node && node.neighbors && node.neighbors.length > 0) {
@@ -170,19 +139,13 @@ const useStore = create((set, get) => ({
       return node.neighbors[Math.floor(Math.random() * node.neighbors.length)];
     }
     
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
+
     // Fallback to random
-=======
     // Fallback: Pick random from manifest
->>>>>>> Stashed changes
-=======
+
     // Fallback: Pick random from manifest
->>>>>>> Stashed changes
-=======
+
     // Fallback: Pick random from manifest
->>>>>>> Stashed changes
     return manifest[Math.floor(Math.random() * manifest.length)].id;
   }
 }));
