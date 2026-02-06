@@ -22,7 +22,6 @@ jobs:
 
       - name: Run Backup Script
         id: run_backup
-        # SWITCHING TO PWSH (Core) for better UTF-8 handling
         shell: pwsh
         run: |
           # --- Embedding User Script ---
@@ -37,64 +36,24 @@ jobs:
 
           # Directories to exclude.
           $excludeDirs = @(
-              ".git",
-              ".gradle",
-              ".idea",
-              ".vscode",
-              ".cxx",
-              "build",
-              "captures",
-              "dist",
-              "node_modules",
-              "out",
-              "coverage",
-              ".next",
-              "bin",
-              "obj",
-              "__pycache__",
-              "libs",
-              "opencv*",
-              "*/absl",
-              "*/ceres-solver/include",
-              "*/ceres-solver/data",
-              "*/ceres-solver/ci",
-              "*/ceres-solver/internal",
-              "*/ceres-solver/include",
-              "*/ceres-solver/examples",
-              "*/ceres-solver/config",
-              "*/eigen/lapack",
-              "*/eigen/blas",
-              "*/eigen/debug",
-              "*/eigen/unsupported",
-              "*/eigen/Eigen",
-              "*/eigen/test",
-              "*/eigen/demos",
-              "*/eigen/scripts",
-              "*/eigen/failtest",
-              "*/eigen/cmake",
-              "*/eigen/bench",
-              "*/eigen/doc",
-              "*/libs/"
+              ".git", ".gradle", ".idea", ".vscode", ".cxx", "build", "captures", "dist",
+              "node_modules", "out", "coverage", ".next", "bin", "obj", "__pycache__", "libs",
+              "opencv*", "*/absl", "*/eigen/Eigen", "*/libs/"
           )
 
           # File patterns to exclude.
           $excludeFiles = @(
               $ScriptName,
               "${BackupPrefix}*.txt",
-              "local.properties",
-              "gradlew",
-              "gradlew.bat",
-              "package-lock.json",
-              "yarn.lock",
-              "pnpm-lock.yaml",
-              "*.iml",
-              "*.log",
-              "*.map",
+              "local.properties", "gradlew", "gradlew.bat",
+              "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+              "*.iml", "*.log", "*.map",
               "*.so", "lib*.so", "*.dylib", "*.dll", "*.obj", "*.o", "*.a", "*.lib",
               "*.apk", "*.aar", "*.dex", "*.class",
               "*.exe", "*.bin", "*.msi",
               "*.zip", "*.tar", "*.gz", "*.rar", "*.7z", "*.jar",
               "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.ico", "*.webp", "*.bmp", "*.tiff",
+              "*.HEIC", "*.heic",  # <--- FIX APPLIED HERE
               "*.mp3", "*.mp4", "*.wav", "*.avi", "*.mov", "*.mkv",
               "*.ttf", "*.otf", "*.woff", "*.woff2", "*.eot",
               ".DS_Store", "Thumbs.db"
@@ -140,23 +99,6 @@ jobs:
               }
           }
 
-          # --- .aiexclude Assimilation ---
-          if (Test-Path "$PSScriptRoot\.aiexclude") {
-              Write-Host "Parsing .aiexclude..." -ForegroundColor Magenta
-              $aiExcludeContent = Get-Content "$PSScriptRoot\.aiexclude"
-              foreach ($line in $aiExcludeContent) {
-                  if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("#") -or $line.StartsWith("!")) { continue }
-                  $cleanLine = $line.Trim().Replace('/', [System.IO.Path]::DirectorySeparatorChar)
-
-                  if ($cleanLine.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-                      $dirName = $cleanLine.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
-                      if ($excludeDirs -notcontains $dirName) { $excludeDirs += $dirName }
-                  } else {
-                      if ($excludeFiles -notcontains $cleanLine) { $excludeFiles += $cleanLine }
-                  }
-              }
-          }
-
           # --- Function: Generate File Tree ---
           function Write-FileTree {
               param (
@@ -166,12 +108,8 @@ jobs:
                   [string]$RootPath
               )
 
-              # Define Tree Characters via Hex to bypass YAML/Runner encoding issues
-              # L-Shape
               $g_last   = "$([char]0x2514)$([char]0x2500)$([char]0x2500) "
-              # T-Shape
               $g_branch = "$([char]0x251C)$([char]0x2500)$([char]0x2500) "
-              # Vertical Line
               $g_vert   = "$([char]0x2502)   "
               $g_empty  = "    "
 
@@ -193,9 +131,7 @@ jobs:
               foreach ($item in $items) {
                   $i++
                   $isLastItem = ($i -eq $count)
-                  
                   if ($isLastItem) { $marker = $g_last } else { $marker = $g_branch }
-                  
                   $line = "$Indent$marker$($item.Name)"
                   Add-Content -Path $BackupFile -Value $line
 
@@ -208,49 +144,30 @@ jobs:
           }
 
           # --- Execution ---
-          # Force Output Encoding to UTF8
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
           Write-Host "Initializing Backup..." -ForegroundColor Green
-          Write-Host "Target: $BackupFile"
-
           Set-Content -Path $BackupFile -Value "# PROJECT BACKUP: $Timestamp"
           Add-Content -Path $BackupFile -Value "# NOTE: Binary files and 'libs' directory excluded."
           Add-Content -Path $BackupFile -Value "`n# --- PROJECT STRUCTURE ---"
-
-          Write-Host "Generating File Tree..." -ForegroundColor Cyan
           Write-FileTree -Path $PSScriptRoot -Indent "" -IsLast $true -RootPath $PSScriptRoot
-
           Add-Content -Path $BackupFile -Value "`n# --- FILE CONTENTS ---"
-          Write-Host "Backing up content..." -ForegroundColor Cyan
 
           Get-ChildItem -Path $PSScriptRoot -Recurse -File | ForEach-Object {
               $file = $_
               if (Test-IsExcluded -Item $file -RootPath $PSScriptRoot) { return }
-
               if ($file.Length -gt $FileSizeLimit) {
                   Add-Content -Path $BackupFile -Value "`n## FILE: $($file.FullName.Replace($PSScriptRoot, '.')) [SKIPPED - TOO LARGE]"
                   return
               }
-
-              try {
-                  $content = Get-Content $file.FullName -Raw
-              }
-              catch {
-                  Write-Warning "Locked: $($file.Name)"
-                  return
-              }
-
+              try { $content = Get-Content $file.FullName -Raw } catch { return }
               if (-not [string]::IsNullOrWhiteSpace($content)) {
                   if ($content.Contains("`0")) { return }
                   $relativePath = $file.FullName.Replace($PSScriptRoot, '.')
-                  Write-Host "  + $relativePath"
                   Add-Content -Path $BackupFile -Value "`n## FILE: $relativePath"
                   Add-Content -Path $BackupFile -Value $content.Trim()
               }
           }
           
-          # Export path for artifact upload
           echo "BACKUP_PATH=$BackupFile" >> $env:GITHUB_ENV
           Write-Host "✅ Backup complete." -ForegroundColor Green
 
