@@ -11,14 +11,14 @@ permissions:
   contents: write
 
 jobs:
-  # PHASE 1: PARALLEL GRINDING
+  # PHASE 1: PARALLEL GRINDING (8 WORKERS)
   grind:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # 0,1,2,3,4,5,6,7 - Run 8 jobs in parallel
-        shard: [0, 1, 2, 3, 4, 5, 6, 7] 
+        # Run 8 jobs in parallel (0-7)
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     
     steps:
       - uses: actions/checkout@v3
@@ -34,7 +34,7 @@ jobs:
 
       - name: Run Grinder (Shard ${{ matrix.shard }})
         run: |
-          # Run 1/8th of the workload
+          # This runs 1/8th of the files
           python scripts/grinder.py --input assets/raw --out temp_data --shard_index ${{ matrix.shard }} --total_shards 8
 
       - name: Upload Shard Artifact
@@ -65,7 +65,7 @@ jobs:
 
       - name: Index the Void
         run: |
-          # Now that all JSONs are in public/data, generate the manifest
+          # Generate manifest from the combined JSONs
           python scripts/indexer.py
 
       - name: Deploy Data to Orphan Branch
