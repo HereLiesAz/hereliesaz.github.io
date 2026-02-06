@@ -29,6 +29,7 @@ jobs:
         with:
           ref: art-data
           path: public/data
+          fetch-tags: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
