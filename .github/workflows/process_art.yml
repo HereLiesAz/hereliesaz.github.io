@@ -31,8 +31,8 @@ jobs:
 
       - name: The Grinder (Processing)
         run: |
-          # 1. Repair/Process Logic
-          python scripts/repair_and_index.py 2> error.log
+          # 1. The Grinder (Standardized)
+          python scripts/grinder.py 2> error.log
 
       - name: The Ghost (Pareidolia Injection)
         if: success()
