@@ -18,8 +18,6 @@ _site/
 Gemfile.lock
 npm_modules
 npm_modules/*
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
 # Logs
 logs
 *.log
@@ -111,15 +109,12 @@ dist/
 
 # Mac OS
 .DS_Store
-project_backup_full_2026-02-03_17-45-31.txt
-=======
 project_backup_*.txt
->>>>>>> Stashed changes
-=======
-project_backup_*.txt
->>>>>>> Stashed changes
 *.pth
 __pycache__/
 *.pyc
-assets/raw/*.json
 sam_vit_b_01ec64.pth
+
+# --- ONCOLOGY: Remove Build Artifacts ---
+public/data/*.json
+!public/data/.keep
