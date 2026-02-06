@@ -40,16 +40,7 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
-      - name: Run Processing
-        run: |
-         python scripts/process.py 2> error.log
-        id: process         
-      - name: Summon Jules (On Failure)
-        if: failure()
-        env:
-         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-         cat error.log | python scripts/jules.py
+
 
   deploy:
     environment:
