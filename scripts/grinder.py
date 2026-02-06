@@ -1,55 +1,41 @@
-import os
-import sys
 import argparse
+import os
 import json
 import torch
 import cv2
 import numpy as np
-import hashlib
+import warnings
+from pathlib import Path
 from PIL import Image
-from pillow_heif import register_heif_opener
+from tqdm import tqdm
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 
-# Register HEIC opener for Pillow
-register_heif_opener()
-
-# --- CONFIGURATION ---
-ZOE_MODEL_TYPE = "ZoeD_N"
-SAM_CHECKPOINT_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
-SAM_CHECKPOINT_PATH = "weights/sam_vit_b_01ec64.pth"
-SAM_MODEL_TYPE = "vit_b"
-OUTPUT_DIR = "public/data"
+# Suppress the noise. We want art, not warnings.
+warnings.filterwarnings("ignore")
 
 class ArtGrinder:
-    def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(self, device='cuda' if torch.cuda.is_available() else 'cpu'):
+        self.device = device
         print(f"[*] Initializing ArtGrinder on {self.device}...")
-        self._ensure_weights()
+        
+        # --- 1. Load Depth Estimator (The Z-Axis) ---
         self.depth_model = self._load_depth_model()
-        self.mask_generator = self._load_sam()
+        self.depth_transform = self._load_depth_transform()
 
-    def _ensure_weights(self):
-        if not os.path.exists("weights"):
-            os.makedirs("weights")
-        if not os.path.exists(SAM_CHECKPOINT_PATH):
-            print(f"[*] Downloading SAM weights...")
-            torch.hub.download_url_to_file(SAM_CHECKPOINT_URL, SAM_CHECKPOINT_PATH)
-
-    def _load_depth_model(self):
-        print("[*] Loading ZoeDepth...")
-        try:
-            model = torch.hub.load("isl-org/ZoeDepth", ZOE_MODEL_TYPE, pretrained=True, trust_repo=True)
-        except Exception as e:
-            print(f"[!] ZoeDepth failed ({e}). Fallback to MiDaS.")
-            model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
-        model.to(self.device).eval()
-        return model
-
-    def _load_sam(self):
-        print("[*] Loading SAM...")
-        sam = sam_model_registry[SAM_MODEL_TYPE](checkpoint=SAM_CHECKPOINT_PATH)
-        sam.to(self.device)
-        return SamAutomaticMaskGenerator(
+        # --- 2. Load Segment Anything (The Atomizer) ---
+        print("[*] Loading SAM (Segment Anything)...")
+        # specific checkpoint fallback
+        checkpoint = "sam_vit_b_01ec64.pth" 
+        if not os.path.exists(checkpoint):
+            print(f"[!] Checkpoint {checkpoint} not found. Downloading...")
+            torch.hub.download_url_to_file(
+                "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+                checkpoint
+            )
+            
+        sam = sam_model_registry["vit_b"](checkpoint=checkpoint)
+        sam.to(device=self.device)
+        self.mask_generator = SamAutomaticMaskGenerator(
             model=sam,
             points_per_side=32,
             pred_iou_thresh=0.86,
@@ -59,115 +45,160 @@ class ArtGrinder:
             min_mask_region_area=100,
         )
 
-    def _heal_canvas(self, img, mask):
-        # Dilate mask slightly to ensure clean edges
-        kernel = np.ones((3,3), np.uint8)
-        dilated_mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=2)
-        # Inpaint (Radius 3, Navier-Stokes)
-        return cv2.inpaint(img, dilated_mask, 3, cv2.INPAINT_NS)
-
-    def should_process(self, filename, shard_index, total_shards):
-        if total_shards <= 1:
-            return True
-        # Deterministic hash of the filename
-        hash_val = int(hashlib.md5(filename.encode('utf-8')).hexdigest(), 16)
-        # Check if this file belongs to this shard
-        return (hash_val % total_shards) == shard_index
-
-    def process_image(self, image_path, shard_index=0, total_shards=1):
-        filename = os.path.basename(image_path)
-        
-        # --- SHARD CHECK ---
-        if not self.should_process(filename, shard_index, total_shards):
-            print(f"[-] Skipping {filename} (Belongs to another runner)")
-            return
-
-        print(f"[*] Processing {filename} [Shard {shard_index}/{total_shards}]...")
-        
-        # 1. Load Image (Pillow handles HEIC via pillow-heif)
+    def _load_depth_model(self):
+        """Attempts to load ZoeDepth, falls back to MiDaS."""
+        print("[*] Loading Depth Estimator...")
         try:
-            pil_img = Image.open(image_path)
-            pil_img = pil_img.convert('RGB') # Ensure 3 channels
-            img_rgb = np.array(pil_img)
+            # Try ZoeDepth first (Better metric depth)
+            model = torch.hub.load("isl-org/ZoeDepth", "ZoeD_N", pretrained=True)
         except Exception as e:
-            print(f"[!] Could not read {image_path}: {e}")
-            return
+            print(f"[!] ZoeDepth failed ({str(e)[:50]}...). Fallback to MiDaS.")
+            # Fallback to DPT (Dense Prediction Transformer)
+            model = torch.hub.load("intel-isl/MiDaS", "DPT_Large")
         
-        # 2. Estimate Depth (Zoe)
-        print("    -> Estimating Depth...")
+        model.to(self.device)
+        model.eval()
+        return model
+
+    def _load_depth_transform(self):
+        # MiDaS transforms are standardized
+        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+        if self.device == 'cuda':
+            return midas_transforms.dpt_transform
+        return midas_transforms.small_transform
+
+    def get_depth_map(self, img_rgb):
+        """Extracts a normalized depth map (0.0 to 1.0)."""
+        input_batch = self.depth_transform(img_rgb).to(self.device)
+        
         with torch.no_grad():
-            if hasattr(self.depth_model, 'infer_pil'):
-                depth_map = self.depth_model.infer_pil(pil_img)
-            else:
-                # Fallback logic simplified for brevity
-                pass 
+            prediction = self.depth_model(input_batch)
+            
+            # Interpolate to original size
+            prediction = torch.nn.functional.interpolate(
+                prediction.unsqueeze(1),
+                size=img_rgb.shape[:2],
+                mode="bicubic",
+                align_corners=False,
+            ).squeeze()
 
-        # Normalize Depth (0=Close, 1=Far)
-        d_min, d_max = depth_map.min(), depth_map.max()
-        depth_normalized = (depth_map - d_min) / (d_max - d_min)
+        depth = prediction.cpu().numpy()
+        
+        # Normalize (Near=1.0, Far=0.0)
+        depth_min = depth.min()
+        depth_max = depth.max()
+        if depth_max - depth_min > 1e-8:
+            depth = (depth - depth_min) / (depth_max - depth_min)
+        else:
+            depth = np.zeros_like(depth)
+            
+        return depth
 
-        # 3. Segment (SAM)
-        print("    -> Segmenting...")
+    def grind(self, image_path, output_dir):
+        """The meat grinder. Turns an image into a stroke cloud."""
+        path = Path(image_path)
+        output_file = Path(output_dir) / f"{path.name}.json"
+        
+        if output_file.exists():
+            print(f"[->] Skipping {path.name} (Already ground).")
+            return
+
+        print(f"[*] Grinding {path.name}...")
+        
+        # 1. Read Image
+        img_cv2 = cv2.imread(str(path))
+        if img_cv2 is None:
+            print(f"[!] Failed to read {path}")
+            return
+        img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
+        
+        # 2. Get Depth
+        depth_map = self.get_depth_map(img_rgb)
+        
+        # 3. Get Segments
         masks = self.mask_generator.generate(img_rgb)
         
-        # 4. SORT MASKS BY DEPTH (Closest First)
-        for m in masks:
-            m['avg_z'] = np.mean(depth_normalized[m['segmentation']])
-        masks.sort(key=lambda x: x['avg_z'])
-
-        print(f"    -> Found {len(masks)} layers. Beginning surgery...")
-
-        # 5. Extract & Heal
-        strokes_data = []
-        working_canvas = img_rgb.copy() 
-
-        for i, mask_data in enumerate(masks):
+        # 4. Serialize Strokes
+        strokes = []
+        
+        for mask_data in masks:
+            # mask_data keys: 'segmentation', 'bbox', 'predicted_iou', 'stability_score'
             mask = mask_data['segmentation']
             bbox = mask_data['bbox'] # [x, y, w, h]
             
-            masked_pixels = working_canvas[mask]
-            if masked_pixels.size == 0: continue
+            # Extract color (average of masked area)
+            # This is faster than masking the whole array
+            y_indices, x_indices = np.where(mask)
+            if len(y_indices) == 0: continue
             
-            avg_color = np.mean(masked_pixels, axis=0)
-
-            stroke = {
-                "id": i,
-                "bbox": [int(v) for v in bbox],
-                "z": float(mask_data['avg_z']),
-                "area": int(mask_data['area']),
-                "color": [int(c) for c in avg_color],
+            colors = img_rgb[y_indices, x_indices]
+            avg_color = colors.mean(axis=0).astype(int).tolist()
+            
+            # Extract depth (average z of masked area)
+            z_val = depth_map[y_indices, x_indices].mean()
+            
+            strokes.append({
+                "color": avg_color,
+                "bbox": [int(b) for b in bbox],
+                "z": float(z_val),
                 "stability": float(mask_data['stability_score'])
-            }
-            strokes_data.append(stroke)
-            
-            # Heal the canvas 
-            working_canvas = self._heal_canvas(working_canvas, mask)
+            })
 
-        # 6. Save Output
-        if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
-        out_path = os.path.join(OUTPUT_DIR, os.path.splitext(filename)[0] + ".json")
-        
+        # 5. Save Payload
         payload = {
             "meta": {
-                "original_file": filename,
-                "resolution": img_rgb.shape[:2],
-                "stroke_count": len(strokes_data)
+                "file": path.name,
+                "resolution": [img_rgb.shape[1], img_rgb.shape[0]],
+                "stroke_count": len(strokes)
             },
-            "strokes": strokes_data
+            "strokes": strokes
         }
         
-        with open(out_path, 'w') as f:
-            json.dump(payload, f)
-        print(f"[*] Saved volumetric analysis to {out_path}")
+        os.makedirs(output_dir, exist_ok=True)
+        with open(output_file, 'w') as f:
+            json.dump(payload, f) # Minify to save space? No, let's keep it readable for now.
+            
+        print(f"[+] Saved {len(strokes)} strokes to {output_file}")
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=str, required=True)
-    parser.add_argument("--shard_index", type=int, default=0, help="Index of this runner")
-    parser.add_argument("--total_shards", type=int, default=1, help="Total number of runners")
+    parser = argparse.ArgumentParser(description="The Grinder: Deconstructs reality into JSON.")
+    parser.add_argument("--input", required=True, help="Path to image OR directory of images")
+    parser.add_argument("--out", default="public/data", help="Where to spit out the data")
     args = parser.parse_args()
+
+    input_path = Path(args.input)
     
-    ArtGrinder().process_image(args.input, args.shard_index, args.total_shards)
+    if not input_path.exists():
+        print(f"[!] Error: {input_path} does not exist.")
+        return
+
+    # Initialize the machine
+    grinder = ArtGrinder()
+
+    # Determine diet (Single File vs Buffet)
+    files_to_process = []
+    if input_path.is_dir():
+        # Eat everything that looks like an image
+        valid_exts = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff'}
+        files_to_process = [p for p in input_path.iterdir() if p.suffix.lower() in valid_exts]
+        print(f"[*] Found {len(files_to_process)} images in directory.")
+    else:
+        files_to_process = [input_path]
+
+    # Process
+    if not files_to_process:
+        print("[!] No images found to process.")
+        return
+
+    for img_file in tqdm(files_to_process, desc="Grinding Assets"):
+        try:
+            grinder.grind(img_file, args.out)
+        except Exception as e:
+            print(f"[!] Failed to grind {img_file.name}: {e}")
+            # Keep going, don't crash the whole batch
+            continue
+
+    print("[*] Grinding complete. Run 'python scripts/indexer.py' next.")
 
 if __name__ == "__main__":
     main()
