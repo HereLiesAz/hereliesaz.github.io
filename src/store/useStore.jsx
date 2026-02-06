@@ -10,29 +10,11 @@ const useStore = create((set, get) => ({
   direction: 1,
   showMenu: false,
 
-
   // --- ACTIONS ---
 
   toggleMenu: () => set((state) => ({ showMenu: !state.showMenu })),
 
-  // --- ACTIONS ---
-
-  toggleMenu: () => set((state) => ({ showMenu: !state.showMenu })),
-
-
-  // --- ACTIONS ---
-
-  toggleMenu: () => set((state) => ({ showMenu: !state.showMenu })),
-
-  // Actions
   setManifest: (nodes) => {
-
-    set({ manifest: nodes });
-    
-    // Initialize if empty
-    const { activeId } = get();
-    if (!activeId && nodes.length > 0) {
-
     // Build graph for fast lookup
     const graph = {};
     nodes.forEach(node => {
@@ -41,6 +23,7 @@ const useStore = create((set, get) => ({
 
     set({ manifest: nodes, graph });
 
+    // Initialize if empty
     if (!get().activeId && nodes.length > 0) {
       // Pick random start
       const randomStart = nodes[Math.floor(Math.random() * nodes.length)].id;
@@ -50,32 +33,14 @@ const useStore = create((set, get) => ({
   },
 
   setActiveId: (rawId) => {
-
     if (!rawId) {
         console.warn("[Store] Attempted to set null ID. Ignoring.");
         return;
     }
 
-    const { manifest, findNextId } = get();
-    
-    // 1. Direct Match
-    const exactMatch = manifest.find(n => n.id === rawId);
-    // 1. TRUST THE ID.
     const { manifest, graph, findNextId } = get();
     
-    // 2. Validate existence via graph
-    const exactMatch = graph[rawId];
-
-    // 1. TRUST THE ID.
-    const { manifest, graph, findNextId } = get();
-    
-    // 2. Validate existence via graph
-    const exactMatch = graph[rawId];
-
-    // 1. TRUST THE ID.
-    const { manifest, graph, findNextId } = get();
-    
-    // 2. Validate existence via graph
+    // 1. Validate existence via graph
     const exactMatch = graph[rawId];
     
     if (exactMatch) {
@@ -95,18 +60,13 @@ const useStore = create((set, get) => ({
       set({ activeId: fuzzyMatch.id, nextId: findNextId(fuzzyMatch.id) });
     } else {
       console.error(`[Store] FATAL: Artwork ID '${rawId}' not found in manifest.`);
-      // Optional: Fallback to random to keep the show going
-      // const random = manifest[0].id;
-      // get().setActiveId(random);
     }
   },
 
   setTransitionProgress: (value) => {
     set({ transitionProgress: value });
-
     
     // Check for transition completion
-
     const { nextId, findNextId } = get();
     
     if (value >= 1.0 && nextId) {
@@ -123,14 +83,6 @@ const useStore = create((set, get) => ({
     const { manifest, graph } = get();
     if (!manifest || manifest.length === 0) return null;
 
-
-    const node = manifest.find(n => n.id === currentId);
-
-    
-    const node = graph[currentId];
-    
-    const node = graph[currentId];
-    
     const node = graph[currentId];
     
     // Prefer defined neighbors
@@ -138,12 +90,6 @@ const useStore = create((set, get) => ({
       // Return random neighbor
       return node.neighbors[Math.floor(Math.random() * node.neighbors.length)];
     }
-    
-
-    // Fallback to random
-    // Fallback: Pick random from manifest
-
-    // Fallback: Pick random from manifest
 
     // Fallback: Pick random from manifest
     return manifest[Math.floor(Math.random() * manifest.length)].id;
