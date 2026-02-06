@@ -27,7 +27,7 @@ jobs:
       - name: Checkout Art Data
         uses: actions/checkout@v4
         with:
-          ref: art-data
+          ref: refs/heads/art-data
           path: public/data
           fetch-tags: false
 
