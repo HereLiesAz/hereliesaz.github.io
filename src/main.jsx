@@ -25,3 +25,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <App />
   </React.StrictMode>,
 );
+import JulesBoundary from './components/JulesBoundary';
+import './utils/Logger'; // Initialize logger
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <JulesBoundary>
+    <App />
+  </JulesBoundary>
+);
