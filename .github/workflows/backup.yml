@@ -38,7 +38,8 @@ jobs:
           $excludeDirs = @(
               ".git", ".gradle", ".idea", ".vscode", ".cxx", "build", "captures", "dist",
               "node_modules", "out", "coverage", ".next", "bin", "obj", "__pycache__", "libs",
-              "opencv*", "*/absl", "*/eigen/Eigen", "*/libs/"
+              "opencv*", "*/absl", "*/eigen/Eigen", "*/libs/", 
+              "data" 
           )
 
           # File patterns to exclude.
@@ -53,7 +54,7 @@ jobs:
               "*.exe", "*.bin", "*.msi",
               "*.zip", "*.tar", "*.gz", "*.rar", "*.7z", "*.jar",
               "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.ico", "*.webp", "*.bmp", "*.tiff",
-              "*.HEIC", "*.heic",  # <--- FIX APPLIED HERE
+              "*.HEIC", "*.heic",
               "*.mp3", "*.mp4", "*.wav", "*.avi", "*.mov", "*.mkv",
               "*.ttf", "*.otf", "*.woff", "*.woff2", "*.eot",
               ".DS_Store", "Thumbs.db"
