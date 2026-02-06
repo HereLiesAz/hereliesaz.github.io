@@ -4,7 +4,7 @@ on:
   push:
     branches: ["main"]
   workflow_run:
-    workflows: ["Art Processor (The Grinder)"]
+    workflows: ["Process Art & Index"]
     types:
       - completed
 
@@ -21,8 +21,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Source
         uses: actions/checkout@v4
+
+      - name: Checkout Art Data
+        uses: actions/checkout@v4
+        with:
+          ref: art-data
+          path: public/data
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -41,7 +47,6 @@ jobs:
         with:
           path: ./dist
 
-
   deploy:
     environment:
       name: github-pages
@@ -52,4 +57,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-      
