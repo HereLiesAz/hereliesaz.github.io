@@ -1,23 +1,27 @@
-name: Process Art & Index
+name: Process Art (Matrix)
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - 'assets/raw/**'
       - 'scripts/**'
-  workflow_dispatch:
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
-  process-and-index:
+  # PHASE 1: PARALLEL GRINDING
+  grind:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 0,1,2,3,4,5,6,7 - Run 8 jobs in parallel
+        shard: [0, 1, 2, 3, 4, 5, 6, 7] 
     
     steps:
-      - name: Checkout Source
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -26,45 +30,49 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
-        run: |
-          pip install -r scripts/requirements.txt
+        run: pip install -r scripts/requirements.txt
 
-      - name: The Grinder (Processing)
+      - name: Run Grinder (Shard ${{ matrix.shard }})
         run: |
-          # 1. The Grinder (Standardized)
-          python scripts/grinder.py 2> error.log
+          # Run 1/8th of the workload
+          python scripts/grinder.py --input assets/raw --out temp_data --shard_index ${{ matrix.shard }} --total_shards 8
 
-      - name: The Ghost (Pareidolia Injection)
-        if: success()
-        run: |
-          # 2. Inject Watchers
-          echo "Scanning for ghosts..."
-          python scripts/pareidolia.py
+      - name: Upload Shard Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: art-shard-${{ matrix.shard }}
+          path: temp_data/*.json
+          retention-days: 1
 
-      - name: The Librarian (Indexing)
-        if: success()
+  # PHASE 2: CONSOLIDATION & DEPLOY
+  consolidate:
+    needs: grind
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download All Shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: art-shard-*
+          path: public/data
+          merge-multiple: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Index the Void
         run: |
-          # 3. Generate Manifest
+          # Now that all JSONs are in public/data, generate the manifest
           python scripts/indexer.py
 
-      - name: Summon Jules (On Failure)
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "Processing failed. Reporting to Jules..."
-          if [ -f error.log ]; then
-            cat error.log | python scripts/jules.py
-          else
-            echo "Unknown error occurred during processing." | python scripts/jules.py
-          fi
-
       - name: Deploy Data to Orphan Branch
-        if: success()
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public/data
           publish_branch: art-data
           keep_files: true
-          commit_message: "Auto-generated Art Data: ${{ github.sha }}"
+          commit_message: "New Art Data: ${{ github.sha }}"
