@@ -1,4 +1,4 @@
-name: Process Art (Matrix)
+name: Process Art (56-Core Matrix)
 
 on:
   workflow_dispatch:
@@ -11,14 +11,19 @@ permissions:
   contents: write
 
 jobs:
-  # PHASE 1: PARALLEL GRINDING (8 WORKERS)
+  # PHASE 1: THE ORCHESTRA (56 MUSICIANS)
   grind:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Run 8 jobs in parallel (0-7)
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        # 56 Shards: 0 through 55
+        shard: [
+          0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+          16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+          32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+          48, 49, 50, 51, 52, 53, 54, 55
+        ]
     
     steps:
       - uses: actions/checkout@v3
@@ -34,8 +39,8 @@ jobs:
 
       - name: Run Grinder (Shard ${{ matrix.shard }})
         run: |
-          # This runs 1/8th of the files
-          python scripts/grinder.py --input assets/raw --out temp_data --shard_index ${{ matrix.shard }} --total_shards 8
+          # The Grinder now expects 1/56th of the workload
+          python scripts/grinder.py --input assets/raw --out temp_data --shard_index ${{ matrix.shard }} --total_shards 56
 
       - name: Upload Shard Artifact
         uses: actions/upload-artifact@v4
@@ -44,14 +49,14 @@ jobs:
           path: temp_data/*.json
           retention-days: 1
 
-  # PHASE 2: CONSOLIDATION & DEPLOY
+  # PHASE 2: THE CONDUCTOR (CONSOLIDATION)
   consolidate:
     needs: grind
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Download All Shards
+      - name: Download The Orchestra's Output
         uses: actions/download-artifact@v4
         with:
           pattern: art-shard-*
@@ -65,7 +70,7 @@ jobs:
 
       - name: Index the Void
         run: |
-          # Generate manifest from the combined JSONs
+          # Generate manifest from the 56 merged shards
           python scripts/indexer.py
 
       - name: Deploy Data to Orphan Branch
@@ -75,4 +80,4 @@ jobs:
           publish_dir: ./public/data
           publish_branch: art-data
           keep_files: true
-          commit_message: "New Art Data: ${{ github.sha }}"
+          commit_message: "Symphony of 56: ${{ github.sha }}"
