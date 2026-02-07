@@ -1,4 +1,4 @@
-name: Jules-Proof Project Backup
+name: Backup
 
 on:
   workflow_dispatch:
