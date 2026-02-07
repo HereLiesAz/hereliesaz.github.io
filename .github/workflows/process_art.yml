@@ -1,4 +1,4 @@
-name: Process Art (56-Core Matrix)
+name: Process Art (Turbo 56)
 
 on:
   workflow_dispatch:
@@ -7,17 +7,20 @@ on:
       - 'assets/raw/**'
       - 'scripts/**'
 
+# Cancel previous runs if you push again (prevents queue jams)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
-  # PHASE 1: THE ORCHESTRA (56 MUSICIANS)
   grind:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # 56 Shards: 0 through 55
         shard: [
           0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
           16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
@@ -34,29 +37,38 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
+      # --- LOGISTICS OPTIMIZATION: Cache the Heavy Weights ---
+      - name: Cache AI Models
+        uses: actions/cache@v3
+        with:
+          path: |
+            sam_vit_b_01ec64.pth
+            ~/.cache/torch/hub/checkpoints
+            ~/.cache/torch/hub
+          key: ${{ runner.os }}-ai-models-v1
+
       - name: Install Dependencies
         run: pip install -r scripts/requirements.txt
 
-      - name: Run Grinder (Shard ${{ matrix.shard }})
+      - name: Run Grinder (Turbo Mode)
         run: |
-          # The Grinder now expects 1/56th of the workload
-          python scripts/grinder.py --input assets/raw --out temp_data --shard_index ${{ matrix.shard }} --total_shards 56
+          # Added --fast flag for 16x speedup
+          python scripts/grinder.py --input assets/raw --out temp_data --shard_index ${{ matrix.shard }} --total_shards 56 --fast
 
-      - name: Upload Shard Artifact
+      - name: Upload Shard
         uses: actions/upload-artifact@v4
         with:
           name: art-shard-${{ matrix.shard }}
           path: temp_data/*.json
           retention-days: 1
 
-  # PHASE 2: THE CONDUCTOR (CONSOLIDATION)
   consolidate:
     needs: grind
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Download The Orchestra's Output
+      - name: Download Output
         uses: actions/download-artifact@v4
         with:
           pattern: art-shard-*
@@ -68,16 +80,14 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Index the Void
-        run: |
-          # Generate manifest from the 56 merged shards
-          python scripts/indexer.py
+      - name: Index
+        run: python scripts/indexer.py
 
-      - name: Deploy Data to Orphan Branch
+      - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public/data
           publish_branch: art-data
           keep_files: true
-          commit_message: "Symphony of 56: ${{ github.sha }}"
+          commit_message: "Turbo Grind: ${{ github.sha }}"
