@@ -13,9 +13,10 @@ from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 warnings.filterwarnings("ignore")
 
 class ArtGrinder:
-    def __init__(self, device_override=None):
+    def __init__(self, device_override=None, fast_mode=False):
         self.device = device_override if device_override else ('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"[*] Initializing ArtGrinder on {self.device}...")
+        self.fast_mode = fast_mode
+        print(f"[*] Initializing ArtGrinder on {self.device} (Fast Mode: {self.fast_mode})...")
         
         # --- Load Depth (ZoeDepth -> MiDaS Fallback) ---
         self.depth_model = self._load_depth_model()
@@ -33,9 +34,13 @@ class ArtGrinder:
             
         sam = sam_model_registry["vit_b"](checkpoint=checkpoint)
         sam.to(device=self.device)
+        
+        # OPTIMIZATION: Reduce grid density for speed
+        points = 16 if self.fast_mode else 32
+        
         self.mask_generator = SamAutomaticMaskGenerator(
             model=sam,
-            points_per_side=32,
+            points_per_side=points, # <--- THE TURBO BUTTON
             pred_iou_thresh=0.86,
             stability_score_thresh=0.92,
             crop_n_layers=1,
@@ -47,7 +52,6 @@ class ArtGrinder:
         try:
             return torch.hub.load("isl-org/ZoeDepth", "ZoeD_N", pretrained=True).to(self.device).eval()
         except Exception:
-            print("[!] ZoeDepth failed. Falling back to MiDaS.")
             return torch.hub.load("intel-isl/MiDaS", "DPT_Large").to(self.device).eval()
 
     def _load_depth_transform(self):
@@ -72,17 +76,17 @@ class ArtGrinder:
         path = Path(image_path)
         output_file = Path(output_dir) / f"{path.name}.json"
         
-        if output_file.exists():
-            return # Skip existing
+        if output_file.exists(): return
 
         try:
             img_cv2 = cv2.imread(str(path))
             if img_cv2 is None: return
             img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
             
-            # Downscale for speed if massive
+            # OPTIMIZATION: Aggressive Downscaling
             h, w = img_rgb.shape[:2]
-            max_dim = 1024
+            max_dim = 512 if self.fast_mode else 1024  # <--- THE TURBO BUTTON
+            
             if max(h, w) > max_dim:
                 scale = max_dim / max(h, w)
                 img_rgb = cv2.resize(img_rgb, (int(w * scale), int(h * scale)))
@@ -96,12 +100,12 @@ class ArtGrinder:
                 y_idx, x_idx = np.where(mask)
                 if len(y_idx) == 0: continue
                 
-                # Fast average color/depth extraction
                 avg_color = img_rgb[y_idx, x_idx].mean(axis=0).astype(int).tolist()
                 z_val = depth_map[y_idx, x_idx].mean()
                 
+                # Use compressed keys ("c", "b", "z", "s")
                 strokes.append({
-                    "c": avg_color, # Compress key names
+                    "c": avg_color,
                     "b": [int(x) for x in m['bbox']], 
                     "z": float(z_val),
                     "s": float(m['stability_score'])
@@ -119,33 +123,25 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--out", default="public/data")
-    parser.add_argument("--shard_index", type=int, default=0, help="Which slice of the pie?")
-    parser.add_argument("--total_shards", type=int, default=1, help="How many slices total?")
+    parser.add_argument("--shard_index", type=int, default=0)
+    parser.add_argument("--total_shards", type=int, default=1)
+    parser.add_argument("--fast", action="store_true", help="Enable Turbo Mode") # <--- THIS LINE IS MISSING ON YOUR SERVER
     args = parser.parse_args()
 
     input_path = Path(args.input)
     
-    # 1. Gather Files
     if input_path.is_dir():
         valid_exts = {'.jpg', '.jpeg', '.png', '.webp'}
         all_files = sorted([p for p in input_path.iterdir() if p.suffix.lower() in valid_exts])
     else:
         all_files = [input_path]
 
-    # 2. Slice the Pie (Sharding Logic)
-    # This uses standard modulo slicing: list[start::step]
     my_files = all_files[args.shard_index::args.total_shards]
     
-    print(f"[*] Worker {args.shard_index}/{args.total_shards} reporting for duty.")
-    print(f"[*] Assigned {len(my_files)} of {len(all_files)} total images.")
+    print(f"[*] Worker {args.shard_index}/{args.total_shards} processing {len(my_files)} files.")
 
-    if not my_files:
-        print("[*] No work for this shard. Exiting.")
-        return
-
-    # 3. Grind
     os.makedirs(args.out, exist_ok=True)
-    grinder = ArtGrinder()
+    grinder = ArtGrinder(fast_mode=args.fast)
     
     for img_file in tqdm(my_files, desc=f"Shard {args.shard_index}"):
         grinder.grind(img_file, args.out)
