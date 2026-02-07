@@ -1,101 +1,83 @@
 import os
 import json
-import re
-import math
+import argparse
+from pathlib import Path
 from datetime import datetime
 
-DATA_DIR = "public/data"
-MANIFEST_DIR = "public"
-CHUNK_SIZE = 50  # Items per page
+def generate_manifest(data_dir):
+    data_path = Path(data_dir)
+    if not data_path.exists():
+        print(f"[!] Error: {data_dir} does not exist.")
+        return
 
-def normalize_date(filename, metadata):
-    """
-    Standardizes time. Truth is relative, but time should be ISO 8601.
-    Tries to extract date from filename patterns or fallback to file creation time.
-    """
-    # Pattern 1: YYYY-MM-DD
-    match = re.search(r"(\d{4}-\d{2}-\d{2})", filename)
-    if match:
-        return match.group(1)
-    
-    # Pattern 2: YYYYMMDD (PXL/IMG prefixes)
-    match = re.search(r"(\d{4})(\d{2})(\d{2})", filename)
-    if match:
-        return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-    
-    # Pattern 3: Unix Timestamp (Digits > 9 chars)
-    match = re.search(r"(\d{10,})", filename)
-    if match:
-        try:
-            ts = int(match.group(1)) / 1000 if len(match.group(1)) > 10 else int(match.group(1))
-            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-        except:
-            pass
-
-    # Fallback: Git blame or File Stat (Local only)
-    return "1970-01-01"
-
-def build_index():
-    print("The Librarian is organizing the chaos...")
-    
     nodes = []
+    print(f"[*] Scanning {data_dir}...")
+
+    # 1. Load all JSONs
+    files = sorted([f for f in data_path.glob("*.json")])
     
-    # Scan JSON files
-    for f in os.listdir(DATA_DIR):
-        if not f.endswith(".json"): continue
-        
-        path = os.path.join(DATA_DIR, f)
-        
+    for f_path in files:
         try:
-            with open(path, 'r', encoding='utf-8') as json_file:
-                data = json.load(json_file)
-                
-                # Check minimum viability
-                if "stroke_count" not in data: continue
-
-                node = {
-                    "id": f.replace(".json", ""),
-                    "file": f,
-                    "date": normalize_date(f, data),
-                    "stroke_count": data.get("stroke_count", 0),
-                    "color": data.get("color", [128, 128, 128]),
-                    "resolution": data.get("resolution", [1024, 1024]),
-                    "neighbors": data.get("neighbors", [])
-                }
-                
-                # Metadata override if exists (stub for markdown parsing)
-                # ... (Logic to read assets/meta would go here)
-                
-                nodes.append(node)
-        except Exception as e:
-            print(f"Failed to index {f}: {e}")
-
-    # Sort by Date (Descending)
-    nodes.sort(key=lambda x: x['date'], reverse=True)
-
-    # Pagination
-    total_pages = math.ceil(len(nodes) / CHUNK_SIZE)
-    
-    # Master Manifest (Lightweight)
-    master = {
-        "total_nodes": len(nodes),
-        "total_pages": total_pages,
-        "generated_at": datetime.now().isoformat(),
-        "pages": [f"manifest_{i}.json" for i in range(total_pages)]
-    }
-    
-    with open(os.path.join(MANIFEST_DIR, "manifest.json"), 'w') as f:
-        json.dump(master, f)
-        
-    # Chunked Pages
-    for i in range(total_pages):
-        chunk = nodes[i*CHUNK_SIZE : (i+1)*CHUNK_SIZE]
-        page_data = {"page": i, "nodes": chunk}
-        
-        with open(os.path.join(MANIFEST_DIR, f"manifest_{i}.json"), 'w') as f:
-            json.dump(page_data, f)
+            with open(f_path, 'r') as f:
+                data = json.load(f)
             
-    print(f"Index complete. {len(nodes)} nodes across {total_pages} pages.")
+            # --- ADAPTIVE PARSING ---
+            # Handle both "strokes" (Legacy) and "s" (Compressed) keys
+            strokes = data.get('strokes') or data.get('s')
+            meta = data.get('meta', {})
+            
+            if not strokes:
+                # If neither exists, it's not a valid art file
+                print(f"[!] Skipping {f_path.name} (No strokes found)")
+                continue
+
+            # Calculate basic stats for the manifest
+            stroke_count = len(strokes)
+            
+            # Extract resolution
+            res = meta.get('resolution') or meta.get('res') or [1920, 1080]
+            
+            node = {
+                "id": f_path.stem,      # Filename without .json
+                "file": f_path.name,    # Filename with .json
+                "strokes": stroke_count,
+                "res": res,
+                "z_depth": meta.get('z_depth', 1.0) # Default scale
+            }
+            nodes.append(node)
+
+        except Exception as e:
+            print(f"[!] Error reading {f_path.name}: {e}")
+
+    # 2. Build the Graph (The "Infinite" Part)
+    # We link nodes linearly for now, but this is where you'd add chaos logic
+    total_nodes = len(nodes)
+    if total_nodes == 0:
+        print("[!] No valid nodes found. Manifest will be empty.")
+    else:
+        for i, node in enumerate(nodes):
+            # Doubly linked list logic for the default "walk"
+            prev_node = nodes[(i - 1) % total_nodes]
+            next_node = nodes[(i + 1) % total_nodes]
+            
+            node["neighbors"] = [prev_node["id"], next_node["id"]]
+
+    # 3. Write Manifest
+    manifest = {
+        "generated_at": datetime.now().isoformat(),
+        "total_nodes": total_nodes,
+        "nodes": nodes
+    }
+
+    manifest_path = data_path.parent / "manifest.json"
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"[*] Index complete. {total_nodes} nodes linked in {manifest_path}")
 
 if __name__ == "__main__":
-    build_index()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dir", default="public/data", help="Directory containing stroke clouds")
+    args = parser.parse_args()
+    
+    generate_manifest(args.dir)
