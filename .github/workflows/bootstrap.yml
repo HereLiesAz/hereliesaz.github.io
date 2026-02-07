@@ -1,0 +1,35 @@
+name: Bootstrap Art (5 Images)
+
+on:
+  workflow_dispatch: # Allows manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run Bootstrap Script
+        run: python scripts/bootstrap.py
+
+      - name: Deploy Data to Orphan Branch
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          publish_branch: art-data
+          keep_files: true
+          commit_message: "Bootstrap Data (5 Images): ${{ github.sha }}"
