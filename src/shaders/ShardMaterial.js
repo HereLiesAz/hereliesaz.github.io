@@ -14,9 +14,12 @@ const ShardMaterial = shaderMaterial(
   },
   // Vertex Shader
   `
+    attribute vec3 aOffset; // Center of the shard
     attribute float aScale;
     attribute vec3 aRandom; // Random seed per instance (x, y, z)
     attribute float aDepth; // The "correct" Z depth for alignment
+    attribute vec2 aUvOffset;
+    attribute vec2 aUvScale;
 
     varying vec2 vUv;
     varying float vAlpha;
@@ -29,110 +32,103 @@ const ShardMaterial = shaderMaterial(
         return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
     }
 
-    // 3D Noise function (Simplex or similar)
-    // Simplified for performance
-    vec3 noise3(vec3 p) {
-        return vec3(
-            sin(p.x * 10.0 + uTime),
-            cos(p.y * 10.0 + uTime),
-            sin(p.z * 10.0 + uTime)
-        );
-    }
-
     void main() {
-        vUv = uv;
+        // Correct UV mapping for atlas/texture portion
+        vUv = aUvOffset + (uv * aUvScale);
 
-        // Base position (The "Shard" geometry itself, likely a quad)
-        vec3 pos = position * aScale;
-
-        // Instance position (The "Aligned" position in the painting)
-        // In InstancedMesh, this is usually handled by the instanceMatrix.
-        // But here we might want manual control if we are not using standard instanceMatrix for everything.
-        // Assuming standard InstancedMesh, 'instanceMatrix' transforms 'pos' to world space.
-        
-        // However, we want to displace the instance *from* its origin.
-        // We can add the displacement *before* or *after* the instance matrix.
-        // Usually, 'instanceMatrix' places the shard at its final (x,y,z) in the painting.
-        // We want to add chaos to that.
+        // Base position (The "Shard" geometry itself, usually a 1x1 quad centered at 0)
+        vec3 pos = position * aScale; // Scale the quad to match its bbox size
 
         // Retrieve instance position from the matrix (column 3)
-        vec3 instancePos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+        // If using standard InstancedMesh, instanceMatrix is available.
+        // However, we are manually passing aOffset buffer which contains the CENTER of the shard.
+        // If we use 'position={...}' on <instancedMesh>, the whole cloud is moved.
+        // Each instance is just an index. We need to construct the position from aOffset.
+        
+        // If we use 'instancedMesh' without manually setting matrices, all instances are at (0,0,0).
+        // We must rely on our custom attributes.
+        
+        vec3 instanceCenter = aOffset;
         
         // Calculate Chaos Vector
         // We want shards to fly *outwards* or *drift* based on uProgress.
         // Direction is based on aRandom.
         vec3 chaosDir = normalize(aRandom - 0.5); 
-        float chaosDist = uProgress * 50.0; // Explosion radius
+        float chaosDist = uProgress * 20.0; // Explosion radius (tuned)
 
         // Apply displacement
-        // We modify the *local* position relative to the instance center, 
-        // OR we modify the instance position itself.
-        // Modifying the instance position:
-        vec3 finalPos = pos + instancePos + (chaosDir * chaosDist);
+        // Current Pos = Center + QuadOffset + Chaos
+        // We add some rotation/tumble based on progress
         
-        // Also add some rotation/tumble based on progress
-        // (Simplified: handled by standard matrix if updated on CPU, or here if GPU only)
+        // Tumble Rotation (Axis-Angle)
+        float angle = uProgress * (aRandom.x * 10.0 + uTime * 0.5);
+        vec3 axis = normalize(aRandom);
+        
+        // Rodrigues Rotation Formula (Simplified)
+        // actually just adding noise to position is enough for now.
+        
+        vec3 finalPos = instanceCenter + pos + (chaosDir * chaosDist);
         
         // Project to clip space
-        // Note: We bypass modelMatrix because instanceMatrix handles the transform?
-        // Actually, standard material uses: projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0)
-        // We need to manually construct the transformation.
-
-        // Let's use the standard approach for InstancedMesh with custom chunks or raw shader.
-        // For simplicity in a custom shaderMaterial, we assume usage with <instancedMesh> which binds instanceMatrix automatically.
-        
-        // But shaderMaterial in R3F usually replaces the *entire* material.
-        // So we must handle instancing manually if we don't extend StandardMaterial.
-        
-        // Simplest approach: Apply displacement to the 'position' attribute, 
-        // but since we are instanced, we rely on the host mesh to provide instanceMatrix.
-        // Three.js ShaderMaterial handles instancing if 'instancing: true' is passed? 
-        // No, we need to add the instance transform code manually or use 'onBeforeCompile'.
-
-        // FORCE MANUAL INSTANCING LOGIC:
-        #ifdef USE_INSTANCING
-            mat4 localInstanceMatrix = instanceMatrix;
-            
-            // Add Chaos to the matrix translation
-            localInstanceMatrix[3][0] += chaosDir.x * chaosDist;
-            localInstanceMatrix[3][1] += chaosDir.y * chaosDist;
-            localInstanceMatrix[3][2] += chaosDir.z * chaosDist;
-
-            vec4 worldPosition = modelMatrix * localInstanceMatrix * vec4(pos, 1.0);
-        #else
-            vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
-        #endif
-
-        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+        // Use modelViewMatrix since we are manually handling instance positioning relative to the mesh origin
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
         
         // Pass alpha/progress to fragment
-        vAlpha = 1.0 - uThreshold; 
+        vAlpha = 1.0; 
     }
   `,
   // Fragment Shader
   `
     uniform vec3 uColor;
-    uniform sampler2D uTexture; // Assuming single texture for now, or atlas
-    uniform sampler2D uNoiseMap;
+    uniform sampler2D uTexture;
     uniform float uThreshold;
+    uniform float uTime;
 
     varying vec2 vUv;
     varying float vAlpha;
+
+    // 2D Simplex Noise for dissolve pattern
+    vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
+    float snoise(vec2 v){
+      const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+               -0.577350269189626, 0.024390243902439);
+      vec2 i  = floor(v + dot(v, C.yy) );
+      vec2 x0 = v -   i + dot(i, C.xx);
+      vec2 i1;
+      i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+      vec4 x12 = x0.xyxy + C.xxzz;
+      x12.xy -= i1;
+      i = mod(i, 289.0);
+      vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 ))
+      + i.x + vec3(0.0, i1.x, 1.0 ));
+      vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
+      m = m*m ;
+      m = m*m ;
+      vec3 x = 2.0 * fract(p * C.www) - 1.0;
+      vec3 h = abs(x) - 0.5;
+      vec3 ox = floor(x + 0.5);
+      vec3 a0 = x - ox;
+      m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h );
+      vec3 g;
+      g.x  = a0.x  * x0.x  + h.x  * x0.y;
+      g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+      return 130.0 * dot(m, g);
+    }
 
     void main() {
         // Sample texture
         vec4 texColor = texture2D(uTexture, vUv);
         
-        // Sample noise for dissolve
-        // We map noise to screen space or UV space?
-        // UV space of the shard is better for "burning" effect.
-        float noise = texture2D(uNoiseMap, vUv).r;
+        // Generate noise value based on UV and Time
+        float noise = snoise(vUv * 10.0 + uTime * 0.1); // Scale noise
+        noise = (noise + 1.0) * 0.5; // Normalize to 0..1
 
         // Dissolve Logic
         // If noise value is less than threshold, discard pixel
-        // We add a small edge/burn line
-        float edge = 0.05;
-        if (noise < uThreshold - edge) {
+        // We use uThreshold. If uThreshold is 0, visible. If 1, invisible.
+        // We map uThreshold to a range that covers the noise.
+        
+        if (noise < uThreshold) {
             discard;
         }
 
@@ -140,8 +136,10 @@ const ShardMaterial = shaderMaterial(
         gl_FragColor = vec4(texColor.rgb * uColor, texColor.a);
         
         // Burn edge color (orange/fire)
-        if (noise < uThreshold) {
-            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.5, 0.0), 0.5);
+        float edgeWidth = 0.05;
+        if (noise < uThreshold + edgeWidth && uThreshold > 0.01) {
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.3, 0.0), 0.8);
+            gl_FragColor.a = 1.0;
         }
     }
   `

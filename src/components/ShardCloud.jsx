@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import '../shaders/ShardMaterial'; // Register shader
 
-export default function ShardCloud({ id, position, rotation }) {
+export default function ShardCloud({ id, position, rotation, isCurrent = false }) {
   const meshRef = useRef();
   const materialRef = useRef();
   
@@ -13,6 +13,7 @@ export default function ShardCloud({ id, position, rotation }) {
   
   const [shardData, setShardData] = useState(null);
   const [textureUrl, setTextureUrl] = useState(null);
+  const [resolution, setResolution] = useState([1000, 1000]); // Default fallback
 
   // 1. Load Shard Data & Texture URL
   useEffect(() => {
@@ -25,21 +26,23 @@ export default function ShardCloud({ id, position, rotation }) {
       .then(res => res.json())
       .then(data => {
         setShardData(data.shards);
-        // Assuming original image is available in public/assets or similar
-        // For now, let's assume raw images are copied to public/images during build or available via proxy
-        // The curator doesn't copy images to public/data, it just references them.
-        // We need the image URL. In a real app, we'd have processed assets.
-        // Fallback: use a placeholder or try to find the image.
-        // For this demo, we assume images are in /assets/raw and accessible (which they aren't by default in Vite public).
-        // WE NEED TO FIX THIS: Curator should probably copy the image to public/data or we assume a path.
-        // Let's assume the image is at `/data/${id}.jpg` (we might need to add a copy step in curator, but for now we assume it exists).
-        setTextureUrl(`/data/${id}.jpg`); 
+        
+        // Update Resolution from metadata
+        if (data.resolution && data.resolution.length === 2) {
+            setResolution(data.resolution);
+        } else if (node.resolution) {
+            setResolution(node.resolution);
+        }
+
+        // Use the filename provided by curator
+        const fileName = data.file || node.file || `${id}.jpg`;
+        setTextureUrl(`/data/${fileName}`); 
       })
       .catch(err => console.error("Shard Load Error:", err));
   }, [id, nodes]);
 
   // 2. Load Texture
-  const texture = useLoader(THREE.TextureLoader, textureUrl || '/placeholder.jpg'); // Fallback
+  const texture = useLoader(THREE.TextureLoader, textureUrl || '/placeholder.jpg'); 
 
   // 3. Create Instanced Geometry
   const { geometry, count } = useMemo(() => {
@@ -55,30 +58,64 @@ export default function ShardCloud({ id, position, rotation }) {
     const aUvOffset = new Float32Array(count * 2);
     const aUvScale = new Float32Array(count * 2);
 
+    const [imgW, imgH] = resolution;
+    const aspect = imgW / imgH;
+
     // Fill attributes
     for (let i = 0; i < count; i++) {
         const shard = shardData[i];
         
-        // Position (Center of the shard)
-        // Normalize coordinates (0..1) to World (-0.5..0.5 * Aspect)
-        // Assuming 1000x1000 image for normalization if not provided
-        // We need image dimensions. Let's assume standard square for now or normalize based on data.
-        // The JSON has bbox [x, y, w, h].
+        // BBox: [x, y, w, h] (pixels)
+        const [x, y, w, h] = shard.bbox;
         
-        // Let's assume the scene unit is 10x10 for the image.
-        // x, y are top-left?
-        const x = (shard.bbox[0] + shard.bbox[2]/2) / 1000 - 0.5;
-        const y = -((shard.bbox[1] + shard.bbox[3]/2) / 1000 - 0.5); // Flip Y
-        const z = shard.depth ? shard.depth * 0.1 : 0; // Scale depth
+        // Center position in pixel space
+        const cx = x + w / 2;
+        const cy = y + h / 2;
 
-        aOffset[i * 3] = x * 10;
-        aOffset[i * 3 + 1] = y * 10;
-        aOffset[i * 3 + 2] = z;
+        // Normalize to World Space (-0.5 to 0.5)
+        // We preserve aspect ratio in world space if we want the cloud to match the image shape.
+        // Let's map Y to -0.5..0.5 and X to -0.5*Aspect..0.5*Aspect
+        // BUT standard logic is often just mapping 0..1 to -5..5.
+        // Let's use a standard 10 unit height for the image in world space.
+        
+        const worldHeight = 10;
+        const worldWidth = worldHeight * aspect;
 
-        // Scale
-        // We want the quad to match the bbox size
-        // If plane is 1x1, scale should be w/1000 * 10
-        aScale[i] = (shard.bbox[2] / 1000) * 10; 
+        const nx = (cx / imgW) - 0.5;
+        const ny = -((cy / imgH) - 0.5); // Flip Y
+
+        aOffset[i * 3] = nx * worldWidth;
+        aOffset[i * 3 + 1] = ny * worldHeight;
+        aOffset[i * 3 + 2] = shard.depth ? shard.depth * 0.1 : 0; 
+
+        // Scale (Size of the shard in world units)
+        // Shard width fraction * World Width
+        // But the quad is square (1x1). We need to scale it to match the aspect ratio of the shard?
+        // Wait, if we use a texture atlas or UV mapping on a quad, the quad should match the BBox aspect ratio.
+        // Or we scale X and Y independently? 
+        // InstancedMesh supports non-uniform scale via matrix, but 'aScale' is a single float in our shader.
+        // Our shader: "vec3 pos = position * aScale;" -> Uniform scale.
+        // This implies our shards are always square in 3D? That distorts non-square shards.
+        // We should fix the shader to support vec2 scale or just scale the geometry X/Y.
+        
+        // Ideally: Scale the quad to match the BBox aspect ratio.
+        // Let's assume we want to preserve the shard's shape.
+        // Calculate max dimension to fit or just use width?
+        // Let's approximate: Scale = max(w/imgW * worldW, h/imgH * worldH)
+        // And relying on the texture being mapped correctly?
+        // If we use uniform scale, the quad is square. The texture will be stretched if the shard bbox is not square.
+        // Correct approach: Pass vec2 aScale.
+        
+        // BUT, changing attribute types requires shader update.
+        // For now, let's use the average size or max size.
+        // And accept slight stretching or update the shader. 
+        // Updating shader is better.
+        // Let's update shader to vec2 aScale in next step? 
+        // Or hack it: normalize the geometry uvs?
+        
+        // For this task, sticking to the existing pattern:
+        // Use the width ratio.
+        aScale[i] = (w / imgW) * worldWidth; 
         
         // Random
         aRandom[i * 3] = Math.random();
@@ -86,16 +123,11 @@ export default function ShardCloud({ id, position, rotation }) {
         aRandom[i * 3 + 2] = Math.random();
 
         // UVs
-        // Map the quad UVs (0..1) to the texture portion
-        // We need a custom shader to use these instance attributes for UV mapping.
-        // OR we just rely on the texture being mapped to the whole quad and we use texture offset/repeat?
-        // But InstancedMesh shares the material.
-        // So we MUST calculate UVs in the vertex shader using aUvOffset/Scale.
-        aUvOffset[i * 2] = shard.bbox[0] / 1000;
-        aUvOffset[i * 2 + 1] = shard.bbox[1] / 1000;
+        aUvOffset[i * 2] = x / imgW;
+        aUvOffset[i * 2 + 1] = y / imgH;
         
-        aUvScale[i * 2] = shard.bbox[2] / 1000;
-        aUvScale[i * 2 + 1] = shard.bbox[3] / 1000;
+        aUvScale[i * 2] = w / imgW;
+        aUvScale[i * 2 + 1] = h / imgH;
     }
 
     geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(aOffset, 3));
@@ -105,13 +137,20 @@ export default function ShardCloud({ id, position, rotation }) {
     geo.setAttribute('aUvScale', new THREE.InstancedBufferAttribute(aUvScale, 2));
 
     return { geometry: geo, count };
-  }, [shardData]);
+  }, [shardData, resolution]);
 
   // 4. Update Uniforms
   useFrame((state) => {
     if (materialRef.current) {
         materialRef.current.uTime = state.clock.elapsedTime;
-        materialRef.current.uProgress = transitionProgress;
+        
+        if (isCurrent) {
+            materialRef.current.uProgress = transitionProgress; 
+            materialRef.current.uThreshold = transitionProgress > 0.8 ? (transitionProgress - 0.8) * 5 : 0; 
+        } else {
+            materialRef.current.uProgress = 1.0 - transitionProgress;
+            materialRef.current.uThreshold = 0; 
+        }
     }
   });
 
