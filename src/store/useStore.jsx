@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
-export const useStore = create((set, get) => ({
+// 1. Create the store
+const useStore = create((set, get) => ({
   // STATE
   manifest: [],
   activeId: null,
@@ -38,3 +39,9 @@ export const useStore = create((set, get) => ({
     return manifest[prevIdx].id;
   }
 }));
+
+// 2. Export it as a named export (for { useStore } imports)
+export { useStore };
+
+// 3. Export it as a default export (for 'import useStore' imports)
+export default useStore;
