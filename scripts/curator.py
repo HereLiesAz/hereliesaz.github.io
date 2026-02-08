@@ -366,10 +366,59 @@ def main():
                      "embedding": embedding # Passed to GraphBuilder, but maybe not saved to JSON to save space?
                  })
 
+        # Generate Binary Attributes (Vectorized)
+        num_shards = len(shards_data)
+        img_w, img_h = image_np.shape[1], image_np.shape[0]
+        resolution = [img_w, img_h]
+        
+        aspect = img_w / img_h if img_h > 0 else 1.0
+        world_height = 10.0
+        world_width = world_height * aspect
+
+        # Buffers
+        bin_pos = np.zeros((num_shards, 3), dtype=np.float32)
+        bin_scale = np.zeros((num_shards, 1), dtype=np.float32)
+        bin_uv = np.zeros((num_shards, 4), dtype=np.float32) # [u, v, su, sv]
+        bin_random = np.zeros((num_shards, 3), dtype=np.float32)
+
+        if num_shards > 0:
+            # Vectorized calculation for performance
+            bboxes = np.array([s['bbox'] for s in shards_data], dtype=np.float32)
+            depths = np.array([s['depth'] for s in shards_data], dtype=np.float32)
+
+            x, y, w, h = bboxes[:, 0], bboxes[:, 1], bboxes[:, 2], bboxes[:, 3]
+
+            # Center Position (Normalized -0.5 to 0.5)
+            cx = x + w / 2
+            cy = y + h / 2
+            nx = (cx / img_w) - 0.5
+            ny = -((cy / img_h) - 0.5) # Flip Y
+
+            # World Position
+            bin_pos[:, 0] = nx * world_width
+            bin_pos[:, 1] = ny * world_height
+            bin_pos[:, 2] = depths * 0.1 # Scale depth
+
+            # Scale (Width-based approximation)
+            bin_scale[:, 0] = (w / img_w) * world_width
+
+            # UVs
+            bin_uv[:, 0] = x / img_w
+            bin_uv[:, 1] = y / img_h
+            bin_uv[:, 2] = w / img_w
+            bin_uv[:, 3] = h / img_h
+
+            # Random
+            bin_random[:] = np.random.rand(num_shards, 3).astype(np.float32)
+
+        # Save Binary Files
+        bin_pos.tofile(output_dir / f"{image_id}_pos.bin")
+        bin_scale.tofile(output_dir / f"{image_id}_scale.bin")
+        bin_uv.tofile(output_dir / f"{image_id}_uv.bin")
+        bin_random.tofile(output_dir / f"{image_id}_random.bin")
+
         # Save processed data (excluding embeddings to keep JSON light, or include if needed)
         output_file = output_dir / f"{image_id}.json"
-        
-        resolution = [image_np.shape[1], image_np.shape[0]]
         file_name = img_path.name
         
         # Prepare serializable data
@@ -385,6 +434,7 @@ def main():
                 "shards": json_shards,
                 "resolution": resolution,
                 "file": file_name,
+                "binary": True
             }, f, indent=2)
             
         # Add to graph builder (keep embeddings here)
