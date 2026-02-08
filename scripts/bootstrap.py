@@ -4,20 +4,20 @@ import torch
 import cv2
 import numpy as np
 import warnings
+import random
 from pathlib import Path
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 
 # --- CONFIGURATION ---
 INPUT_DIR = Path("assets/raw")
 OUTPUT_DIR = Path("public/data")
-# We save manifest to public/manifest.json so fetch('/manifest.json') finds it
 MANIFEST_PATH = Path("public/manifest.json") 
 LIMIT = 5
 
 warnings.filterwarnings("ignore")
 
 def main():
-    print(f"[*] Bootstrapping the Void (Flat Array Mode)...")
+    print(f"[*] Bootstrapping the Void (Random {LIMIT} images)...")
 
     if not OUTPUT_DIR.exists():
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -28,11 +28,18 @@ def main():
         return
 
     all_files = sorted([p for p in INPUT_DIR.iterdir() if p.suffix.lower() in valid_exts])
-    selected_files = all_files[:LIMIT]
-
-    if not selected_files:
+    
+    if not all_files:
         print("[!] No images found.")
         return
+
+    # --- RANDOM SELECTION ---
+    if len(all_files) > LIMIT:
+        selected_files = random.sample(all_files, LIMIT)
+    else:
+        selected_files = all_files
+
+    print(f"[*] Selected: {[f.name for f in selected_files]}")
 
     # --- AI SETUP ---
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -110,14 +117,13 @@ def main():
                 "file": out_name,
                 "strokes": len(strokes),
                 "res": [img_rgb.shape[1], img_rgb.shape[0]],
-                "neighbors": [] # Placeholder
+                "neighbors": [] 
             })
 
         except Exception as e:
             print(f"[!] Failed {img_path.name}: {e}")
 
     # --- LINKING & SAVING ---
-    # Circular Linking
     total = len(nodes)
     for i, node in enumerate(nodes):
         node["neighbors"] = [
@@ -125,7 +131,7 @@ def main():
             nodes[(i + 1) % total]["id"]
         ]
 
-    # CRITICAL FIX: Dump as a LIST [...], not an Object { "nodes": ... }
+    # Dump as ARRAY
     with open(MANIFEST_PATH, 'w') as f:
         json.dump(nodes, f, indent=2)
 
