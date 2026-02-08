@@ -17,7 +17,7 @@ LIMIT = 5
 warnings.filterwarnings("ignore")
 
 def main():
-    print(f"[*] Bootstrapping the Void (Random {LIMIT} images)...")
+    print(f"[*] Bootstrapping the Void (Structure: Object/Nodes)...")
 
     if not OUTPUT_DIR.exists():
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -105,6 +105,9 @@ def main():
                 })
 
             out_name = f"{img_path.name}.json"
+            # IMPORTANT: The frontend looks for files in 'data/filename.json' relative to public
+            # So we just save the file name here, and the loader adds the path.
+            
             with open(OUTPUT_DIR / out_name, 'w') as f:
                 json.dump({
                     "meta": {"file": img_path.name, "res": [img_rgb.shape[1], img_rgb.shape[0]]}, 
@@ -114,7 +117,7 @@ def main():
             # Append to list
             nodes.append({
                 "id": img_path.stem,
-                "file": out_name,
+                "file": out_name, # Frontend appends 'data/' to this
                 "strokes": len(strokes),
                 "res": [img_rgb.shape[1], img_rgb.shape[0]],
                 "neighbors": [] 
@@ -131,11 +134,16 @@ def main():
             nodes[(i + 1) % total]["id"]
         ]
 
-    # Dump as ARRAY
-    with open(MANIFEST_PATH, 'w') as f:
-        json.dump(nodes, f, indent=2)
+    # FIX: WRAP IN "nodes" OBJECT
+    manifest_data = {
+        "generated_at": "BOOTSTRAP_MODE",
+        "nodes": nodes
+    }
 
-    print(f"[*] SUCCESS. Manifest (Array format) saved to {MANIFEST_PATH}")
+    with open(MANIFEST_PATH, 'w') as f:
+        json.dump(manifest_data, f, indent=2)
+
+    print(f"[*] SUCCESS. Manifest saved to {MANIFEST_PATH}")
 
 if __name__ == "__main__":
     main()
