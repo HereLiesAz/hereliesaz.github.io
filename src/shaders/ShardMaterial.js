@@ -11,9 +11,8 @@ const ShardMaterial = shaderMaterial(
     uProgress: 0, // 0 = Aligned (Order), 1 = Exploded (Chaos)
     uResolution: new THREE.Vector2(1, 1),
     uThreshold: 0.0, // Dissolve threshold (0 = fully visible, 1 = fully dissolved)
-    uSolutionViewpoint: new THREE.Matrix4(),
-    uSolutionProjection: new THREE.Matrix4(),
-    uFocalLength: 50.0,
+    uSolutionPosition: new THREE.Vector3(0, 0, 10), // The "Perfect View" location
+    uFocalLength: 10.0,
   },
   // Vertex Shader
   `
@@ -29,8 +28,7 @@ const ShardMaterial = shaderMaterial(
 
     uniform float uTime;
     uniform float uProgress; // 0.0 to 1.0 (Order to Chaos)
-    uniform mat4 uSolutionViewpoint;
-    uniform mat4 uSolutionProjection;
+    uniform vec3 uSolutionPosition;
     uniform float uFocalLength;
 
     // Pseudo-random function
@@ -46,12 +44,13 @@ const ShardMaterial = shaderMaterial(
         // aOffset contains [x, y, z]. Z is the depth.
         vec3 alignedCenter = aOffset;
         
-        // Optional: Apply Anamorphic Scale Compensation
-        // Scale the shard based on depth so it maintains apparent size?
-        // float dist = distance(cameraPosition, alignedCenter);
-        // float perspectiveScale = dist / uFocalLength;
-        // For now, simple uniform scale from attribute
-        float finalScale = aScale;
+        // Anamorphic Scale Compensation
+        // Scale the shard based on distance from the Solution Viewpoint
+        // so it maintains apparent size regardless of depth.
+        float dist = distance(uSolutionPosition, alignedCenter);
+        float perspectiveScale = dist / uFocalLength;
+
+        float finalScale = aScale * perspectiveScale;
 
         // Base quad position
         vec3 localPos = position * finalScale;
@@ -74,7 +73,7 @@ const ShardMaterial = shaderMaterial(
         // uProgress: 0.0 (Order) -> 1.0 (Chaos)
         // Use a non-linear curve for more dramatic effect
         float t = smoothstep(0.0, 1.0, uProgress);
-        
+
         vec3 finalCenter = mix(alignedCenter, chaosCenter, t);
 
         // Apply Tumble Rotation when in Chaos

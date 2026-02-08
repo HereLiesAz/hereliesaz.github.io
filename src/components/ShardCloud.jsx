@@ -10,6 +10,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
   
   const nodes = useStore(state => state.nodes);
   const transitionProgress = useStore(state => state.transitionProgress);
+  const setHoveredShard = useStore(state => state.setHoveredShard);
   
   const [shardData, setShardData] = useState(null);
   const [textureUrl, setTextureUrl] = useState(null);
@@ -183,10 +184,19 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
       args={[geometry, null, count]} 
       position={position} 
       rotation={rotation}
+      onPointerMove={(e) => {
+          e.stopPropagation();
+          setHoveredShard(e.instanceId);
+      }}
+      onPointerOut={(e) => {
+          setHoveredShard(null);
+      }}
     >
       <shardMaterial 
         ref={materialRef} 
-        uTexture={texture} 
+        uTexture={texture}
+        uSolutionPosition={new THREE.Vector3(0, 0, 10)}
+        uFocalLength={10.0}
         transparent 
         depthWrite={false}
       />
