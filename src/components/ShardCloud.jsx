@@ -25,7 +25,30 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
     fetch(`/data/${id}.json`)
       .then(res => res.json())
       .then(data => {
-        setShardData(data.shards);
+        // Handle Binary Data
+        if (data.binary) {
+            Promise.all([
+                fetch(`/data/${id}_pos.bin`).then(r => r.arrayBuffer()),
+                fetch(`/data/${id}_scale.bin`).then(r => r.arrayBuffer()),
+                fetch(`/data/${id}_uv.bin`).then(r => r.arrayBuffer()),
+                fetch(`/data/${id}_random.bin`).then(r => r.arrayBuffer())
+            ]).then(([posBuf, scaleBuf, uvBuf, randomBuf]) => {
+                // Determine count from buffer size (posBuf is stride 3 * 4 bytes)
+                const count = posBuf.byteLength / (3 * 4);
+
+                setShardData({
+                    binary: true,
+                    count: count,
+                    pos: new Float32Array(posBuf),
+                    scale: new Float32Array(scaleBuf),
+                    uv: new Float32Array(uvBuf),
+                    random: new Float32Array(randomBuf)
+                });
+            }).catch(e => console.error("Binary Fetch Error", e));
+        } else {
+            // Legacy Mode
+            setShardData({ binary: false, shards: data.shards });
+        }
         
         // Update Resolution from metadata
         if (data.resolution && data.resolution.length === 2) {
@@ -48,8 +71,33 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
   const { geometry, count } = useMemo(() => {
     if (!shardData) return { geometry: null, count: 0 };
 
-    const count = shardData.length;
     const geo = new THREE.PlaneGeometry(1, 1); // Base Quad
+
+    // --- BINARY MODE ---
+    if (shardData.binary) {
+        const count = shardData.count;
+
+        geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(shardData.pos, 3));
+        geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(shardData.scale, 1));
+        geo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(shardData.random, 3));
+
+        // UVs are interleaved [u, v, su, sv]
+        const uvBuffer = new THREE.InstancedInterleavedBuffer(shardData.uv, 4);
+        geo.setAttribute('aUvOffset', new THREE.InterleavedBufferAttribute(uvBuffer, 2, 0));
+        geo.setAttribute('aUvScale', new THREE.InterleavedBufferAttribute(uvBuffer, 2, 2));
+
+        // Depth is stored in aOffset.z. For shader compatibility, we can point aDepth to it.
+        // aOffset is stride 3 (x,y,z). aDepth expects float.
+        // Use interleaved buffer from pos array
+        const posBuffer = new THREE.InstancedInterleavedBuffer(shardData.pos, 3);
+        geo.setAttribute('aDepth', new THREE.InterleavedBufferAttribute(posBuffer, 1, 2));
+
+        return { geometry: geo, count };
+    }
+
+    // --- LEGACY JSON MODE ---
+    const shards = shardData.shards;
+    const count = shards.length;
     
     // Attributes
     const aOffset = new Float32Array(count * 3);
@@ -63,7 +111,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
 
     // Fill attributes
     for (let i = 0; i < count; i++) {
-        const shard = shardData[i];
+        const shard = shards[i];
         
         // BBox: [x, y, w, h] (pixels)
         const [x, y, w, h] = shard.bbox;
@@ -72,12 +120,6 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
         const cx = x + w / 2;
         const cy = y + h / 2;
 
-        // Normalize to World Space (-0.5 to 0.5)
-        // We preserve aspect ratio in world space if we want the cloud to match the image shape.
-        // Let's map Y to -0.5..0.5 and X to -0.5*Aspect..0.5*Aspect
-        // BUT standard logic is often just mapping 0..1 to -5..5.
-        // Let's use a standard 10 unit height for the image in world space.
-        
         const worldHeight = 10;
         const worldWidth = worldHeight * aspect;
 
@@ -88,33 +130,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
         aOffset[i * 3 + 1] = ny * worldHeight;
         aOffset[i * 3 + 2] = shard.depth ? shard.depth * 0.1 : 0; 
 
-        // Scale (Size of the shard in world units)
-        // Shard width fraction * World Width
-        // But the quad is square (1x1). We need to scale it to match the aspect ratio of the shard?
-        // Wait, if we use a texture atlas or UV mapping on a quad, the quad should match the BBox aspect ratio.
-        // Or we scale X and Y independently? 
-        // InstancedMesh supports non-uniform scale via matrix, but 'aScale' is a single float in our shader.
-        // Our shader: "vec3 pos = position * aScale;" -> Uniform scale.
-        // This implies our shards are always square in 3D? That distorts non-square shards.
-        // We should fix the shader to support vec2 scale or just scale the geometry X/Y.
-        
-        // Ideally: Scale the quad to match the BBox aspect ratio.
-        // Let's assume we want to preserve the shard's shape.
-        // Calculate max dimension to fit or just use width?
-        // Let's approximate: Scale = max(w/imgW * worldW, h/imgH * worldH)
-        // And relying on the texture being mapped correctly?
-        // If we use uniform scale, the quad is square. The texture will be stretched if the shard bbox is not square.
-        // Correct approach: Pass vec2 aScale.
-        
-        // BUT, changing attribute types requires shader update.
-        // For now, let's use the average size or max size.
-        // And accept slight stretching or update the shader. 
-        // Updating shader is better.
-        // Let's update shader to vec2 aScale in next step? 
-        // Or hack it: normalize the geometry uvs?
-        
-        // For this task, sticking to the existing pattern:
-        // Use the width ratio.
+        // Scale
         aScale[i] = (w / imgW) * worldWidth; 
         
         // Random
@@ -130,7 +146,12 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
         aUvScale[i * 2 + 1] = h / imgH;
     }
 
-    geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(aOffset, 3));
+    // Legacy attributes
+    // Use InstancedInterleavedBuffer for aOffset + aDepth (z) to match binary style
+    const posBuffer = new THREE.InstancedInterleavedBuffer(aOffset, 3);
+    geo.setAttribute('aOffset', new THREE.InterleavedBufferAttribute(posBuffer, 3, 0));
+    geo.setAttribute('aDepth', new THREE.InterleavedBufferAttribute(posBuffer, 1, 2)); // Use Z as depth
+
     geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(aScale, 1));
     geo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(aRandom, 3));
     geo.setAttribute('aUvOffset', new THREE.InstancedBufferAttribute(aUvOffset, 2));
