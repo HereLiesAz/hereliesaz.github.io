@@ -48,6 +48,7 @@ const useStore = create((set, get) => ({
 
   // Calculate the next destination based on the "Stochastic Walker" logic
   calculateNextNode: () => {
+    // Destructure state including hoveredShard for pareidolia checks
     const { nodes, edges, currentNodeId, visitedNodes, hoveredShard } = get();
     
     if (!currentNodeId || nodes.length === 0) return;
@@ -73,8 +74,17 @@ const useStore = create((set, get) => ({
     const pool = unvisitedCandidates.length > 0 ? unvisitedCandidates : candidates;
 
     // 3. Pareidolia Bias (If user is hovering a specific shard that links to a specific image)
-    // TODO: Implement shard-specific linkage in graph edges (e.g., edge.shardId)
-    // For now, we stick to node-level transitions.
+    if (hoveredShard !== null) {
+        const pareidoliaMatches = pool.filter(e => e.source_shard === hoveredShard);
+        if (pareidoliaMatches.length > 0) {
+            console.log("[Store] Pareidolia Triggered! Shard:", hoveredShard);
+            // Pick the best match among pareidolia edges
+            pareidoliaMatches.sort((a, b) => b.weight - a.weight);
+            const bestMatch = pareidoliaMatches[0];
+            set({ nextNodeId: bestMatch.target });
+            return;
+        }
+    }
 
     // 4. Weighted Probability Selection
     // We use the edge weight (similarity) to bias the random selection.

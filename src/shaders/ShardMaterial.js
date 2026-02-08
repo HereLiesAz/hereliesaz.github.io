@@ -11,6 +11,8 @@ const ShardMaterial = shaderMaterial(
     uProgress: 0, // 0 = Aligned (Order), 1 = Exploded (Chaos)
     uResolution: new THREE.Vector2(1, 1),
     uThreshold: 0.0, // Dissolve threshold (0 = fully visible, 1 = fully dissolved)
+    uSolutionPosition: new THREE.Vector3(0, 0, 10), // The "Perfect View" location
+    uFocalLength: 10.0,
   },
   // Vertex Shader
   `
@@ -26,6 +28,8 @@ const ShardMaterial = shaderMaterial(
 
     uniform float uTime;
     uniform float uProgress; // 0.0 to 1.0 (Order to Chaos)
+    uniform vec3 uSolutionPosition;
+    uniform float uFocalLength;
 
     // Pseudo-random function
     float random(vec2 st) {
@@ -33,48 +37,55 @@ const ShardMaterial = shaderMaterial(
     }
 
     void main() {
-        // Correct UV mapping for atlas/texture portion
+        // Correct UV mapping
         vUv = aUvOffset + (uv * aUvScale);
 
-        // Base position (The "Shard" geometry itself, usually a 1x1 quad centered at 0)
-        vec3 pos = position * aScale; // Scale the quad to match its bbox size
+        // --- 1. Compute Aligned Position (Order) ---
+        // aOffset contains [x, y, z]. Z is the depth.
+        vec3 alignedCenter = aOffset;
+        
+        // Anamorphic Scale Compensation
+        // Scale the shard based on distance from the Solution Viewpoint
+        // so it maintains apparent size regardless of depth.
+        float dist = distance(uSolutionPosition, alignedCenter);
+        float perspectiveScale = dist / uFocalLength;
 
-        // Retrieve instance position from the matrix (column 3)
-        // If using standard InstancedMesh, instanceMatrix is available.
-        // However, we are manually passing aOffset buffer which contains the CENTER of the shard.
-        // If we use 'position={...}' on <instancedMesh>, the whole cloud is moved.
-        // Each instance is just an index. We need to construct the position from aOffset.
-        
-        // If we use 'instancedMesh' without manually setting matrices, all instances are at (0,0,0).
-        // We must rely on our custom attributes.
-        
-        vec3 instanceCenter = aOffset;
-        
-        // Calculate Chaos Vector
-        // We want shards to fly *outwards* or *drift* based on uProgress.
-        // Direction is based on aRandom.
-        vec3 chaosDir = normalize(aRandom - 0.5); 
-        float chaosDist = uProgress * 20.0; // Explosion radius (tuned)
+        float finalScale = aScale * perspectiveScale;
 
-        // Apply displacement
-        // Current Pos = Center + QuadOffset + Chaos
-        // We add some rotation/tumble based on progress
+        // Base quad position
+        vec3 localPos = position * finalScale;
+
+        // --- 2. Compute Chaos Position (Entropy) ---
+        // Explode outwards based on random direction
+        vec3 chaosDir = normalize(aRandom - 0.5);
         
-        // Tumble Rotation (Axis-Angle)
-        float angle = uProgress * (aRandom.x * 10.0 + uTime * 0.5);
-        vec3 axis = normalize(aRandom);
+        // Add some swirl/curl based on Time and Position
+        vec3 curl = vec3(
+            sin(uTime * 0.1 + alignedCenter.y),
+            cos(uTime * 0.1 + alignedCenter.x),
+            sin(uTime * 0.1 + alignedCenter.z)
+        ) * 0.5;
         
-        // Rodrigues Rotation Formula (Simplified)
-        // actually just adding noise to position is enough for now.
+        float explosionRadius = 20.0;
+        vec3 chaosCenter = alignedCenter + (chaosDir + curl) * explosionRadius;
+
+        // --- 3. Interpolate based on uProgress ---
+        // uProgress: 0.0 (Order) -> 1.0 (Chaos)
+        // Use a non-linear curve for more dramatic effect
+        float t = smoothstep(0.0, 1.0, uProgress);
+
+        vec3 finalCenter = mix(alignedCenter, chaosCenter, t);
+
+        // Apply Tumble Rotation when in Chaos
+        // Axis-Angle rotation logic could go here
         
-        vec3 finalPos = instanceCenter + pos + (chaosDir * chaosDist);
+        // Final World Position
+        vec3 worldPos = finalCenter + localPos;
         
-        // Project to clip space
-        // Use modelViewMatrix since we are manually handling instance positioning relative to the mesh origin
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
+        // Project to Clip Space
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos, 1.0);
         
-        // Pass alpha/progress to fragment
-        vAlpha = 1.0; 
+        vAlpha = 1.0 - t; // Fade out alpha as it explodes
     }
   `,
   // Fragment Shader
