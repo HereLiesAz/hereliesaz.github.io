@@ -35,7 +35,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
                 fetch(`/data/${id}_random.bin`).then(r => r.arrayBuffer())
             ]).then(([posBuf, scaleBuf, uvBuf, randomBuf]) => {
                 // Determine count from buffer size (posBuf is stride 3 * 4 bytes)
-                const count = posBuf.byteLength / (3 * 4);
+                const count = data.shard_count;
 
                 setShardData({
                     binary: true,
