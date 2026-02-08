@@ -73,7 +73,7 @@ class DepthEstimator:
     def __init__(self, model_name="ZoeD_N", device="cuda"):
         self.device = device if torch.cuda.is_available() else "cpu"
         self.model = None
-        
+
         print(f"Loading ZoeDepth model ({model_name}) on {self.device}...")
         if ZOEDEPTH_AVAILABLE:
             try:
@@ -82,7 +82,7 @@ class DepthEstimator:
                 self.model.eval()
             except Exception as e:
                 print(f"Failed to load ZoeDepth from package: {e}")
-        
+
         if self.model is None:
             try:
                 print("Attempting to load ZoeDepth via torch.hub...")
@@ -98,7 +98,7 @@ class DepthEstimator:
         """
         if self.model is None:
             return None
-        
+
         with torch.no_grad():
             depth = self.model.infer_pil(image_pil)
         return depth
@@ -109,7 +109,7 @@ class FeatureExtractor:
         self.device = device if torch.cuda.is_available() else "cpu"
         self.processor = None
         self.model = None
-        
+
         if TRANSFORMERS_AVAILABLE:
             print(f"Loading Feature Extractor ({model_name}) on {self.device}...")
             try:
@@ -125,11 +125,11 @@ class FeatureExtractor:
         """
         if self.model is None or self.processor is None:
             return np.zeros(768) # Mock dimension
-        
+
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
         with torch.no_grad():
             outputs = self.model(**inputs)
-        
+
         # Use mean of last hidden state as global descriptor
         # Alternatively use [CLS] token if available
         return outputs.last_hidden_state.mean(dim=1).cpu().numpy().flatten()
@@ -150,21 +150,21 @@ class GraphBuilder:
     def build_graph(self, similarity_threshold=0.85):
         if not self.embeddings:
             return {"nodes": [], "edges": []}
-        
+
         embeddings_matrix = np.array(self.embeddings)
-        
+
         # Normalize embeddings
         norms = np.linalg.norm(embeddings_matrix, axis=1, keepdims=True)
         # Avoid division by zero
         norms[norms == 0] = 1e-10
         normalized_embeddings = embeddings_matrix / norms
-        
+
         # Compute cosine similarity
         similarity_matrix = np.dot(normalized_embeddings, normalized_embeddings.T)
-        
+
         edges = []
         num_nodes = len(self.ids)
-        
+
         for i in range(num_nodes):
             # Self-loop is 1.0, ignore
             # Find top K or threshold
@@ -179,7 +179,7 @@ class GraphBuilder:
                         "weight": float(score),
                         "type": "similarity"
                     })
-        
+
         return {"nodes": self.nodes, "edges": edges}
 
 
@@ -209,11 +209,11 @@ def main():
         return
 
     image_files = sorted([f for f in input_dir.iterdir() if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.webp']])
-    
+
     for img_path in image_files:
         print(f"\nProcessing {img_path.name}...")
         image_id = img_path.stem
-        
+
         # Load Image
         try:
             image_pil = Image.open(img_path).convert("RGB")
@@ -228,7 +228,7 @@ def main():
 
         # 2. Depth Estimation
         depth_map = depth_estimator.estimate(image_pil)
-        
+
         # 3. Process Shards (Combine Mask + Depth)
         shards_data = []
         if masks and depth_map is not None:
@@ -240,10 +240,10 @@ def main():
                  mask = mask_data['segmentation']
                  # Calculate average depth for this shard
                  avg_depth = np.mean(depth_map[mask])
-                 
+
                  # Get bbox
                  x, y, w, h = mask_data['bbox']
-                 
+
                  # Store shard info
                  shards_data.append({
                      "id": i,
@@ -252,10 +252,10 @@ def main():
                      "depth": float(avg_depth),
                      # Polygonal approximation could be added here
                  })
-        
+
         # 4. Feature Extraction (Global for now, can be per-shard later)
         embedding = feature_extractor.extract(image_pil)
-        
+
         # Save processed data
         output_file = output_dir / f"{image_id}.json"
         with open(output_file, 'w') as f:
@@ -264,18 +264,18 @@ def main():
                 "shards": shards_data,
                 # "embedding": embedding.tolist() # Optional: save embedding to file
             }, f, indent=2)
-            
+
         # Add to graph builder
         graph_builder.add_node(image_id, {"processed": True}, embedding)
 
     # 5. Build Graph
     print("\nBuilding Graph...")
     graph = graph_builder.build_graph()
-    
+
     graph_file = output_dir.parent / "graph.json" # usually public/graph.json
     with open(graph_file, 'w') as f:
         json.dump(graph, f, indent=2)
-    
+
     print(f"Done. Graph saved to {graph_file}")
 
 if __name__ == "__main__":
