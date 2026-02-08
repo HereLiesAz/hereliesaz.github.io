@@ -9,19 +9,24 @@ from pathlib import Path
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 
 # --- CONFIGURATION ---
-INPUT_DIR = Path("assets/raw")
-OUTPUT_DIR = Path("public/data")
-MANIFEST_PATH = Path("public/manifest.json") 
+# We use absolute paths to stop the guessing game
+PROJECT_ROOT = Path(os.getcwd())
+INPUT_DIR = PROJECT_ROOT / "assets/raw"
+OUTPUT_DIR = PROJECT_ROOT / "public/data"
+MANIFEST_PATH = PROJECT_ROOT / "public/manifest.json"
 LIMIT = 5
 
 warnings.filterwarnings("ignore")
 
 def main():
-    print(f"[*] Bootstrapping the Void (Structure: Object/Nodes)...")
+    print(f"[*] Bootstrapping the Void (Hard Reset Mode)...")
+    print(f"[*] Root: {PROJECT_ROOT}")
 
+    # 1. Clean & Setup
     if not OUTPUT_DIR.exists():
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
+    
+    # 2. Find Images
     valid_exts = {'.jpg', '.jpeg', '.png', '.webp'}
     if not INPUT_DIR.exists():
         print(f"[!] Error: {INPUT_DIR} missing.")
@@ -33,15 +38,15 @@ def main():
         print("[!] No images found.")
         return
 
-    # --- RANDOM SELECTION ---
+    # Random Selection
     if len(all_files) > LIMIT:
         selected_files = random.sample(all_files, LIMIT)
     else:
         selected_files = all_files
 
-    print(f"[*] Selected: {[f.name for f in selected_files]}")
+    print(f"[*] Selected {len(selected_files)} images.")
 
-    # --- AI SETUP ---
+    # 3. AI Setup
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"[*] AI Device: {device}")
 
@@ -60,7 +65,7 @@ def main():
     sam.to(device=device)
     mask_generator = SamAutomaticMaskGenerator(sam, points_per_side=16)
 
-    # --- PROCESSING ---
+    # 4. Processing
     nodes = []
 
     for idx, img_path in enumerate(selected_files):
@@ -71,14 +76,14 @@ def main():
             if img_cv2 is None: continue
             img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
 
-            # Resize to 512px max
+            # Resize
             h, w = img_rgb.shape[:2]
             max_dim = 512
             if max(h, w) > max_dim:
                 scale = max_dim / max(h, w)
                 img_rgb = cv2.resize(img_rgb, (int(w * scale), int(h * scale)))
 
-            # Depth
+            # Depth & Mask
             input_batch = depth_transform(img_rgb).to(device)
             with torch.no_grad():
                 prediction = depth_model(input_batch)
@@ -89,7 +94,6 @@ def main():
             d_min, d_max = depth_raw.min(), depth_raw.max()
             depth_map = (depth_raw - d_min) / (d_max - d_min) if (d_max - d_min) > 0 else np.zeros_like(depth_raw)
 
-            # Masks
             masks = mask_generator.generate(img_rgb)
             strokes = []
             for m in masks:
@@ -105,8 +109,6 @@ def main():
                 })
 
             out_name = f"{img_path.name}.json"
-            # IMPORTANT: The frontend looks for files in 'data/filename.json' relative to public
-            # So we just save the file name here, and the loader adds the path.
             
             with open(OUTPUT_DIR / out_name, 'w') as f:
                 json.dump({
@@ -114,10 +116,9 @@ def main():
                     "strokes": strokes
                 }, f)
 
-            # Append to list
             nodes.append({
                 "id": img_path.stem,
-                "file": out_name, # Frontend appends 'data/' to this
+                "file": out_name, 
                 "strokes": len(strokes),
                 "res": [img_rgb.shape[1], img_rgb.shape[0]],
                 "neighbors": [] 
@@ -126,7 +127,8 @@ def main():
         except Exception as e:
             print(f"[!] Failed {img_path.name}: {e}")
 
-    # --- LINKING & SAVING ---
+    # 5. Manifest Generation
+    # Circular Linking
     total = len(nodes)
     for i, node in enumerate(nodes):
         node["neighbors"] = [
@@ -134,16 +136,27 @@ def main():
             nodes[(i + 1) % total]["id"]
         ]
 
-    # FIX: WRAP IN "nodes" OBJECT
+    # Structure: Object with 'nodes' array
     manifest_data = {
         "generated_at": "BOOTSTRAP_MODE",
         "nodes": nodes
     }
 
+    # Write
     with open(MANIFEST_PATH, 'w') as f:
         json.dump(manifest_data, f, indent=2)
 
-    print(f"[*] SUCCESS. Manifest saved to {MANIFEST_PATH}")
+    # 6. VERIFICATION
+    print(f"[*] Verifying {MANIFEST_PATH}...")
+    try:
+        with open(MANIFEST_PATH, 'r') as f:
+            data = json.load(f)
+            if "nodes" in data and isinstance(data["nodes"], list):
+                print(f"[*] VALID. Found {len(data['nodes'])} nodes.")
+            else:
+                print(f"[!] INVALID STRUCTURE. Got keys: {data.keys()}")
+    except Exception as e:
+        print(f"[!] JSON CORRUPTED: {e}")
 
 if __name__ == "__main__":
     main()
