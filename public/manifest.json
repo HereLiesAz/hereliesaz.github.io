@@ -1,1 +1,67 @@
-{"total_nodes": 0, "total_pages": 0, "generated_at": "2026-02-06T17:20:43.525256", "pages": []}
+[
+  {
+    "id": "20230529_231152~2",
+    "file": "20230529_231152~2.jpg.json",
+    "strokes": 18,
+    "res": [
+      386,
+      511
+    ],
+    "neighbors": [
+      "scorched angled",
+      "PXL_20230831_171737132~2"
+    ]
+  },
+  {
+    "id": "PXL_20230831_171737132~2",
+    "file": "PXL_20230831_171737132~2.jpg.json",
+    "strokes": 16,
+    "res": [
+      384,
+      512
+    ],
+    "neighbors": [
+      "20230529_231152~2",
+      "original_04bb43fa-8e09-4b07-a16a-846de17651fa_PXL_20230720_012203513"
+    ]
+  },
+  {
+    "id": "original_04bb43fa-8e09-4b07-a16a-846de17651fa_PXL_20230720_012203513",
+    "file": "original_04bb43fa-8e09-4b07-a16a-846de17651fa_PXL_20230720_012203513.jpg.json",
+    "strokes": 12,
+    "res": [
+      512,
+      384
+    ],
+    "neighbors": [
+      "PXL_20230831_171737132~2",
+      "2014-11-01 01.06.40"
+    ]
+  },
+  {
+    "id": "2014-11-01 01.06.40",
+    "file": "2014-11-01 01.06.40.jpg.json",
+    "strokes": 15,
+    "res": [
+      512,
+      289
+    ],
+    "neighbors": [
+      "original_04bb43fa-8e09-4b07-a16a-846de17651fa_PXL_20230720_012203513",
+      "scorched angled"
+    ]
+  },
+  {
+    "id": "scorched angled",
+    "file": "scorched angled.jpg.json",
+    "strokes": 12,
+    "res": [
+      512,
+      341
+    ],
+    "neighbors": [
+      "2014-11-01 01.06.40",
+      "20230529_231152~2"
+    ]
+  }
+]
