@@ -11,8 +11,6 @@ const ShardMaterial = shaderMaterial(
     uProgress: 0, // 0 = Aligned (Order), 1 = Exploded (Chaos)
     uResolution: new THREE.Vector2(1, 1),
     uThreshold: 0.0, // Dissolve threshold (0 = fully visible, 1 = fully dissolved)
-    uSolutionPosition: new THREE.Vector3(0, 0, 10), // The "Perfect View" location
-    uFocalLength: 10.0,
   },
   // Vertex Shader
   `
@@ -28,8 +26,6 @@ const ShardMaterial = shaderMaterial(
 
     uniform float uTime;
     uniform float uProgress; // 0.0 to 1.0 (Order to Chaos)
-    uniform vec3 uSolutionPosition;
-    uniform float uFocalLength;
 
     // Pseudo-random function
     float random(vec2 st) {
@@ -37,55 +33,48 @@ const ShardMaterial = shaderMaterial(
     }
 
     void main() {
-        // Correct UV mapping
+        // Correct UV mapping for atlas/texture portion
         vUv = aUvOffset + (uv * aUvScale);
 
-        // --- 1. Compute Aligned Position (Order) ---
-        // aOffset contains [x, y, z]. Z is the depth.
-        vec3 alignedCenter = aOffset;
-        
-        // Anamorphic Scale Compensation
-        // Scale the shard based on distance from the Solution Viewpoint
-        // so it maintains apparent size regardless of depth.
-        float dist = distance(uSolutionPosition, alignedCenter);
-        float perspectiveScale = dist / uFocalLength;
+        // Base position (The "Shard" geometry itself, usually a 1x1 quad centered at 0)
+        vec3 pos = position * aScale; // Scale the quad to match its bbox size
 
-        float finalScale = aScale * perspectiveScale;
-
-        // Base quad position
-        vec3 localPos = position * finalScale;
-
-        // --- 2. Compute Chaos Position (Entropy) ---
-        // Explode outwards based on random direction
-        vec3 chaosDir = normalize(aRandom - 0.5);
+        // Retrieve instance position from the matrix (column 3)
+        // If using standard InstancedMesh, instanceMatrix is available.
+        // However, we are manually passing aOffset buffer which contains the CENTER of the shard.
+        // If we use 'position={...}' on <instancedMesh>, the whole cloud is moved.
+        // Each instance is just an index. We need to construct the position from aOffset.
         
-        // Add some swirl/curl based on Time and Position
-        vec3 curl = vec3(
-            sin(uTime * 0.1 + alignedCenter.y),
-            cos(uTime * 0.1 + alignedCenter.x),
-            sin(uTime * 0.1 + alignedCenter.z)
-        ) * 0.5;
+        // If we use 'instancedMesh' without manually setting matrices, all instances are at (0,0,0).
+        // We must rely on our custom attributes.
         
-        float explosionRadius = 20.0;
-        vec3 chaosCenter = alignedCenter + (chaosDir + curl) * explosionRadius;
+        vec3 instanceCenter = aOffset;
+        
+        // Calculate Chaos Vector
+        // We want shards to fly *outwards* or *drift* based on uProgress.
+        // Direction is based on aRandom.
+        vec3 chaosDir = normalize(aRandom - 0.5); 
+        float chaosDist = uProgress * 20.0; // Explosion radius (tuned)
 
-        // --- 3. Interpolate based on uProgress ---
-        // uProgress: 0.0 (Order) -> 1.0 (Chaos)
-        // Use a non-linear curve for more dramatic effect
-        float t = smoothstep(0.0, 1.0, uProgress);
-
-        vec3 finalCenter = mix(alignedCenter, chaosCenter, t);
-
-        // Apply Tumble Rotation when in Chaos
-        // Axis-Angle rotation logic could go here
+        // Apply displacement
+        // Current Pos = Center + QuadOffset + Chaos
+        // We add some rotation/tumble based on progress
         
-        // Final World Position
-        vec3 worldPos = finalCenter + localPos;
+        // Tumble Rotation (Axis-Angle)
+        float angle = uProgress * (aRandom.x * 10.0 + uTime * 0.5);
+        vec3 axis = normalize(aRandom);
         
-        // Project to Clip Space
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos, 1.0);
+        // Rodrigues Rotation Formula (Simplified)
+        // actually just adding noise to position is enough for now.
         
-        vAlpha = 1.0 - t; // Fade out alpha as it explodes
+        vec3 finalPos = instanceCenter + pos + (chaosDir * chaosDist);
+        
+        // Project to clip space
+        // Use modelViewMatrix since we are manually handling instance positioning relative to the mesh origin
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
+        
+        // Pass alpha/progress to fragment
+        vAlpha = 1.0; 
     }
   `,
   // Fragment Shader
@@ -130,27 +119,36 @@ const ShardMaterial = shaderMaterial(
         // Sample texture
         vec4 texColor = texture2D(uTexture, vUv);
         
-        // Generate noise value based on UV and Time
-        float noise = snoise(vUv * 10.0 + uTime * 0.1); // Scale noise
+        // Generate noise value based on UV and Time (Simulate 3D Perlin slices)
+        float noise = snoise(vUv * 5.0 + uTime * 0.05); // Lower frequency
         noise = (noise + 1.0) * 0.5; // Normalize to 0..1
 
-        // Dissolve Logic
-        // If noise value is less than threshold, discard pixel
-        // We use uThreshold. If uThreshold is 0, visible. If 1, invisible.
-        // We map uThreshold to a range that covers the noise.
+        // Dissolve Logic (The Unnerving Reveal)
+        // float visibility = smoothstep(uThreshold - 0.1, uThreshold, noise);
+        // We want 'uThreshold' to drive the cut.
+        // If uThreshold = 0, full visibility. If uThreshold = 1, full dissolve.
         
-        if (noise < uThreshold) {
-            discard;
+        // We compare noise against uThreshold.
+        // But let's follow the TODO's prompt exactly:
+        // "float visibility = smoothstep(uThreshold - 0.1, uThreshold, noise);"
+        // This implies uThreshold is the value where noise becomes visible.
+        // So if uThreshold is high, only high noise values (peaks) are visible.
+        
+        float visibility = smoothstep(uThreshold - 0.1, uThreshold + 0.001, noise);
+        
+        if (visibility < 0.01) {
+            discard; 
         }
 
-        // Apply color tint
-        gl_FragColor = vec4(texColor.rgb * uColor, texColor.a);
+        // Apply color tint and alpha
+        gl_FragColor = vec4(texColor.rgb * uColor, texColor.a * vAlpha); // Use vertex alpha
         
-        // Burn edge color (orange/fire)
-        float edgeWidth = 0.05;
-        if (noise < uThreshold + edgeWidth && uThreshold > 0.01) {
-            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.3, 0.0), 0.8);
-            gl_FragColor.a = 1.0;
+        // Burn Edge Effect
+        // The edge is where visibility is between 0.01 and 1.0
+        if (visibility < 0.9) {
+            vec3 burnColor = vec3(1.0, 0.2, 0.0); // Ember orange
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, burnColor, 1.0 - visibility);
+            gl_FragColor.a = 1.0; // Keep edge opaque
         }
     }
   `

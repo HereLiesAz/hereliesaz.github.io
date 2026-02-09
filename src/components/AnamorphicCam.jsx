@@ -31,37 +31,31 @@ export default function AnamorphicCam() {
     const r = scroll.offset;
     
     // Update store progress to drive shaders
-    // We smooth it slightly or take raw? Raw is more responsive.
+    // We update the store so other components (Overlay, ShardCloud) stay in sync.
     if (Math.abs(r - transitionProgress) > 0.001) {
         setTransitionProgress(r);
     }
     
     // Move Camera along spline
     const point = curve.getPoint(r);
-    camera.position.lerp(point, 0.1); // Smooth follow
     
-    // Look Ahead logic
-    // We want to look at the "Next" painting as we get closer.
+    // Smooth Camera Movement (Lerp)
+    // We use a small factor to smooth out scroll steps.
+    camera.position.lerp(point, 0.1); 
+    
+    // Look Ahead Logic (Target Interpolation)
     // Current is at 0,0,0. Next is at 0,0,-20.
-    // As r -> 1, focus shifts to 0,0,-20.
+    // As we move forward (r goes 0->1), we shift focus from 0,0,0 to 0,0,-20.
     const lookAtTarget = new THREE.Vector3(0, 0, -20 * r);
     
-    // Smooth lookAt
-    const currentLookAt = new THREE.Vector3();
-    camera.getWorldDirection(currentLookAt);
-    // This is hard to smooth directly without a target obj.
-    // simpler: just lookAt the interpolated target.
     camera.lookAt(lookAtTarget);
 
     // Trigger Transition
-    // When we reach the end, we swap the paintings.
-    // The "Next" painting becomes "Current" (at 0,0,0).
-    // The camera resets to 0,0,10.
-    // We need to reset the scrollbar too.
+    // When we reach the end of the scroll container, we trigger the graph update.
     if (r > 0.98) {
         completeTransition();
-        // Reset scroll position to 0
-        scroll.el.scrollTop = 0; 
+        // Reset scroll position to 0 (top) to start the next segment
+        if (scroll.el) scroll.el.scrollTop = 0; 
     }
   });
 
