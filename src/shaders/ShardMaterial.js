@@ -6,75 +6,56 @@ const ShardMaterial = shaderMaterial(
   {
     uTime: 0,
     uColor: new THREE.Color(1, 1, 1),
-    uTexture: null, // Texture Array or Atlas
-    uNoiseMap: null, // Perlin noise for dissolve
-    uProgress: 0, // 0 = Aligned (Order), 1 = Exploded (Chaos)
-    uResolution: new THREE.Vector2(1, 1),
-    uThreshold: 0.0, // Dissolve threshold (0 = fully visible, 1 = fully dissolved)
+    uTexture: null,
+    uProgress: 0, // 0 = Order, 1 = Chaos
+    uThreshold: 0.0, // 0 = Visible, 1 = Dissolved
   },
   // Vertex Shader
   `
-    attribute vec3 aOffset; // Center of the shard
-    attribute float aScale;
-    attribute vec3 aRandom; // Random seed per instance (x, y, z)
-    attribute float aDepth; // The "correct" Z depth for alignment
+    attribute vec3 aOffset; 
+    attribute vec2 aScale;
+    attribute vec3 aRandom; 
     attribute vec2 aUvOffset;
     attribute vec2 aUvScale;
 
     varying vec2 vUv;
-    varying float vAlpha;
+    varying float vChaos;
 
     uniform float uTime;
-    uniform float uProgress; // 0.0 to 1.0 (Order to Chaos)
-
-    // Pseudo-random function
-    float random(vec2 st) {
-        return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
-    }
+    uniform float uProgress; 
 
     void main() {
-        // Correct UV mapping for atlas/texture portion
         vUv = aUvOffset + (uv * aUvScale);
+        
+        // 1. Scale the quad to its original shard aspect ratio
+        vec3 pos = position;
+        pos.xy *= aScale;
 
-        // Base position (The "Shard" geometry itself, usually a 1x1 quad centered at 0)
-        vec3 pos = position * aScale; // Scale the quad to match its bbox size
+        // 2. Calculate Chaos
+        // uProgress: 0.0 (Aligned) -> 1.0 (Exploded)
+        vec3 chaosDir = normalize(aRandom - 0.5);
+        float explosionStrength = uProgress * 30.0;
+        
+        // Add some noise to the movement
+        vec3 drift = vec3(
+            sin(uTime * 0.5 + aRandom.x * 10.0),
+            cos(uTime * 0.3 + aRandom.y * 10.0),
+            sin(uTime * 0.2 + aRandom.z * 10.0)
+        ) * uProgress * 5.0;
 
-        // Retrieve instance position from the matrix (column 3)
-        // If using standard InstancedMesh, instanceMatrix is available.
-        // However, we are manually passing aOffset buffer which contains the CENTER of the shard.
-        // If we use 'position={...}' on <instancedMesh>, the whole cloud is moved.
-        // Each instance is just an index. We need to construct the position from aOffset.
-        
-        // If we use 'instancedMesh' without manually setting matrices, all instances are at (0,0,0).
-        // We must rely on our custom attributes.
-        
-        vec3 instanceCenter = aOffset;
-        
-        // Calculate Chaos Vector
-        // We want shards to fly *outwards* or *drift* based on uProgress.
-        // Direction is based on aRandom.
-        vec3 chaosDir = normalize(aRandom - 0.5); 
-        float chaosDist = uProgress * 20.0; // Explosion radius (tuned)
+        // 3. Tumble Rotation
+        float angle = uProgress * (aRandom.x * 6.28 + uTime * 0.2);
+        float s = sin(angle);
+        float c = cos(angle);
+        mat2 rot = mat2(c, -s, s, c);
+        pos.xy = rot * pos.xy;
 
-        // Apply displacement
-        // Current Pos = Center + QuadOffset + Chaos
-        // We add some rotation/tumble based on progress
+        // 4. Combine
+        vec3 finalPos = aOffset + pos + (chaosDir * explosionStrength) + drift;
         
-        // Tumble Rotation (Axis-Angle)
-        float angle = uProgress * (aRandom.x * 10.0 + uTime * 0.5);
-        vec3 axis = normalize(aRandom);
-        
-        // Rodrigues Rotation Formula (Simplified)
-        // actually just adding noise to position is enough for now.
-        
-        vec3 finalPos = instanceCenter + pos + (chaosDir * chaosDist);
-        
-        // Project to clip space
-        // Use modelViewMatrix since we are manually handling instance positioning relative to the mesh origin
+        vChaos = uProgress;
+
         gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
-        
-        // Pass alpha/progress to fragment
-        vAlpha = 1.0; 
     }
   `,
   // Fragment Shader
@@ -85,71 +66,30 @@ const ShardMaterial = shaderMaterial(
     uniform float uTime;
 
     varying vec2 vUv;
-    varying float vAlpha;
+    varying float vChaos;
 
-    // 2D Simplex Noise for dissolve pattern
-    vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
-    float snoise(vec2 v){
-      const vec4 C = vec4(0.211324865405187, 0.366025403784439,
-               -0.577350269189626, 0.024390243902439);
-      vec2 i  = floor(v + dot(v, C.yy) );
-      vec2 x0 = v -   i + dot(i, C.xx);
-      vec2 i1;
-      i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-      vec4 x12 = x0.xyxy + C.xxzz;
-      x12.xy -= i1;
-      i = mod(i, 289.0);
-      vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 ))
-      + i.x + vec3(0.0, i1.x, 1.0 ));
-      vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
-      m = m*m ;
-      m = m*m ;
-      vec3 x = 2.0 * fract(p * C.www) - 1.0;
-      vec3 h = abs(x) - 0.5;
-      vec3 ox = floor(x + 0.5);
-      vec3 a0 = x - ox;
-      m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h );
-      vec3 g;
-      g.x  = a0.x  * x0.x  + h.x  * x0.y;
-      g.yz = a0.yz * x12.xz + h.yz * x12.yw;
-      return 130.0 * dot(m, g);
+    // Simple Noise for dissolve
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
     }
 
     void main() {
-        // Sample texture
         vec4 texColor = texture2D(uTexture, vUv);
         
-        // Generate noise value based on UV and Time (Simulate 3D Perlin slices)
-        float noise = snoise(vUv * 5.0 + uTime * 0.05); // Lower frequency
-        noise = (noise + 1.0) * 0.5; // Normalize to 0..1
-
-        // Dissolve Logic (The Unnerving Reveal)
-        // float visibility = smoothstep(uThreshold - 0.1, uThreshold, noise);
-        // We want 'uThreshold' to drive the cut.
-        // If uThreshold = 0, full visibility. If uThreshold = 1, full dissolve.
+        // Noise-Discard Transition
+        float n = hash(vUv * 10.0 + floor(uTime * 10.0) * 0.01);
         
-        // We compare noise against uThreshold.
-        // But let's follow the TODO's prompt exactly:
-        // "float visibility = smoothstep(uThreshold - 0.1, uThreshold, noise);"
-        // This implies uThreshold is the value where noise becomes visible.
-        // So if uThreshold is high, only high noise values (peaks) are visible.
-        
-        float visibility = smoothstep(uThreshold - 0.1, uThreshold + 0.001, noise);
-        
-        if (visibility < 0.01) {
-            discard; 
+        if (n < uThreshold) {
+            discard;
         }
 
-        // Apply color tint and alpha
-        gl_FragColor = vec4(texColor.rgb * uColor, texColor.a * vAlpha); // Use vertex alpha
-        
-        // Burn Edge Effect
-        // The edge is where visibility is between 0.01 and 1.0
-        if (visibility < 0.9) {
-            vec3 burnColor = vec3(1.0, 0.2, 0.0); // Ember orange
-            gl_FragColor.rgb = mix(gl_FragColor.rgb, burnColor, 1.0 - visibility);
-            gl_FragColor.a = 1.0; // Keep edge opaque
+        // Edge "Burning" effect during dissolve
+        vec3 color = texColor.rgb * uColor;
+        if (uThreshold > 0.1 && n < uThreshold + 0.05) {
+            color += vec3(0.8, 0.4, 0.1) * (1.0 - (n - uThreshold) / 0.05);
         }
+
+        gl_FragColor = vec4(color, texColor.a);
     }
   `
 );

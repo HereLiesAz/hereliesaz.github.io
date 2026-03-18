@@ -1,6 +1,6 @@
 import React, { Suspense, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { ScrollControls } from '@react-three/drei';
+import { ScrollControls, PerspectiveCamera } from '@react-three/drei';
 import { useStore } from '../store/useStore';
 import AnamorphicCam from './AnamorphicCam';
 import ShardCloud from './ShardCloud';
@@ -27,33 +27,33 @@ export default function Scene() {
 
   return (
     <Canvas 
-      camera={{ position: [0, 0, 10], fov: 75 }}
-      gl={{ antialias: false, alpha: false }}
+      gl={{ antialias: true, alpha: true }}
       dpr={[1, 2]}
     >
       <color attach="background" args={['#050505']} />
       
-      <Suspense fallback={null}>
-        <ScrollControls pages={2} damping={0.2}>
-            
-            {/* The Camera Logic */}
-            <AnamorphicCam />
-            
-            {/* Current Artwork (Anchored at 0,0,0) */}
-            {activeId && (
-                <ShardCloud id={activeId} position={[0, 0, 0]} rotation={[0, 0, 0]} />
-            )}
-            
-            {/* Next Artwork (Floating ahead at 0,0,-20) */}
-            {nextId && (
-                <ShardCloud id={nextId} position={[0, 0, -20]} rotation={[0, 0, 0]} />
-            )}
+      <PerspectiveCamera makeDefault position={[0, 0, 10]} fov={50} />
+      
+      <ambientLight intensity={0.5} />
+      <pointLight position={[10, 10, 10]} intensity={1} />
 
-            <ambientLight intensity={0.5} />
-            <pointLight position={[10, 10, 10]} intensity={1} />
-        
-        </ScrollControls>
-      </Suspense>
+      <ScrollControls pages={4} damping={0.1}>
+        <AnamorphicCam />
+        <Suspense fallback={null}>
+            <group position={[0, 0, 0]}>
+                
+                {/* Current Artwork (Anchored at 0,0,0) */}
+                {activeId && (
+                    <ShardCloud id={activeId} position={[0, 0, 0]} rotation={[0, 0, 0]} isCurrent={true} />
+                )}
+                
+                {/* Next Artwork (Floating ahead at 0,0,-20) */}
+                {nextId && (
+                    <ShardCloud id={nextId} position={[0, 0, -20]} rotation={[0, 0, 0]} />
+                )}
+            </group>
+        </Suspense>
+      </ScrollControls>
     </Canvas>
   );
 }

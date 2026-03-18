@@ -16,48 +16,55 @@ export default function AnamorphicCam() {
   // Start: 0,0,10 (Looking at Current)
   // End: 0,0,-10 (Looking at Next, which is at -20)
   // We want the path to be dynamic or at least smooth.
+  // Start: 0,0,10 (Looking at Current at 0,0,0)
+  // Mid: High arc for "exploding" look
+  // End: 0,0,-10 (Looking at Next at 0,0,-20)
   const [curve] = useState(() => new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0, 0, 10), // Start (Sweet spot for Current)
-    new THREE.Vector3(2, 1, 0),  // Midpoint (Looking slightly away)
-    new THREE.Vector3(0, 0, -10), // End (Sweet spot for Next relative to camera)
-    // Actually, Next is at -20. Sweet spot for it is usually Z distance away.
-    // If Next is at -20, and we want to see it, we should be at -10 looking at -20?
-    // Let's assume sweet spot distance is 10 units.
+    new THREE.Vector3(0, 0, 10),
+    new THREE.Vector3(5, 5, 0),   
+    new THREE.Vector3(-5, 2, -10),
+    new THREE.Vector3(0, 0, -10),
   ]));
+  const isTransitioning = useStore(state => state.isTransitioning);
 
   useFrame((state, delta) => {
-    // Get scroll offset (0 to 1) from ScrollControls
-    // useScroll provides .offset (current scroll position 0..1)
     const r = scroll.offset;
     
-    // Update store progress to drive shaders
-    // We update the store so other components (Overlay, ShardCloud) stay in sync.
-    if (Math.abs(r - transitionProgress) > 0.001) {
-        setTransitionProgress(r);
+    // Debug Log (throttled)
+    if (Math.random() < 0.01) {
+        console.log(`[AnamorphicCam] R: ${r.toFixed(3)}, Transitioning: ${isTransitioning}`);
     }
+
+    setTransitionProgress(r);
     
-    // Move Camera along spline
-    const point = curve.getPoint(r);
-    
-    // Smooth Camera Movement (Lerp)
-    // We use a small factor to smooth out scroll steps.
+    const point = curve.getPointAt(r);
     camera.position.lerp(point, 0.1); 
     
-    // Look Ahead Logic (Target Interpolation)
-    // Current is at 0,0,0. Next is at 0,0,-20.
-    // As we move forward (r goes 0->1), we shift focus from 0,0,0 to 0,0,-20.
-    const lookAtTarget = new THREE.Vector3(0, 0, -20 * r);
+    const targetA = new THREE.Vector3(0, 0, 0);
+    const targetB = new THREE.Vector3(0, 0, -20);
+    const currentTarget = new THREE.Vector3().lerpVectors(targetA, targetB, r);
     
-    camera.lookAt(lookAtTarget);
+    camera.lookAt(currentTarget);
 
-    // Trigger Transition
-    // When we reach the end of the scroll container, we trigger the graph update.
-    if (r > 0.98) {
-        completeTransition();
-        // Reset scroll position to 0 (top) to start the next segment
-        if (scroll.el) scroll.el.scrollTop = 0; 
+    // Commit Transition (Trigger once at end of scroll)
+    if (r > 0.99 && !isTransitioningRef.current) {
+        isTransitioningRef.current = true;
+        console.log("[AnamorphicCam] Triggering CompleteTransition");
+        
+        // Reset scroll before completing internal state to avoid feedback
+        if (scroll.el) {
+            scroll.el.scrollTop = 0;
+        }
+        
+        // Use a slight delay to allow scroll reset to propagate
+        setTimeout(() => {
+            completeTransition();
+            isTransitioningRef.current = false;
+        }, 50);
     }
   });
+
+  const isTransitioningRef = useRef(false);
 
   return null;
 }

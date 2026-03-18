@@ -1,15 +1,20 @@
 {
   "nodes": [
-    {
-      "id": "test_img",
-      "processed": true,
-      "shard_count": 2,
-      "resolution": [
-        100,
-        100
-      ],
-      "file": "test_img.jpg"
+    { 
+      "id": "20230423_120126", 
+      "file": "20230423_120126.jpg.json",
+      "res": [512, 310],
+      "metadata": { "title": "Scorched Earth", "year": "2023" } 
+    },
+    { 
+      "id": "IMG_0355", 
+      "file": "IMG_0355.JPG.json",
+      "res": [511, 202],
+      "metadata": { "title": "Pareidolia Study", "year": "2024" } 
     }
   ],
-  "edges": []
+  "edges": [
+    { "source": "20230423_120126", "target": "IMG_0355", "weight": 0.8 },
+    { "source": "IMG_0355", "target": "20230423_120126", "weight": 0.5 }
+  ]
 }

@@ -15,30 +15,54 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
   const [textureUrl, setTextureUrl] = useState(null);
   const [resolution, setResolution] = useState([1000, 1000]); // Default fallback
 
+  const setCurrentShardCount = useStore(state => state.setCurrentShardCount);
+
   // 1. Load Shard Data & Texture URL
   useEffect(() => {
     if (!id || !nodes) return;
+    
+    // 1. Identify Fetch URL
     const node = nodes.find(n => n.id === id);
     if (!node) return;
+    
+    const fetchId = node.file || `${id}.json`;
+    const fetchUrl = fetchId.startsWith('/') ? fetchId : `/data/${fetchId}`;
 
-    // Load Shard JSON
-    fetch(`/data/${id}.json`)
-      .then(res => res.json())
+    fetch(fetchUrl)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+            throw new Error(`Invalid Response: Expected JSON, got ${contentType}`);
+        }
+        return res.json();
+      })
       .then(data => {
-        setShardData(data.shards);
+        // Support both "shards" (from my plan) and "strokes" (from existing data)
+        const shards = data.shards || data.strokes || [];
+        setShardData(shards);
         
-        // Update Resolution from metadata
-        if (data.resolution && data.resolution.length === 2) {
-            setResolution(data.resolution);
+        // Sync to global store for UI overlay
+        if (isCurrent) {
+            setCurrentShardCount(shards.length);
+        }
+        
+        // Update Resolution: Try data.meta.res (existing) or data.resolution (plan)
+        const res = data.resolution || (data.meta && data.meta.res);
+        if (res && res.length === 2) {
+            setResolution(res);
         } else if (node.resolution) {
             setResolution(node.resolution);
         }
 
-        // Use the filename provided by curator
-        const fileName = data.file || node.file || `${id}.jpg`;
+        // Use the filename for texture, or try data.meta.file
+        const fileName = data.file || (data.meta && data.meta.file) || node.file || `${id}.jpg`;
         setTextureUrl(`/data/${fileName}`); 
       })
-      .catch(err => console.error("Shard Load Error:", err));
+      .catch(err => {
+        console.error(`[ShardCloud] Failed to load node "${id}":`, err.message);
+        // Fallback or show error state if needed
+      });
   }, [id, nodes]);
 
   // 2. Load Texture
@@ -49,11 +73,17 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
     if (!shardData) return { geometry: null, count: 0 };
 
     const count = shardData.length;
-    const geo = new THREE.PlaneGeometry(1, 1); // Base Quad
+    const baseGeo = new THREE.PlaneGeometry(1, 1); 
+    const geo = new THREE.InstancedBufferGeometry();
     
-    // Attributes
+    // Copy base geometry attributes
+    geo.index = baseGeo.index;
+    geo.attributes.position = baseGeo.attributes.position;
+    geo.attributes.uv = baseGeo.attributes.uv;
+    
+    // Custom Instance Attributes
     const aOffset = new Float32Array(count * 3);
-    const aScale = new Float32Array(count);
+    const aScale = new Float32Array(count * 2);
     const aRandom = new Float32Array(count * 3);
     const aUvOffset = new Float32Array(count * 2);
     const aUvScale = new Float32Array(count * 2);
@@ -61,68 +91,36 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
     const [imgW, imgH] = resolution;
     const aspect = imgW / imgH;
 
-    // Fill attributes
+    const worldHeight = 10;
+    const worldWidth = worldHeight * aspect;
+
     for (let i = 0; i < count; i++) {
         const shard = shardData[i];
+        if (!shard || !shard.bbox) continue;
         
-        // BBox: [x, y, w, h] (pixels)
         const [x, y, w, h] = shard.bbox;
         
-        // Center position in pixel space
         const cx = x + w / 2;
         const cy = y + h / 2;
 
-        // Normalize to World Space (-0.5 to 0.5)
-        // We preserve aspect ratio in world space if we want the cloud to match the image shape.
-        // Let's map Y to -0.5..0.5 and X to -0.5*Aspect..0.5*Aspect
-        // BUT standard logic is often just mapping 0..1 to -5..5.
-        // Let's use a standard 10 unit height for the image in world space.
-        
-        const worldHeight = 10;
-        const worldWidth = worldHeight * aspect;
-
         const nx = (cx / imgW) - 0.5;
-        const ny = -((cy / imgH) - 0.5); // Flip Y
+        const ny = -((cy / imgH) - 0.5); 
 
         aOffset[i * 3] = nx * worldWidth;
         aOffset[i * 3 + 1] = ny * worldHeight;
-        aOffset[i * 3 + 2] = shard.depth ? shard.depth * 0.1 : 0; 
+        
+        // Depth fallback: "depth" or "z"
+        const depth = shard.depth !== undefined ? shard.depth : shard.z;
+        aOffset[i * 3 + 2] = (depth || 0) * 5.0; 
 
-        // Scale (Size of the shard in world units)
-        // Shard width fraction * World Width
-        // But the quad is square (1x1). We need to scale it to match the aspect ratio of the shard?
-        // Wait, if we use a texture atlas or UV mapping on a quad, the quad should match the BBox aspect ratio.
-        // Or we scale X and Y independently? 
-        // InstancedMesh supports non-uniform scale via matrix, but 'aScale' is a single float in our shader.
-        // Our shader: "vec3 pos = position * aScale;" -> Uniform scale.
-        // This implies our shards are always square in 3D? That distorts non-square shards.
-        // We should fix the shader to support vec2 scale or just scale the geometry X/Y.
+        // SEC 2: Correct Scaling
+        aScale[i * 2] = (w / imgW) * worldWidth;
+        aScale[i * 2 + 1] = (h / imgH) * worldHeight;
         
-        // Ideally: Scale the quad to match the BBox aspect ratio.
-        // Let's assume we want to preserve the shard's shape.
-        // Calculate max dimension to fit or just use width?
-        // Let's approximate: Scale = max(w/imgW * worldW, h/imgH * worldH)
-        // And relying on the texture being mapped correctly?
-        // If we use uniform scale, the quad is square. The texture will be stretched if the shard bbox is not square.
-        // Correct approach: Pass vec2 aScale.
-        
-        // BUT, changing attribute types requires shader update.
-        // For now, let's use the average size or max size.
-        // And accept slight stretching or update the shader. 
-        // Updating shader is better.
-        // Let's update shader to vec2 aScale in next step? 
-        // Or hack it: normalize the geometry uvs?
-        
-        // For this task, sticking to the existing pattern:
-        // Use the width ratio.
-        aScale[i] = (w / imgW) * worldWidth; 
-        
-        // Random
         aRandom[i * 3] = Math.random();
         aRandom[i * 3 + 1] = Math.random();
         aRandom[i * 3 + 2] = Math.random();
 
-        // UVs
         aUvOffset[i * 2] = x / imgW;
         aUvOffset[i * 2 + 1] = y / imgH;
         
@@ -131,10 +129,12 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
     }
 
     geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(aOffset, 3));
-    geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(aScale, 1));
+    geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(aScale, 2));
     geo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(aRandom, 3));
     geo.setAttribute('aUvOffset', new THREE.InstancedBufferAttribute(aUvOffset, 2));
     geo.setAttribute('aUvScale', new THREE.InstancedBufferAttribute(aUvScale, 2));
+
+    geo.instanceCount = count; // Critical for instancing
 
     return { geometry: geo, count };
   }, [shardData, resolution]);
@@ -190,11 +190,12 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
   if (!geometry) return null;
 
   return (
-    <instancedMesh 
+    <mesh 
       ref={meshRef} 
-      args={[geometry, null, count]} 
+      geometry={geometry}
       position={position} 
       rotation={rotation}
+      frustumCulled={false}
     >
       <shardMaterial 
         ref={materialRef} 
@@ -202,6 +203,6 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
         transparent 
         depthWrite={false}
       />
-    </instancedMesh>
+    </mesh>
   );
 }

@@ -15,6 +15,8 @@ const useStore = create((set, get) => ({
   transitionProgress: 0, // 0.0 (at Current) -> 1.0 (at Next)
   isTransitioning: false,
   
+  currentShardCount: 0,
+  
   // UI State
   showMenu: false,
 
@@ -22,12 +24,15 @@ const useStore = create((set, get) => ({
   
   toggleMenu: () => set(state => ({ showMenu: !state.showMenu })),
 
-  // Initialize the graph from JSON
   setGraph: (graphData) => {
+    if (!graphData || typeof graphData !== 'object') {
+        console.error("[Store] Invalid Graph Data received");
+        return;
+    }
     console.log("[Store] Graph Loaded:", graphData.nodes?.length, "nodes,", graphData.edges?.length, "edges");
     set({ 
-      nodes: graphData.nodes || [],
-      edges: graphData.edges || []
+      nodes: Array.isArray(graphData.nodes) ? graphData.nodes : [],
+      edges: Array.isArray(graphData.edges) ? graphData.edges : []
     });
   },
 
@@ -48,93 +53,111 @@ const useStore = create((set, get) => ({
 
   // Calculate the next destination based on the "Stochastic Walker" logic
   calculateNextNode: () => {
-    // Destructure state including hoveredShard for pareidolia checks
     const { nodes, edges, currentNodeId, visitedNodes, hoveredShard } = get();
     
     if (!currentNodeId || nodes.length === 0) return;
 
-    // 1. Get neighbors of current node
-    // Edges are directed: source -> target
-    const candidates = edges.filter(e => e.source === currentNodeId);
+    // 1. Get neighbors
+    let candidates = Array.isArray(edges) ? edges.filter(e => e.source === currentNodeId) : [];
 
+    // 2. Stochastic Fallback if no explicit edges
     if (candidates.length === 0) {
-      console.warn("[Store] Dead end reached! Teleporting to random unvisited node.");
-      // Fallback: Pick a random unvisited node
-      const unvisited = nodes.filter(n => !visitedNodes.has(n.id));
-      const target = unvisited.length > 0 
-        ? unvisited[Math.floor(Math.random() * unvisited.length)]
-        : nodes[Math.floor(Math.random() * nodes.length)]; // Reset if all visited
-      set({ nextNodeId: target?.id || null });
-      return;
+      // Pick 3 random nodes as candidates to simulate "drifting"
+      const otherNodes = nodes.filter(n => n.id !== currentNodeId);
+      
+      if (otherNodes.length > 0) {
+        const randomNodes = [...otherNodes]
+            .sort(() => Math.random() - 0.5)
+            .slice(0, 3);
+        
+        candidates = randomNodes.map(n => ({
+            target: n.id,
+            weight: 0.1 
+        }));
+      } else {
+        // Only one node exists in the system
+        set({ nextNodeId: null });
+        return;
+      }
     }
 
-    // 2. Filter visited nodes (soft constraint)
-    // We prefer unvisited nodes, but if all neighbors are visited, we revisit.
-    const unvisitedCandidates = candidates.filter(e => !visitedNodes.has(e.target));
-    const pool = unvisitedCandidates.length > 0 ? unvisitedCandidates : candidates;
-
-    // 3. Pareidolia Bias (If user is hovering a specific shard that links to a specific image)
+    // 3. Pareidolia Bias (High Priority)
     if (hoveredShard !== null) {
-        const pareidoliaMatches = pool.filter(e => e.source_shard === hoveredShard);
-        if (pareidoliaMatches.length > 0) {
+        const pareidoliaEdge = edges.find(e => e.source === currentNodeId && e.source_shard === hoveredShard);
+        if (pareidoliaEdge) {
             console.log("[Store] Pareidolia Triggered! Shard:", hoveredShard);
-            // Pick the best match among pareidolia edges
-            pareidoliaMatches.sort((a, b) => b.weight - a.weight);
-            const bestMatch = pareidoliaMatches[0];
-            set({ nextNodeId: bestMatch.target });
+            set({ nextNodeId: pareidoliaEdge.target });
             return;
         }
     }
 
-    // 4. Weighted Probability Selection
-    // We use the edge weight (similarity) to bias the random selection.
-    // Higher weight = Higher chance.
-    
-    let selectedEdge = null;
-    
-    // Simple Roulette Wheel Selection
-    const totalWeight = pool.reduce((sum, e) => sum + (e.weight || 0.5), 0);
-    let randomValue = Math.random() * totalWeight;
-    
+    // 4. Filter Visited (Soft)
+    const unvisited = candidates.filter(e => !visitedNodes.has(e.target));
+    const pool = unvisited.length > 0 ? unvisited : candidates;
+
+    // 5. Weighted Selection
+    if (pool.length === 0) {
+        set({ nextNodeId: null });
+        return;
+    }
+
+    const totalWeight = pool.reduce((sum, e) => sum + (e?.weight || 0.5), 0);
+    if (totalWeight === 0) {
+        set({ nextNodeId: null });
+        return;
+    }
+
+    let r = Math.random() * totalWeight;
+    let selectedId = pool[0]?.target || null;
+
     for (const edge of pool) {
-        randomValue -= (edge.weight || 0.5);
-        if (randomValue <= 0) {
-            selectedEdge = edge;
+        if (!edge) continue;
+        const w = edge.weight || 0.5;
+        r -= w;
+        if (r <= 0) {
+            selectedId = edge.target;
             break;
         }
     }
-    
-    // Fallback if rounding errors occurred
-    if (!selectedEdge) selectedEdge = pool[pool.length - 1];
 
-    console.log("[Store] Selected Next Node:", selectedEdge.target, "(Weight:", selectedEdge.weight, ")");
-    set({ nextNodeId: selectedEdge.target });
+    if (!selectedId) {
+        console.warn("[Store] Failed to select next node from pool");
+        return;
+    }
+
+    console.log("[Store] Next Target:", selectedId);
+    set({ nextNodeId: selectedId });
   },
 
-  // Update the scroll/flight progress
+  setCurrentShardCount: (count) => set({ currentShardCount: count }),
+
   setTransitionProgress: (val) => {
-    set({ transitionProgress: val });
+    // We only update if significant change to save on R3F overhead
+    if (Math.abs(get().transitionProgress - val) > 0.001) {
+        set({ transitionProgress: val, isTransitioning: val > 0.05 && val < 0.95 });
+    }
   },
 
-  // Commit the transition: Next becomes Current, Next is recalculated
   completeTransition: () => {
-    const { nextNodeId, visitedNodes } = get();
+    const { nextNodeId } = get();
     if (!nextNodeId) return;
-
-    console.log("[Store] Transition Complete. Arrived at:", nextNodeId);
 
     set((state) => {
         const newVisited = new Set(state.visitedNodes);
         newVisited.add(nextNodeId);
+        // If history gets too large, clear it to allow revisits
+        if (newVisited.size > 20) newVisited.clear(); 
+
         return {
             currentNodeId: nextNodeId,
+            nextNodeId: null, // Clear next until calculated
             visitedNodes: newVisited,
-            transitionProgress: 0, // Reset progress for the new segment
+            transitionProgress: 0,
             isTransitioning: false
         };
     });
 
-    // Immediately plan the *next* step from the new current node
+    // Recalculate
     get().calculateNextNode();
   },
   
