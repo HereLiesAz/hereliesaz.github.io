@@ -17,18 +17,22 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
 
   const setCurrentShardCount = useStore(state => state.setCurrentShardCount);
 
-  // 1. Load data (same logic)
+  // 1. Load data (Fixed Pathing)
   useEffect(() => {
     if (!id || !nodes) return;
     const node = nodes.find(n => n.id === id);
     if (!node) return;
     
-    const fetchId = node.file || `${id}.json`;
-    const fetchUrl = fetchId.startsWith('/') ? fetchId : `/data/${fetchId}`;
+    // Always fetch metadata from /data/
+    let fetchId = node.file || `${id}.json`;
+    if (fetchId.includes('/')) fetchId = fetchId.split('/').pop();
+    const fetchUrl = `/data/${fetchId}`;
 
     fetch(fetchUrl)
       .then(res => res.json())
       .then(data => {
+        if (!data || !data.shards && !data.strokes) return;
+
         const shards = data.shards || data.strokes || [];
         setShardData(shards);
         if (isCurrent) setCurrentShardCount(shards.length);
@@ -37,23 +41,22 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         const res = data.resolution || meta.res || meta.resolution;
         if (res) setResolution(res);
 
-        let fileName = data.file || meta.file || meta.original_file || node.file || `${id}.jpg`;
-        
-        // Safety: ensure we use the correct extension if it's a known mismatch
-        // (In this environment, many .jpg are actually .jpeg or vice versa)
-        if (fileName.endsWith('.json')) {
-            fileName = fileName.replace('.json', '.jpg');
-        }
-        
-        // For this specific broken asset in the graph
-        if (fileName.includes('05605923-7437-4BCA-B38C-74A73763ECA3')) {
-            fileName = fileName.replace('.jpg', '.jpeg');
-        }
+        // --- ROBUST IMAGE DISCOVERY ---
+        let baseName = node.id || id;
+        let fileName = `${baseName}.jpg`; // Most common
 
+        // For known exceptions:
+        if (baseName.includes('05605923-7437-4BCA-B38C-74A73763ECA3')) fileName = `${baseName}.jpeg`;
+        if (baseName.includes('141BE158-DE05-4670-8C0A-38E39B25A312')) fileName = `${baseName}.jpeg`;
+        
         setTextureUrl(`/assets/${fileName}`); 
       })
-      .catch(err => console.error(`[ShardCloud] Error node ${id}:`, err));
-  }, [id, nodes]);
+      .catch(err => {
+        console.error(`[ShardCloud] Error node ${id}:`, err);
+        // Fallback texture path if fetch fails
+        setTextureUrl('/placeholder.jpg');
+      });
+  }, [id, nodes, isCurrent, setCurrentShardCount]);
 
   const texture = useLoader(THREE.TextureLoader, textureUrl || '/placeholder.jpg'); 
 
@@ -61,10 +64,10 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const { geometry, count } = useMemo(() => {
     if (!shardData) return { geometry: null, count: 0 };
 
-    // --- DENSITY THROTTLING (Fix for Lag) ---
-    const MAX_SHARDS = 5000;
+    // --- DENSITY THROTTLING (Fix for 60fps) ---
+    const MAX_SHARDS = 2000;
     const finalShardData = shardData.length > MAX_SHARDS 
-        ? [...shardData].sort((a,b) => (b.area || 0) - (a.area || 0)).slice(0, MAX_SHARDS)
+        ? [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS)
         : shardData;
 
     const count = finalShardData.length;
@@ -88,12 +91,12 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
 
     for (let i = 0; i < count; i++) {
         const shard = finalShardData[i];
-        let nx, ny, depth, sw, sh, r, g, b;
+        let nx, ny, raw_depth, sw, sh, r, g, b;
 
         if (Array.isArray(shard)) {
             nx = shard[0] / 10.0; 
             ny = shard[1] / 10.0;
-            depth = shard[2]; 
+            raw_depth = shard[2]; 
             sw = shard[4] * 0.5;
             sh = shard[4] * 0.5;
             r = shard[5] / 255;
@@ -111,14 +114,14 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
 
             nx = ((x + w / 2) / imgW) - 0.5;
             ny = -(((y + h / 2) / imgH) - 0.5); 
-            depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
+            raw_depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
             sw = w / imgW;
             sh = h / imgH;
         }
 
-        // --- MASSIVE Z-SPREAD (DEEP IMMERSION) ---
-        // Map depth 0-1 to a range of -10 to -110 (Strictly in front of camera at 0)
-        const z = - (depth * 100.0 + 10.0); 
+        // --- MASSIVE Z-SPREAD (FIXED MAPPING) ---
+        // Shard depth is already negative (e.g. -44), we map it to -10 -> -110 range
+        const z = raw_depth * 2.5; 
         const factor = z / FULCRUM_Z;
 
         aOffset[i * 3] = nx * worldWidth * factor;
@@ -165,7 +168,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         // Glow peaks at transitionProgress 0.5 (Mid-void)
         const glowPhase = Math.sin(transitionProgress * Math.PI);
         materialRef.current.uAnchorGlow = glowPhase * 0.8;
-        materialRef.current.uAnchorId = anchorId !== undefined ? anchorId : -1.0;
+        materialRef.current.uAnchorId = anchorId !== undefined ? Number(anchorId) : -1.0;
     }
   });
 
