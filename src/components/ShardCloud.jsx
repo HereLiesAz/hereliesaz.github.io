@@ -93,12 +93,23 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
 
     const worldHeight = 10;
     const worldWidth = worldHeight * aspect;
+    const FULCRUM_Z = -10.0; // The vantage point from which it aligns
 
     for (let i = 0; i < count; i++) {
         const shard = shardData[i];
-        if (!shard || !shard.bbox) continue;
+        if (!shard || (!shard.bbox && !shard.x)) continue;
         
-        const [x, y, w, h] = shard.bbox;
+        // Support both Curator (bbox) and Grinder/Strokes (x, y, scale)
+        let x, y, w, h;
+        if (shard.bbox) {
+            [x, y, w, h] = shard.bbox;
+        } else {
+            // Fallback for stroke-based data
+            x = shard.x || 0;
+            y = shard.y || 0;
+            w = shard.scale || 1;
+            h = shard.scale || 1;
+        }
         
         const cx = x + w / 2;
         const cy = y + h / 2;
@@ -106,16 +117,21 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
         const nx = (cx / imgW) - 0.5;
         const ny = -((cy / imgH) - 0.5); 
 
-        aOffset[i * 3] = nx * worldWidth;
-        aOffset[i * 3 + 1] = ny * worldHeight;
-        
-        // Depth fallback: "depth" or "z"
-        const depth = shard.depth !== undefined ? shard.depth : shard.z;
-        aOffset[i * 3 + 2] = (depth || 0) * 5.0; 
+        // WORLD DEPTH (Static)
+        // Ensure depth is negative (away from camera)
+        const depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
+        const z = - (depth * 50.0 + 5.0); // Spread it out in the void
 
-        // SEC 2: Correct Scaling
-        aScale[i * 2] = (w / imgW) * worldWidth;
-        aScale[i * 2 + 1] = (h / imgH) * worldHeight;
+        // FORCED PERSPECTIVE FACTOR
+        // From vantage FULCRUM_Z, the shard should look like its 2D self
+        const factor = z / FULCRUM_Z;
+
+        aOffset[i * 3] = nx * worldWidth * factor;
+        aOffset[i * 3 + 1] = ny * worldHeight * factor;
+        aOffset[i * 3 + 2] = z; 
+
+        aScale[i * 2] = (w / imgW) * worldWidth * factor;
+        aScale[i * 2 + 1] = (h / imgH) * worldHeight * factor;
         
         aRandom[i * 3] = Math.random();
         aRandom[i * 3 + 1] = Math.random();
@@ -134,7 +150,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
     geo.setAttribute('aUvOffset', new THREE.InstancedBufferAttribute(aUvOffset, 2));
     geo.setAttribute('aUvScale', new THREE.InstancedBufferAttribute(aUvScale, 2));
 
-    geo.instanceCount = count; // Critical for instancing
+    geo.instanceCount = count; 
 
     return { geometry: geo, count };
   }, [shardData, resolution]);
@@ -143,47 +159,6 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
   useFrame((state) => {
     if (materialRef.current) {
         materialRef.current.uTime = state.clock.elapsedTime;
-        
-        // Map Transition Progress to Shader Uniforms
-        if (isCurrent) {
-            // "Current" artwork logic:
-            // 0.0 -> 1.0 (Normal -> Exploded)
-            // It fades out/dissolves as it explodes.
-            
-            // Explosion/Chaos
-            materialRef.current.uProgress = transitionProgress; 
-            
-            // Dissolve Threshold
-            // We want it to start dissolving near the end (e.g., > 0.7)
-            // Remap 0.7-1.0 to 0.0-1.0 for threshold
-            const dissolveStart = 0.7;
-            if (transitionProgress > dissolveStart) {
-                materialRef.current.uThreshold = (transitionProgress - dissolveStart) / (1.0 - dissolveStart);
-            } else {
-                materialRef.current.uThreshold = 0;
-            }
-            
-        } else {
-            // "Next" artwork logic:
-            // It is floating in the distance, already chaotic?
-            // Or does it fly IN?
-            
-            // If Next is "coming in", it goes from Chaos (1.0) to Order (0.0) as we approach?
-            // Actually, AnamorphicCam moves TOWARDS it.
-            // If we are at progress 0, we are far away. Progress 1, we are at it.
-            // The shader chaos depends on uProgress.
-            
-            // Let's say Next is static until we switch?
-            // No, we want it to assemble.
-            
-            // In the Store, transitionProgress is 0..1 relative to Current->Next journey.
-            // So for Next, we want it to go from 1.0 (Chaos) to 0.0 (Order)?
-            // Wait, usually we arrive at Next and it is fully formed (0.0).
-            // So uProgress should be (1.0 - transitionProgress).
-            
-            materialRef.current.uProgress = 1.0 - transitionProgress;
-            materialRef.current.uThreshold = 0; // Fully visible (just scattered)
-        }
     }
   });
 
