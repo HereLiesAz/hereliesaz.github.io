@@ -8,6 +8,8 @@ const Overlay = () => {
   const showMenu = useStore(state => state.showMenu);
   const toggleMenu = useStore(state => state.toggleMenu);
   
+  const currentShardCount = useStore(state => state.currentShardCount);
+  
   const activeNode = nodes && currentNodeId ? nodes.find(n => n.id === currentNodeId) : null;
   
   // Calculate Opacity for Info
@@ -124,8 +126,7 @@ const Overlay = () => {
             {activeNode.id.split('~')[0]}
           </h2>
           <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>
-             {/* Fallback metadata if missing */}
-            {(activeNode.shards?.length || 0)} SHARDS // {(activeNode.resolution || ['?','?']).join('x')}
+            {currentShardCount} SHARDS // {(activeNode.res || activeNode.resolution || ['?','?']).join('x')}
           </p>
         </div>
       )}

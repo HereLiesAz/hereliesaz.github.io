@@ -98,18 +98,36 @@ class ArtGrinder:
             for m in masks:
                 mask = m['segmentation']
                 y_idx, x_idx = np.where(mask)
-                if len(y_idx) == 0: continue
+                if len(y_idx) < 10: continue # Skip tiny fragments
                 
-                avg_color = img_rgb[y_idx, x_idx].mean(axis=0).astype(int).tolist()
-                z_val = depth_map[y_idx, x_idx].mean()
+                colors = img_rgb[y_idx, x_idx].astype(np.float32)
                 
-                # Use compressed keys ("c", "b", "z", "s")
-                strokes.append({
-                    "c": avg_color,
-                    "b": [int(x) for x in m['bbox']], 
-                    "z": float(z_val),
-                    "s": float(m['stability_score'])
-                })
+                # --- COLOR SUB-SHARDING (K-Means) ---
+                # Split SAM mask into organic sub-shards based on color/lighting
+                k = min(3, len(y_idx))
+                criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+                _, labels, centers = cv2.kmeans(colors, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+                
+                for cluster_idx in range(k):
+                    c_mask_indices = np.where(labels == cluster_idx)[0]
+                    if len(c_mask_indices) < 5: continue
+                    
+                    cy_i = y_idx[c_mask_indices]
+                    cx_i = x_idx[c_mask_indices]
+                    
+                    avg_color = centers[cluster_idx].astype(int).tolist()
+                    z_val = depth_map[cy_i, cx_i].mean()
+                    
+                    # Calculate sub-bbox
+                    x_min, x_max = cx_i.min(), cx_i.max()
+                    y_min, y_max = cy_i.min(), cy_i.max()
+                    
+                    strokes.append({
+                        "c": avg_color,
+                        "b": [int(x_min), int(y_min), int(x_max - x_min + 1), int(y_max - y_min + 1)], 
+                        "z": float(z_val),
+                        "s": float(m['stability_score'])
+                    })
 
             with open(output_file, 'w') as f:
                 json.dump({"meta": {"f": path.name}, "s": strokes}, f)

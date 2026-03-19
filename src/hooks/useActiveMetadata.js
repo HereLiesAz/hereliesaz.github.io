@@ -23,8 +23,10 @@ export const useActiveMetadata = () => {
   const scrollZ = useStore((state) => state.scrollZ || 0);
 
   return useMemo(() => {
+    if (!manifest || !manifest.nodes) return { visible: false, opacity: 0, data: null };
+    
     // Iterate through manifest to find if we are near a sweet spot
-    for (let i = 0; i < manifest.length; i++) {
+    for (let i = 0; i < manifest.nodes.length; i++) {
       const sweetSpotZ = -((i + 1) * PAINTING_SPACING);
       const distance = Math.abs(scrollZ - sweetSpotZ);
 
@@ -34,7 +36,7 @@ export const useActiveMetadata = () => {
         return { 
           visible: true, 
           opacity, 
-          data: manifest[i] 
+          data: manifest.nodes[i] 
         };
       }
     }

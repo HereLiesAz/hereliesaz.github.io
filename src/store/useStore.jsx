@@ -1,145 +1,164 @@
 import { create } from 'zustand';
+import * as THREE from 'three';
 
 const useStore = create((set, get) => ({
   // --- STATE ---
-  nodes: [],           // List of all artworks (metadata)
-  edges: [],           // Adjacency list (transitions)
+  nodes: [],           
+  edges: [],           
   
-  currentNodeId: null, // The artwork currently being viewed (The "Anchor")
-  nextNodeId: null,    // The artwork we are transitioning TO (The "Target")
+  activeClusters: [],  // [{ id, worldPos, anchorId }]
+  currentPath: null,   // THREE.Curve for camera
   
-  visitedNodes: new Set(), // History to avoid loops (unless necessary)
+  currentNodeId: null, // Legacy support for Overlay
+  currentShardCount: 0,
   
-  hoveredShard: null,  // Interactive pareidolia trigger (from raycast)
-  
-  transitionProgress: 0, // 0.0 (at Current) -> 1.0 (at Next)
+  transitionProgress: 0, 
   isTransitioning: false,
   
   // UI State
   showMenu: false,
 
   // --- ACTIONS ---
-  
-  toggleMenu: () => set(state => ({ showMenu: !state.showMenu })),
-
-  // Initialize the graph from JSON
   setGraph: (graphData) => {
-    console.log("[Store] Graph Loaded:", graphData.nodes?.length, "nodes,", graphData.edges?.length, "edges");
+    if (!graphData) return;
     set({ 
-      nodes: graphData.nodes || [],
-      edges: graphData.edges || []
+      nodes: Array.isArray(graphData.nodes) ? graphData.nodes : [],
+      edges: Array.isArray(graphData.edges) ? graphData.edges : []
     });
   },
 
-  // Set the starting point (e.g., random or specific ID)
   setStartNode: (id) => {
     console.log("[Store] Starting at:", id);
-    set((state) => {
-        const newVisited = new Set(state.visitedNodes);
-        newVisited.add(id);
-        return { 
-            currentNodeId: id, 
-            visitedNodes: newVisited 
-        };
+    const firstCluster = { id, worldPos: [0, 0, 0] };
+    set({ activeClusters: [firstCluster], currentNodeId: id });
+    get().buildNextSegment();
+  },
+
+  setCurrentShardCount: (count) => set({ currentShardCount: count }),
+
+  // Build the next step in the infinite void
+  buildNextSegment: () => {
+    const { nodes, edges, activeClusters } = get();
+    if (activeClusters.length === 0) return;
+
+    const current = activeClusters[activeClusters.length - 1];
+    const currentZ = current.worldPos[2];
+    
+    // 1. Pick next node (Stochastic)
+    const candidates = edges.filter(e => e.source === current.id);
+    let edge;
+    if (candidates.length > 0) {
+        edge = candidates[Math.floor(Math.random() * candidates.length)];
+    } else {
+        const others = nodes.filter(n => n.id !== current.id);
+        const randomTarget = others[Math.floor(Math.random() * others.length)].id;
+        edge = { target: randomTarget };
+    }
+
+    const nextId = edge.target;
+    const nextNode = nodes.find(n => n.id === nextId);
+    
+    // --- PRECISE ANCHOR ALIGNMENT ---
+    const worldHeight = 10;
+    const imgAspect = (nextNode?.res?.[0] || 1000) / (nextNode?.res?.[1] || 1000);
+    const worldWidth = worldHeight * imgAspect;
+    const FULCRUM_Z = -10.0;
+
+    let nextPos = [0, 0, currentZ - 35.0]; 
+
+    let anchorWorldPos = null;
+
+    if (edge.s_nx !== undefined && edge.t_nx !== undefined) {
+        const z_a = - (edge.s_depth * 50.0 + 5.0);
+        const factor_a = z_a / FULCRUM_Z;
+        anchorWorldPos = new THREE.Vector3(
+            current.worldPos[0] + edge.s_nx * worldWidth * factor_a,
+            current.worldPos[1] + edge.s_ny * worldHeight * factor_a,
+            current.worldPos[2] + z_a
+        );
+
+        const z_next_local = - (edge.t_depth * 50.0 + 5.0);
+        const factor_next = z_next_local / FULCRUM_Z;
+        
+        nextPos = [
+            anchorWorldPos.x - (edge.t_nx * worldWidth * factor_next),
+            anchorWorldPos.y - (edge.t_ny * worldHeight * factor_next),
+            anchorWorldPos.z - z_next_local
+        ];
+
+        // Update the current cluster's exit anchor properly (no mutation)
+        set(state => ({
+            activeClusters: state.activeClusters.map(c => 
+                c.id === current.id ? { ...c, anchorId: edge.source_shard } : c
+            )
+        }));
+    } else {
+        nextPos[0] += (Math.random() - 0.5) * 10;
+        nextPos[1] += (Math.random() - 0.5) * 10;
+    }
+
+    // --- CINEMATIC TRANSFORMATION BUDGET (35°) ---
+    const TOTAL_BUDGET = 35.0; // Degrees
+    const randomWeights = [Math.random(), Math.random(), Math.random(), Math.random()];
+    const W_SUM = randomWeights.reduce((a, b) => a + b, 0);
+    const budget = randomWeights.map(w => (w / W_SUM) * TOTAL_BUDGET);
+    
+    // Euler Swerve (Degrees to Radians)
+    const rotSway = budget.slice(0, 3).map(d => (d * Math.PI) / 180);
+    // Path Swerve (Lateral displacement in world units)
+    // Approx: 1 unit of swerve at distance 17 is ~3 degrees? Let's scale for impact.
+    const swerveDist = budget[3] * 0.5; 
+
+    const nextCluster = { 
+        id: nextId, 
+        worldPos: nextPos, 
+        anchorId: edge.target_shard,
+        rotSway: rotSway
+    };
+    
+    // 3. Camera Spline through Anchor with Swerve
+    const startPoint = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ);
+    const endPoint = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2]);
+    
+    // Displace anchorWorldPos laterally for the "Path Curve" part of the 35°
+    const midPoint = (anchorWorldPos || new THREE.Vector3(
+        (startPoint.x + endPoint.x) * 0.5,
+        (startPoint.y + endPoint.y) * 0.5,
+        (startPoint.z + endPoint.z) * 0.5
+    )).clone();
+
+    // Apply lateral swerve (Random direction in XY)
+    const swerveAngle = Math.random() * Math.PI * 2;
+    midPoint.x += Math.cos(swerveAngle) * swerveDist;
+    midPoint.y += Math.sin(swerveAngle) * swerveDist;
+
+    set({ 
+        activeClusters: [...activeClusters, nextCluster],
+        currentPath: [startPoint, midPoint, endPoint]
     });
-    // Immediately calculate a next node so we have a target
-    get().calculateNextNode();
+    
+    console.log(`[Store] Pareidolic Bridge Formed: ${current.id} -> ${nextId}`);
   },
 
-  // Calculate the next destination based on the "Stochastic Walker" logic
-  calculateNextNode: () => {
-    // Destructure state including hoveredShard for pareidolia checks
-    const { nodes, edges, currentNodeId, visitedNodes, hoveredShard } = get();
-    
-    if (!currentNodeId || nodes.length === 0) return;
-
-    // 1. Get neighbors of current node
-    // Edges are directed: source -> target
-    const candidates = edges.filter(e => e.source === currentNodeId);
-
-    if (candidates.length === 0) {
-      console.warn("[Store] Dead end reached! Teleporting to random unvisited node.");
-      // Fallback: Pick a random unvisited node
-      const unvisited = nodes.filter(n => !visitedNodes.has(n.id));
-      const target = unvisited.length > 0 
-        ? unvisited[Math.floor(Math.random() * unvisited.length)]
-        : nodes[Math.floor(Math.random() * nodes.length)]; // Reset if all visited
-      set({ nextNodeId: target?.id || null });
-      return;
-    }
-
-    // 2. Filter visited nodes (soft constraint)
-    // We prefer unvisited nodes, but if all neighbors are visited, we revisit.
-    const unvisitedCandidates = candidates.filter(e => !visitedNodes.has(e.target));
-    const pool = unvisitedCandidates.length > 0 ? unvisitedCandidates : candidates;
-
-    // 3. Pareidolia Bias (If user is hovering a specific shard that links to a specific image)
-    if (hoveredShard !== null) {
-        const pareidoliaMatches = pool.filter(e => e.source_shard === hoveredShard);
-        if (pareidoliaMatches.length > 0) {
-            console.log("[Store] Pareidolia Triggered! Shard:", hoveredShard);
-            // Pick the best match among pareidolia edges
-            pareidoliaMatches.sort((a, b) => b.weight - a.weight);
-            const bestMatch = pareidoliaMatches[0];
-            set({ nextNodeId: bestMatch.target });
-            return;
-        }
-    }
-
-    // 4. Weighted Probability Selection
-    // We use the edge weight (similarity) to bias the random selection.
-    // Higher weight = Higher chance.
-    
-    let selectedEdge = null;
-    
-    // Simple Roulette Wheel Selection
-    const totalWeight = pool.reduce((sum, e) => sum + (e.weight || 0.5), 0);
-    let randomValue = Math.random() * totalWeight;
-    
-    for (const edge of pool) {
-        randomValue -= (edge.weight || 0.5);
-        if (randomValue <= 0) {
-            selectedEdge = edge;
-            break;
-        }
-    }
-    
-    // Fallback if rounding errors occurred
-    if (!selectedEdge) selectedEdge = pool[pool.length - 1];
-
-    console.log("[Store] Selected Next Node:", selectedEdge.target, "(Weight:", selectedEdge.weight, ")");
-    set({ nextNodeId: selectedEdge.target });
-  },
-
-  // Update the scroll/flight progress
-  setTransitionProgress: (val) => {
-    set({ transitionProgress: val });
-  },
-
-  // Commit the transition: Next becomes Current, Next is recalculated
   completeTransition: () => {
-    const { nextNodeId, visitedNodes } = get();
-    if (!nextNodeId) return;
+    const { activeClusters } = get();
+    if (activeClusters.length < 2) return;
 
-    console.log("[Store] Transition Complete. Arrived at:", nextNodeId);
-
-    set((state) => {
-        const newVisited = new Set(state.visitedNodes);
-        newVisited.add(nextNodeId);
-        return {
-            currentNodeId: nextNodeId,
-            visitedNodes: newVisited,
-            transitionProgress: 0, // Reset progress for the new segment
-            isTransitioning: false
-        };
+    const newActive = activeClusters.slice(-2); 
+    const nextNodeId = newActive[newActive.length - 1].id;
+    
+    set({ 
+        activeClusters: newActive,
+        currentNodeId: nextNodeId,
+        transitionProgress: 0,
+        isTransitioning: false
     });
 
-    // Immediately plan the *next* step from the new current node
-    get().calculateNextNode();
+    get().buildNextSegment();
   },
-  
-  setHoveredShard: (shardId) => set({ hoveredShard: shardId }),
 
+  setTransitionProgress: (val) => set({ transitionProgress: val, isTransitioning: val > 0.01 && val < 0.99 }),
+  toggleMenu: () => set(state => ({ showMenu: !state.showMenu })),
 }));
 
 export { useStore };

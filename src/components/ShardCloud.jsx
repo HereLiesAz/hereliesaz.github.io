@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import '../shaders/ShardMaterial'; // Register shader
 
-export default function ShardCloud({ id, position, rotation, isCurrent = false }) {
+export default function ShardCloud({ id, position, rotation, isCurrent = false, anchorId }) {
   const meshRef = useRef();
   const materialRef = useRef();
   
@@ -13,35 +13,48 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
   
   const [shardData, setShardData] = useState(null);
   const [textureUrl, setTextureUrl] = useState(null);
-  const [resolution, setResolution] = useState([1000, 1000]); // Default fallback
+  const [resolution, setResolution] = useState([1000, 1000]); 
 
-  // 1. Load Shard Data & Texture URL
+  const setCurrentShardCount = useStore(state => state.setCurrentShardCount);
+
+  // 1. Load data (same logic)
   useEffect(() => {
     if (!id || !nodes) return;
     const node = nodes.find(n => n.id === id);
     if (!node) return;
+    
+    const fetchId = node.file || `${id}.json`;
+    const fetchUrl = fetchId.startsWith('/') ? fetchId : `/data/${fetchId}`;
 
-    // Load Shard JSON
-    fetch(`/data/${id}.json`)
+    fetch(fetchUrl)
       .then(res => res.json())
       .then(data => {
-        setShardData(data.shards);
+        const shards = data.shards || data.strokes || [];
+        setShardData(shards);
+        if (isCurrent) setCurrentShardCount(shards.length);
         
-        // Update Resolution from metadata
-        if (data.resolution && data.resolution.length === 2) {
-            setResolution(data.resolution);
-        } else if (node.resolution) {
-            setResolution(node.resolution);
+        const meta = data.meta || {};
+        const res = data.resolution || meta.res || meta.resolution;
+        if (res) setResolution(res);
+
+        let fileName = data.file || meta.file || meta.original_file || node.file || `${id}.jpg`;
+        
+        // Safety: ensure we use the correct extension if it's a known mismatch
+        // (In this environment, many .jpg are actually .jpeg or vice versa)
+        if (fileName.endsWith('.json')) {
+            fileName = fileName.replace('.json', '.jpg');
+        }
+        
+        // For this specific broken asset in the graph
+        if (fileName.includes('05605923-7437-4BCA-B38C-74A73763ECA3')) {
+            fileName = fileName.replace('.jpg', '.jpeg');
         }
 
-        // Use the filename provided by curator
-        const fileName = data.file || node.file || `${id}.jpg`;
-        setTextureUrl(`/data/${fileName}`); 
+        setTextureUrl(`/assets/${fileName}`); 
       })
-      .catch(err => console.error("Shard Load Error:", err));
+      .catch(err => console.error(`[ShardCloud] Error node ${id}:`, err));
   }, [id, nodes]);
 
-  // 2. Load Texture
   const texture = useLoader(THREE.TextureLoader, textureUrl || '/placeholder.jpg'); 
 
   // 3. Create Instanced Geometry
@@ -49,93 +62,91 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
     if (!shardData) return { geometry: null, count: 0 };
 
     const count = shardData.length;
-    const geo = new THREE.PlaneGeometry(1, 1); // Base Quad
+    const baseGeo = new THREE.PlaneGeometry(1, 1); 
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = baseGeo.index;
+    geo.attributes.position = baseGeo.attributes.position;
+    geo.attributes.uv = baseGeo.attributes.uv;
     
-    // Attributes
     const aOffset = new Float32Array(count * 3);
-    const aScale = new Float32Array(count);
+    const aScale = new Float32Array(count * 2);
     const aRandom = new Float32Array(count * 3);
+    const aColor = new Float32Array(count * 3); // NEW
+    const aIndex = new Float32Array(count); 
     const aUvOffset = new Float32Array(count * 2);
     const aUvScale = new Float32Array(count * 2);
 
     const [imgW, imgH] = resolution;
-    const aspect = imgW / imgH;
+    const worldWidth = 10 * (imgW / imgH);
+    const FULCRUM_Z = -10.0;
 
-    // Fill attributes
     for (let i = 0; i < count; i++) {
         const shard = shardData[i];
-        
-        // BBox: [x, y, w, h] (pixels)
-        const [x, y, w, h] = shard.bbox;
-        
-        // Center position in pixel space
-        const cx = x + w / 2;
-        const cy = y + h / 2;
+        let nx, ny, depth, sw, sh, r, g, b;
 
-        // Normalize to World Space (-0.5 to 0.5)
-        // We preserve aspect ratio in world space if we want the cloud to match the image shape.
-        // Let's map Y to -0.5..0.5 and X to -0.5*Aspect..0.5*Aspect
-        // BUT standard logic is often just mapping 0..1 to -5..5.
-        // Let's use a standard 10 unit height for the image in world space.
-        
-        const worldHeight = 10;
-        const worldWidth = worldHeight * aspect;
+        if (Array.isArray(shard)) {
+            // Dense Format: [nx, ny, depth, rot, scale, r, g, b]
+            nx = shard[0] / 10.0; 
+            ny = shard[1] / 10.0;
+            depth = shard[2]; 
+            sw = shard[4] * 0.5;
+            sh = shard[4] * 0.5;
+            r = shard[5] / 255;
+            g = shard[6] / 255;
+            b = shard[7] / 255;
+        } else {
+            // Sparse/Object Format
+            let x, y, w, h;
+            if (shard.bbox) [x, y, w, h] = shard.bbox;
+            else { x = shard.x || 0; y = shard.y || 0; w = shard.scale || 1; h = shard.scale || 1; }
+            
+            const col = shard.color || [100, 100, 100];
+            r = col[0] / 255;
+            g = col[1] / 255;
+            b = col[2] / 255;
 
-        const nx = (cx / imgW) - 0.5;
-        const ny = -((cy / imgH) - 0.5); // Flip Y
+            nx = ((x + w / 2) / imgW) - 0.5;
+            ny = -(((y + h / 2) / imgH) - 0.5); 
+            depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
+            sw = w / imgW;
+            sh = h / imgH;
+        }
 
-        aOffset[i * 3] = nx * worldWidth;
-        aOffset[i * 3 + 1] = ny * worldHeight;
-        aOffset[i * 3 + 2] = shard.depth ? shard.depth * 0.1 : 0; 
+        // Apply Forced Perspective Scaling
+        const z = Array.isArray(shard) ? depth : - (depth * 50.0 + 5.0);
+        const factor = z / FULCRUM_Z;
 
-        // Scale (Size of the shard in world units)
-        // Shard width fraction * World Width
-        // But the quad is square (1x1). We need to scale it to match the aspect ratio of the shard?
-        // Wait, if we use a texture atlas or UV mapping on a quad, the quad should match the BBox aspect ratio.
-        // Or we scale X and Y independently? 
-        // InstancedMesh supports non-uniform scale via matrix, but 'aScale' is a single float in our shader.
-        // Our shader: "vec3 pos = position * aScale;" -> Uniform scale.
-        // This implies our shards are always square in 3D? That distorts non-square shards.
-        // We should fix the shader to support vec2 scale or just scale the geometry X/Y.
+        aOffset[i * 3] = nx * worldWidth * factor;
+        aOffset[i * 3 + 1] = ny * 10 * factor;
+        aOffset[i * 3 + 2] = z; 
+
+        aScale[i * 2] = sw * worldWidth * factor;
+        aScale[i * 2 + 1] = sh * 10 * factor;
+
+        aColor[i * 3] = r;
+        aColor[i * 3 + 1] = g;
+        aColor[i * 3 + 2] = b;
         
-        // Ideally: Scale the quad to match the BBox aspect ratio.
-        // Let's assume we want to preserve the shard's shape.
-        // Calculate max dimension to fit or just use width?
-        // Let's approximate: Scale = max(w/imgW * worldW, h/imgH * worldH)
-        // And relying on the texture being mapped correctly?
-        // If we use uniform scale, the quad is square. The texture will be stretched if the shard bbox is not square.
-        // Correct approach: Pass vec2 aScale.
-        
-        // BUT, changing attribute types requires shader update.
-        // For now, let's use the average size or max size.
-        // And accept slight stretching or update the shader. 
-        // Updating shader is better.
-        // Let's update shader to vec2 aScale in next step? 
-        // Or hack it: normalize the geometry uvs?
-        
-        // For this task, sticking to the existing pattern:
-        // Use the width ratio.
-        aScale[i] = (w / imgW) * worldWidth; 
-        
-        // Random
         aRandom[i * 3] = Math.random();
         aRandom[i * 3 + 1] = Math.random();
         aRandom[i * 3 + 2] = Math.random();
 
-        // UVs
-        aUvOffset[i * 2] = x / imgW;
-        aUvOffset[i * 2 + 1] = y / imgH;
-        
-        aUvScale[i * 2] = w / imgW;
-        aUvScale[i * 2 + 1] = h / imgH;
+        aIndex[i] = i; 
+
+        aUvOffset[i * 2] = 0;
+        aUvOffset[i * 2 + 1] = 0;
+        aUvScale[i * 2] = 1;
+        aUvScale[i * 2 + 1] = 1;
     }
 
     geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(aOffset, 3));
-    geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(aScale, 1));
+    geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(aScale, 2));
+    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3)); // NEW
     geo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(aRandom, 3));
+    geo.setAttribute('aIndex', new THREE.InstancedBufferAttribute(aIndex, 1));
     geo.setAttribute('aUvOffset', new THREE.InstancedBufferAttribute(aUvOffset, 2));
     geo.setAttribute('aUvScale', new THREE.InstancedBufferAttribute(aUvScale, 2));
-
+    geo.instanceCount = count; 
     return { geometry: geo, count };
   }, [shardData, resolution]);
 
@@ -144,64 +155,25 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false }
     if (materialRef.current) {
         materialRef.current.uTime = state.clock.elapsedTime;
         
-        // Map Transition Progress to Shader Uniforms
-        if (isCurrent) {
-            // "Current" artwork logic:
-            // 0.0 -> 1.0 (Normal -> Exploded)
-            // It fades out/dissolves as it explodes.
-            
-            // Explosion/Chaos
-            materialRef.current.uProgress = transitionProgress; 
-            
-            // Dissolve Threshold
-            // We want it to start dissolving near the end (e.g., > 0.7)
-            // Remap 0.7-1.0 to 0.0-1.0 for threshold
-            const dissolveStart = 0.7;
-            if (transitionProgress > dissolveStart) {
-                materialRef.current.uThreshold = (transitionProgress - dissolveStart) / (1.0 - dissolveStart);
-            } else {
-                materialRef.current.uThreshold = 0;
-            }
-            
-        } else {
-            // "Next" artwork logic:
-            // It is floating in the distance, already chaotic?
-            // Or does it fly IN?
-            
-            // If Next is "coming in", it goes from Chaos (1.0) to Order (0.0) as we approach?
-            // Actually, AnamorphicCam moves TOWARDS it.
-            // If we are at progress 0, we are far away. Progress 1, we are at it.
-            // The shader chaos depends on uProgress.
-            
-            // Let's say Next is static until we switch?
-            // No, we want it to assemble.
-            
-            // In the Store, transitionProgress is 0..1 relative to Current->Next journey.
-            // So for Next, we want it to go from 1.0 (Chaos) to 0.0 (Order)?
-            // Wait, usually we arrive at Next and it is fully formed (0.0).
-            // So uProgress should be (1.0 - transitionProgress).
-            
-            materialRef.current.uProgress = 1.0 - transitionProgress;
-            materialRef.current.uThreshold = 0; // Fully visible (just scattered)
-        }
+        // Glow peaks at transitionProgress 0.5 (Mid-void)
+        const glowPhase = Math.sin(transitionProgress * Math.PI);
+        materialRef.current.uAnchorGlow = glowPhase * 0.8;
+        materialRef.current.uAnchorId = anchorId !== undefined ? anchorId : -1.0;
     }
   });
 
   if (!geometry) return null;
 
   return (
-    <instancedMesh 
-      ref={meshRef} 
-      args={[geometry, null, count]} 
-      position={position} 
-      rotation={rotation}
-    >
+    <mesh ref={meshRef} geometry={geometry} position={position} rotation={rotation} frustumCulled={false}>
       <shardMaterial 
         ref={materialRef} 
         uTexture={texture} 
         transparent 
         depthWrite={false}
+        uAnchorId={-1.0}
+        uAnchorGlow={0.0}
       />
-    </instancedMesh>
+    </mesh>
   );
 }
