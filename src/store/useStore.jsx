@@ -6,8 +6,11 @@ const useStore = create((set, get) => ({
   nodes: [],           
   edges: [],           
   
-  activeClusters: [],  // [{ id, worldPos, type: 'current' | 'next' | 'prev' }]
+  activeClusters: [],  // [{ id, worldPos, anchorId }]
   currentPath: null,   // THREE.Curve for camera
+  
+  currentNodeId: null, // Legacy support for Overlay
+  currentShardCount: 0,
   
   transitionProgress: 0, 
   isTransitioning: false,
@@ -27,9 +30,11 @@ const useStore = create((set, get) => ({
   setStartNode: (id) => {
     console.log("[Store] Starting at:", id);
     const firstCluster = { id, worldPos: [0, 0, 0] };
-    set({ activeClusters: [firstCluster] });
+    set({ activeClusters: [firstCluster], currentNodeId: id });
     get().buildNextSegment();
   },
+
+  setCurrentShardCount: (count) => set({ currentShardCount: count }),
 
   // Build the next step in the infinite void
   buildNextSegment: () => {
@@ -113,17 +118,16 @@ const useStore = create((set, get) => ({
     const { activeClusters } = get();
     if (activeClusters.length < 2) return;
 
-    // Prune old clusters to keep scene light
-    // Keep last 2-3 to ensure overlap remains visible in perimeter
     const newActive = activeClusters.slice(-2); 
+    const nextNodeId = newActive[newActive.length - 1].id;
     
     set({ 
         activeClusters: newActive,
+        currentNodeId: nextNodeId,
         transitionProgress: 0,
         isTransitioning: false
     });
 
-    // Prepare the next jump
     get().buildNextSegment();
   },
 

@@ -11,6 +11,7 @@ const ShardMaterial = shaderMaterial(
   `
     attribute vec3 aOffset; 
     attribute vec2 aScale;
+    attribute vec3 aColor;
     attribute vec3 aRandom;
     attribute float aIndex;
     attribute vec2 aUvOffset;
@@ -19,12 +20,14 @@ const ShardMaterial = shaderMaterial(
     varying vec2 vUv;
     varying vec2 vLocalUv;
     varying vec3 vRandom;
+    varying vec3 vColor;
     varying float vIndex;
 
     void main() {
         vUv = aUvOffset + (uv * aUvScale);
         vLocalUv = uv; 
         vRandom = aRandom;
+        vColor = aColor;
         vIndex = aIndex;
         
         vec3 pos = position;
@@ -43,6 +46,7 @@ const ShardMaterial = shaderMaterial(
     varying vec2 vUv;
     varying vec2 vLocalUv;
     varying vec3 vRandom;
+    varying vec3 vColor;
     varying float vIndex;
 
     float hash(vec2 p) {
@@ -65,7 +69,8 @@ const ShardMaterial = shaderMaterial(
             glow = uAnchorGlow;
         }
 
-        vec3 coreColor = texColor.rgb * uColor;
+        // Combine instance color with texture and global tint
+        vec3 coreColor = texColor.rgb * vColor * uColor;
         vec3 finalColor = coreColor + (vec3(1.0, 0.9, 0.8) * glow);
         
         gl_FragColor = vec4(finalColor, texColor.a * mask);

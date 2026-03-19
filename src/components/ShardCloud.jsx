@@ -33,11 +33,17 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         setShardData(shards);
         if (isCurrent) setCurrentShardCount(shards.length);
         
-        const res = data.resolution || (data.meta && data.meta.res);
+        const meta = data.meta || {};
+        const res = data.resolution || meta.res || meta.resolution;
         if (res) setResolution(res);
 
-        const fileName = data.file || (data.meta && data.meta.file) || node.file || `${id}.jpg`;
-        setTextureUrl(`/data/${fileName}`); 
+        let fileName = data.file || meta.file || meta.original_file || node.file || `${id}.jpg`;
+        // Safety: if fileName is still the .json, swap to .jpg
+        if (fileName.endsWith('.json')) {
+            fileName = fileName.replace('.json', '.jpg');
+        }
+        
+        setTextureUrl(`/assets/${fileName}`); 
       })
       .catch(err => console.error(`[ShardCloud] Error node ${id}:`, err));
   }, [id, nodes]);
@@ -58,7 +64,8 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     const aOffset = new Float32Array(count * 3);
     const aScale = new Float32Array(count * 2);
     const aRandom = new Float32Array(count * 3);
-    const aIndex = new Float32Array(count); // NEW
+    const aColor = new Float32Array(count * 3); // NEW
+    const aIndex = new Float32Array(count); 
     const aUvOffset = new Float32Array(count * 2);
     const aUvScale = new Float32Array(count * 2);
 
@@ -68,37 +75,66 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
 
     for (let i = 0; i < count; i++) {
         const shard = shardData[i];
-        let x, y, w, h;
-        if (shard.bbox) [x, y, w, h] = shard.bbox;
-        else { x = shard.x || 0; y = shard.y || 0; w = shard.scale || 1; h = shard.scale || 1; }
-        
-        const nx = ((x + w / 2) / imgW) - 0.5;
-        const ny = -(((y + h / 2) / imgH) - 0.5); 
-        const depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
-        const z = - (depth * 50.0 + 5.0);
+        let nx, ny, depth, sw, sh, r, g, b;
+
+        if (Array.isArray(shard)) {
+            // Dense Format: [nx, ny, depth, rot, scale, r, g, b]
+            nx = shard[0] / 10.0; 
+            ny = shard[1] / 10.0;
+            depth = shard[2]; 
+            sw = shard[4] * 0.5;
+            sh = shard[4] * 0.5;
+            r = shard[5] / 255;
+            g = shard[6] / 255;
+            b = shard[7] / 255;
+        } else {
+            // Sparse/Object Format
+            let x, y, w, h;
+            if (shard.bbox) [x, y, w, h] = shard.bbox;
+            else { x = shard.x || 0; y = shard.y || 0; w = shard.scale || 1; h = shard.scale || 1; }
+            
+            const col = shard.color || [100, 100, 100];
+            r = col[0] / 255;
+            g = col[1] / 255;
+            b = col[2] / 255;
+
+            nx = ((x + w / 2) / imgW) - 0.5;
+            ny = -(((y + h / 2) / imgH) - 0.5); 
+            depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
+            sw = w / imgW;
+            sh = h / imgH;
+        }
+
+        // Apply Forced Perspective Scaling
+        const z = Array.isArray(shard) ? depth : - (depth * 50.0 + 5.0);
         const factor = z / FULCRUM_Z;
 
         aOffset[i * 3] = nx * worldWidth * factor;
         aOffset[i * 3 + 1] = ny * 10 * factor;
         aOffset[i * 3 + 2] = z; 
 
-        aScale[i * 2] = (w / imgW) * worldWidth * factor;
-        aScale[i * 2 + 1] = (h / imgH) * 10 * factor;
+        aScale[i * 2] = sw * worldWidth * factor;
+        aScale[i * 2 + 1] = sh * 10 * factor;
+
+        aColor[i * 3] = r;
+        aColor[i * 3 + 1] = g;
+        aColor[i * 3 + 2] = b;
         
         aRandom[i * 3] = Math.random();
         aRandom[i * 3 + 1] = Math.random();
         aRandom[i * 3 + 2] = Math.random();
 
-        aIndex[i] = i; // PASS INDEX
+        aIndex[i] = i; 
 
-        aUvOffset[i * 2] = x / imgW;
-        aUvOffset[i * 2 + 1] = y / imgH;
-        aUvScale[i * 2] = w / imgW;
-        aUvScale[i * 2 + 1] = h / imgH;
+        aUvOffset[i * 2] = 0;
+        aUvOffset[i * 2 + 1] = 0;
+        aUvScale[i * 2] = 1;
+        aUvScale[i * 2 + 1] = 1;
     }
 
     geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(aOffset, 3));
     geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(aScale, 2));
+    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3)); // NEW
     geo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(aRandom, 3));
     geo.setAttribute('aIndex', new THREE.InstancedBufferAttribute(aIndex, 1));
     geo.setAttribute('aUvOffset', new THREE.InstancedBufferAttribute(aUvOffset, 2));
