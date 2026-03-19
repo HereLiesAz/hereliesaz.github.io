@@ -30,7 +30,7 @@ export default function Scene() {
     >
       <color attach="background" args={['#050505']} />
       
-      <PerspectiveCamera makeDefault position={[0, 0, 0]} fov={50} />
+      <PerspectiveCamera makeDefault position={[0, 0, 0]} fov={50} near={0.01} />
       
       <ambientLight intensity={0.5} />
       <pointLight position={[10, 10, 10]} intensity={1} />

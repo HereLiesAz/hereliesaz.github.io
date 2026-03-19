@@ -61,9 +61,10 @@ const ShardMaterial = shaderMaterial(
         float noise = hash(vLocalUv * 5.0 + vRandom.xy * 10.0);
         float mask = smoothstep(0.8, 0.4, dist + noise * 0.3);
         
-        if (mask < 0.1) discard;
+        if (mask < 0.01) discard;
 
         vec4 texColor = texture2D(uTexture, vUv);
+        if (texColor.a < 0.1) discard; 
         
         // --- ANCHOR HIGHLIGHT ---
         float glow = 0.0;

@@ -61,7 +61,13 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const { geometry, count } = useMemo(() => {
     if (!shardData) return { geometry: null, count: 0 };
 
-    const count = shardData.length;
+    // --- DENSITY THROTTLING (Fix for Lag) ---
+    const MAX_SHARDS = 5000;
+    const finalShardData = shardData.length > MAX_SHARDS 
+        ? [...shardData].sort((a,b) => (b.area || 0) - (a.area || 0)).slice(0, MAX_SHARDS)
+        : shardData;
+
+    const count = finalShardData.length;
     const baseGeo = new THREE.PlaneGeometry(1, 1); 
     const geo = new THREE.InstancedBufferGeometry();
     geo.index = baseGeo.index;
@@ -71,7 +77,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     const aOffset = new Float32Array(count * 3);
     const aScale = new Float32Array(count * 2);
     const aRandom = new Float32Array(count * 3);
-    const aColor = new Float32Array(count * 3); // NEW
+    const aColor = new Float32Array(count * 3); 
     const aIndex = new Float32Array(count); 
     const aUvOffset = new Float32Array(count * 2);
     const aUvScale = new Float32Array(count * 2);
@@ -81,11 +87,10 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     const FULCRUM_Z = -10.0;
 
     for (let i = 0; i < count; i++) {
-        const shard = shardData[i];
+        const shard = finalShardData[i];
         let nx, ny, depth, sw, sh, r, g, b;
 
         if (Array.isArray(shard)) {
-            // Dense Format: [nx, ny, depth, rot, scale, r, g, b]
             nx = shard[0] / 10.0; 
             ny = shard[1] / 10.0;
             depth = shard[2]; 
@@ -95,7 +100,6 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
             g = shard[6] / 255;
             b = shard[7] / 255;
         } else {
-            // Sparse/Object Format
             let x, y, w, h;
             if (shard.bbox) [x, y, w, h] = shard.bbox;
             else { x = shard.x || 0; y = shard.y || 0; w = shard.scale || 1; h = shard.scale || 1; }
@@ -112,20 +116,23 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
             sh = h / imgH;
         }
 
-        // Apply Forced Perspective Scaling
-        const z = Array.isArray(shard) ? depth : - (depth * 50.0 + 5.0);
+        // --- MASSIVE Z-SPREAD (DEEP IMMERSION) ---
+        // Map depth 0-1 to a range of -10 to -110 (Strictly in front of camera at 0)
+        const z = - (depth * 100.0 + 10.0); 
         const factor = z / FULCRUM_Z;
 
         aOffset[i * 3] = nx * worldWidth * factor;
         aOffset[i * 3 + 1] = ny * 10 * factor;
         aOffset[i * 3 + 2] = z; 
 
-        aScale[i * 2] = sw * worldWidth * factor;
-        aScale[i * 2 + 1] = sh * 10 * factor;
+        // --- SHARD UPSCALING (Anti-Sand) ---
+        const SIZE_MULTIPLIER = 12.0; 
+        aScale[i * 2] = sw * worldWidth * factor * SIZE_MULTIPLIER;
+        aScale[i * 2 + 1] = sh * 10 * factor * SIZE_MULTIPLIER;
 
-        aColor[i * 3] = r;
-        aColor[i * 3 + 1] = g;
-        aColor[i * 3 + 2] = b;
+        aColor[i * 3] = Math.max(0.01, r || 1.0);
+        aColor[i * 3 + 1] = Math.max(0.01, g || 1.0);
+        aColor[i * 3 + 2] = Math.max(0.01, b || 1.0);
         
         aRandom[i * 3] = Math.random();
         aRandom[i * 3 + 1] = Math.random();
