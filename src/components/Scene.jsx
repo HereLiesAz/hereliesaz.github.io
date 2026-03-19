@@ -44,7 +44,8 @@ export default function Scene() {
                         key={`${cluster.id}-${index}`}
                         id={cluster.id} 
                         position={cluster.worldPos} 
-                        isCurrent={index === 0} 
+                        isCurrent={index === activeClusters.length - 1} 
+                        anchorId={cluster.anchorId}
                     />
                 ))}
             </group>

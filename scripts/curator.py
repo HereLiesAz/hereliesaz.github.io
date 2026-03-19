@@ -153,11 +153,21 @@ class PareidoliaGraphBuilder:
                 best_score = float(sims[best_idx])
                 
                 if best_score > threshold:
+                    s_shard = src_shards[best_idx[0]]
+                    t_shard = tgt_shards[best_idx[1]]
+                    
+                    # Include enough metadata for the viewer to align them
                     edges.append({
                         "source": src_id,
                         "target": tgt_id,
                         "source_shard": int(best_idx[0]),
                         "target_shard": int(best_idx[1]),
+                        "s_nx": s_shard.get('nx', 0),
+                        "s_ny": s_shard.get('ny', 0),
+                        "s_depth": s_shard.get('depth', 0),
+                        "t_nx": t_shard.get('nx', 0),
+                        "t_ny": t_shard.get('ny', 0),
+                        "t_depth": t_shard.get('depth', 0),
                         "weight": best_score
                     })
         

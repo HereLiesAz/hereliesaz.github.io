@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import * as THREE from 'three';
 
 const useStore = create((set, get) => ({
   // --- STATE ---
@@ -36,6 +37,7 @@ const useStore = create((set, get) => ({
     if (activeClusters.length === 0) return;
 
     const current = activeClusters[activeClusters.length - 1];
+    const currentZ = current.worldPos[2];
     
     // 1. Pick next node (Stochastic)
     const candidates = edges.filter(e => e.source === current.id);
@@ -49,45 +51,62 @@ const useStore = create((set, get) => ({
     }
 
     const nextId = edge.target;
-
-    // 2. Position the next cluster
-    const Z_STEP = 35.0; // Slightly larger for more void
-    const currentZ = current.worldPos[2];
-    const nextZ = currentZ - Z_STEP;
+    const nextNode = nodes.find(n => n.id === nextId);
     
-    // More organic "liquid" positioning
-    const nextPos = [
-        (Math.random() - 0.5) * 12,
-        (Math.random() - 0.5) * 8,
-        nextZ
-    ];
+    // --- PRECISE ANCHOR ALIGNMENT ---
+    const worldHeight = 10;
+    const imgAspect = (nextNode?.res?.[0] || 1000) / (nextNode?.res?.[1] || 1000);
+    const worldWidth = worldHeight * imgAspect;
+    const FULCRUM_Z = -10.0;
 
-    const nextCluster = { id: nextId, worldPos: nextPos };
-    
-    // 3. Pareidolia "Swerve"
-    // If we have a source_shard anchor, we swerve the camera towards it mid-way
-    let midPoint = new THREE.Vector3(
-        (current.worldPos[0] + nextPos[0]) * 0.5,
-        (current.worldPos[1] + nextPos[1]) * 0.5,
-        currentZ - Z_STEP * 0.5
-    );
+    let nextPos = [0, 0, currentZ - 35.0]; 
 
-    if (edge.source_shard !== undefined) {
-        // Subtle bias towards the "Discovery" side
-        midPoint.x += (Math.random() - 0.5) * 4;
-        midPoint.y += (Math.random() - 0.5) * 4;
+    if (edge.s_nx !== undefined && edge.t_nx !== undefined) {
+        const z_a = - (edge.s_depth * 50.0 + 5.0);
+        const factor_a = z_a / FULCRUM_Z;
+        const anchorWorldPos = new THREE.Vector3(
+            current.worldPos[0] + edge.s_nx * worldWidth * factor_a,
+            current.worldPos[1] + edge.s_ny * worldHeight * factor_a,
+            current.worldPos[2] + z_a
+        );
+
+        const z_next_local = - (edge.t_depth * 50.0 + 5.0);
+        const factor_next = z_next_local / FULCRUM_Z;
+        
+        nextPos = [
+            anchorWorldPos.x - (edge.t_nx * worldWidth * factor_next),
+            anchorWorldPos.y - (edge.t_ny * worldHeight * factor_next),
+            anchorWorldPos.z - z_next_local
+        ];
+
+        // Mark the current cluster's exit anchor
+        current.anchorId = edge.source_shard;
+    } else {
+        nextPos[0] += (Math.random() - 0.5) * 10;
+        nextPos[1] += (Math.random() - 0.5) * 10;
     }
+
+    const nextCluster = { 
+        id: nextId, 
+        worldPos: nextPos, 
+        anchorId: edge.target_shard 
+    };
+    
+    // 3. Camera Spline through Anchor
+    const startPoint = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ);
+    const endPoint = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2]);
+    const midPoint = new THREE.Vector3(
+        (startPoint.x + endPoint.x) * 0.5,
+        (startPoint.y + endPoint.y) * 0.5,
+        (startPoint.z + endPoint.z) * 0.5
+    );
 
     set({ 
         activeClusters: [...activeClusters, nextCluster],
-        currentPath: [
-            new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ),
-            midPoint,
-            new THREE.Vector3(nextPos[0], nextPos[1], nextZ)
-        ]
+        currentPath: [startPoint, midPoint, endPoint]
     });
     
-    console.log(`[Store] Path Generated: ${current.id} -> ${nextId} via Pareidolia Swerve`);
+    console.log(`[Store] Pareidolic Bridge Formed: ${current.id} -> ${nextId}`);
   },
 
   completeTransition: () => {

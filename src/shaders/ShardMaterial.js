@@ -11,21 +11,25 @@ const ShardMaterial = shaderMaterial(
   `
     attribute vec3 aOffset; 
     attribute vec2 aScale;
+    attribute vec3 aRandom;
+    attribute float aIndex;
     attribute vec2 aUvOffset;
     attribute vec2 aUvScale;
 
     varying vec2 vUv;
+    varying vec2 vLocalUv;
+    varying vec3 vRandom;
+    varying float vIndex;
 
     void main() {
         vUv = aUvOffset + (uv * aUvScale);
+        vLocalUv = uv; 
+        vRandom = aRandom;
+        vIndex = aIndex;
         
-        // 1. Scale the quad to its shard dimensions
         vec3 pos = position;
         pos.xy *= aScale;
-
-        // 2. Position is statically offset in 3D space
         vec3 finalPos = aOffset + pos;
-        
         gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
     }
   `,
@@ -33,15 +37,38 @@ const ShardMaterial = shaderMaterial(
   `
     uniform vec3 uColor;
     uniform sampler2D uTexture;
+    uniform float uAnchorId;
+    uniform float uAnchorGlow;
 
     varying vec2 vUv;
+    varying vec2 vLocalUv;
+    varying vec3 vRandom;
+    varying float vIndex;
+
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
 
     void main() {
+        // --- LIQUID CLIPPING ---
+        float dist = length(vLocalUv - 0.5) * 2.0; 
+        float noise = hash(vLocalUv * 5.0 + vRandom.xy * 10.0);
+        float mask = smoothstep(0.8, 0.4, dist + noise * 0.3);
+        
+        if (mask < 0.1) discard;
+
         vec4 texColor = texture2D(uTexture, vUv);
         
-        // Purely static output
-        vec3 color = texColor.rgb * uColor;
-        gl_FragColor = vec4(color, texColor.a);
+        // --- ANCHOR HIGHLIGHT ---
+        float glow = 0.0;
+        if (abs(vIndex - uAnchorId) < 0.5) {
+            glow = uAnchorGlow;
+        }
+
+        vec3 coreColor = texColor.rgb * uColor;
+        vec3 finalColor = coreColor + (vec3(1.0, 0.9, 0.8) * glow);
+        
+        gl_FragColor = vec4(finalColor, texColor.a * mask);
     }
   `
 );
