@@ -6,6 +6,8 @@ const ShardMaterial = shaderMaterial(
   {
     uColor: new THREE.Color(1, 1, 1),
     uTexture: null,
+    uAnchorId: -1,
+    uAnchorGlow: 0,
   },
   // Vertex Shader
   `

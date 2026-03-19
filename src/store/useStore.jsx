@@ -100,7 +100,7 @@ const useStore = create((set, get) => ({
     // 3. Camera Spline through Anchor
     const startPoint = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ);
     const endPoint = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2]);
-    const midPoint = new THREE.Vector3(
+    const midPoint = anchorWorldPos || new THREE.Vector3(
         (startPoint.x + endPoint.x) * 0.5,
         (startPoint.y + endPoint.y) * 0.5,
         (startPoint.z + endPoint.z) * 0.5
