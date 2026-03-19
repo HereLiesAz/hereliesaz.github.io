@@ -66,10 +66,12 @@ const useStore = create((set, get) => ({
 
     let nextPos = [0, 0, currentZ - 35.0]; 
 
+    let anchorWorldPos = null;
+
     if (edge.s_nx !== undefined && edge.t_nx !== undefined) {
         const z_a = - (edge.s_depth * 50.0 + 5.0);
         const factor_a = z_a / FULCRUM_Z;
-        const anchorWorldPos = new THREE.Vector3(
+        anchorWorldPos = new THREE.Vector3(
             current.worldPos[0] + edge.s_nx * worldWidth * factor_a,
             current.worldPos[1] + edge.s_ny * worldHeight * factor_a,
             current.worldPos[2] + z_a
@@ -84,27 +86,51 @@ const useStore = create((set, get) => ({
             anchorWorldPos.z - z_next_local
         ];
 
-        // Mark the current cluster's exit anchor
-        current.anchorId = edge.source_shard;
+        // Update the current cluster's exit anchor properly (no mutation)
+        set(state => ({
+            activeClusters: state.activeClusters.map(c => 
+                c.id === current.id ? { ...c, anchorId: edge.source_shard } : c
+            )
+        }));
     } else {
         nextPos[0] += (Math.random() - 0.5) * 10;
         nextPos[1] += (Math.random() - 0.5) * 10;
     }
 
+    // --- CINEMATIC TRANSFORMATION BUDGET (35°) ---
+    const TOTAL_BUDGET = 35.0; // Degrees
+    const randomWeights = [Math.random(), Math.random(), Math.random(), Math.random()];
+    const W_SUM = randomWeights.reduce((a, b) => a + b, 0);
+    const budget = randomWeights.map(w => (w / W_SUM) * TOTAL_BUDGET);
+    
+    // Euler Swerve (Degrees to Radians)
+    const rotSway = budget.slice(0, 3).map(d => (d * Math.PI) / 180);
+    // Path Swerve (Lateral displacement in world units)
+    // Approx: 1 unit of swerve at distance 17 is ~3 degrees? Let's scale for impact.
+    const swerveDist = budget[3] * 0.5; 
+
     const nextCluster = { 
         id: nextId, 
         worldPos: nextPos, 
-        anchorId: edge.target_shard 
+        anchorId: edge.target_shard,
+        rotSway: rotSway
     };
     
-    // 3. Camera Spline through Anchor
+    // 3. Camera Spline through Anchor with Swerve
     const startPoint = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ);
     const endPoint = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2]);
-    const midPoint = anchorWorldPos || new THREE.Vector3(
+    
+    // Displace anchorWorldPos laterally for the "Path Curve" part of the 35°
+    const midPoint = (anchorWorldPos || new THREE.Vector3(
         (startPoint.x + endPoint.x) * 0.5,
         (startPoint.y + endPoint.y) * 0.5,
         (startPoint.z + endPoint.z) * 0.5
-    );
+    )).clone();
+
+    // Apply lateral swerve (Random direction in XY)
+    const swerveAngle = Math.random() * Math.PI * 2;
+    midPoint.x += Math.cos(swerveAngle) * swerveDist;
+    midPoint.y += Math.sin(swerveAngle) * swerveDist;
 
     set({ 
         activeClusters: [...activeClusters, nextCluster],

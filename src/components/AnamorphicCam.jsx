@@ -33,9 +33,21 @@ export default function AnamorphicCam() {
     const point = curve.getPointAt(r);
     camera.position.copy(point); 
     
-    // Fixed perspective for anamorphosis
-    camera.rotation.set(0, 0, 0); 
+    // --- CINEMATIC SWAY ---
+    // Apply rotation budget peak at 0.5
+    const activeClusters = useStore.getState().activeClusters;
+    const currentCluster = activeClusters[activeClusters.length - 1];
     
+    if (currentCluster && currentCluster.rotSway) {
+        const swayFactor = Math.sin(r * Math.PI); // 0 -> 1 -> 0
+        camera.rotation.set(
+            currentCluster.rotSway[0] * swayFactor,
+            currentCluster.rotSway[1] * swayFactor,
+            currentCluster.rotSway[2] * swayFactor
+        );
+    } else {
+        camera.rotation.set(0, 0, 0); 
+    }    
     // Commit Transition (Window slide)
     if (r > 0.99 && !isTransitioningRef.current) {
         isTransitioningRef.current = true;

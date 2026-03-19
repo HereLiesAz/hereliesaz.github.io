@@ -38,11 +38,18 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         if (res) setResolution(res);
 
         let fileName = data.file || meta.file || meta.original_file || node.file || `${id}.jpg`;
-        // Safety: if fileName is still the .json, swap to .jpg
+        
+        // Safety: ensure we use the correct extension if it's a known mismatch
+        // (In this environment, many .jpg are actually .jpeg or vice versa)
         if (fileName.endsWith('.json')) {
             fileName = fileName.replace('.json', '.jpg');
         }
         
+        // For this specific broken asset in the graph
+        if (fileName.includes('05605923-7437-4BCA-B38C-74A73763ECA3')) {
+            fileName = fileName.replace('.jpg', '.jpeg');
+        }
+
         setTextureUrl(`/assets/${fileName}`); 
       })
       .catch(err => console.error(`[ShardCloud] Error node ${id}:`, err));

@@ -107,6 +107,12 @@
       "target": "05605923-7437-4BCA-B38C-74A73763ECA3",
       "source_shard": 500,
       "target_shard": 500,
+      "s_nx": 0.1,
+      "s_ny": -0.1,
+      "s_depth": 0.5,
+      "t_nx": -0.1,
+      "t_ny": 0.1,
+      "t_depth": 0.5,
       "weight": 1.0
     },
     {
