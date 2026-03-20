@@ -80,35 +80,47 @@ This gives the shard cloud visual depth and interest without requiring real geom
 
 ### 2.3 Anamorphic Projection (Forward Shards)
 
-For each shard with image-space centroid `(u, v)` and depth `z_world`:
+**Coordinate convention:** baked coordinates assume the sweet spot is at Z = 0. The viewer translates all shards to their actual world Z at load time (see Section 3.2).
+
+**`aspect`** = `img_w / img_h` (source image pixel ratio, not viewport ratio).
+
+For each shard with image-space centroid `(u, v)` (normalised 0–1) and depth `z_world`:
 
 ```
-focal_length f = (image_height / 2) / tan(FOV / 2)   # FOV = 50°
+# Focal length in WORLD UNITS — must match the viewer's PerspectiveCamera FOV
+FOV_rad = 50.0 * PI / 180.0
+f_world = (WORLD_HEIGHT / 2.0) / tan(FOV_rad / 2.0)   # ≈ 10.72 for WORLD_HEIGHT=10
 
-world_x = (u - 0.5) * WORLD_HEIGHT * aspect * (z_world / f)
-world_y = (0.5 - v) * WORLD_HEIGHT * (z_world / f)
-world_z = sweet_spot_Z - z_world                        # in front of sweet spot
+# Unproject to world position at depth z_world from the sweet spot
+world_x = (u - 0.5) * WORLD_HEIGHT * aspect * (z_world / f_world)
+world_y = (0.5 - v) * WORLD_HEIGHT             * (z_world / f_world)
+world_z = -z_world   # negative = in front of sweet spot (camera looks in -Z direction)
 
-scale_x = shard_width_px  * (z_world / f)
-scale_y = shard_height_px * (z_world / f)
+# Scale compensation: shard must cover the same apparent screen area at any depth
+scale_x = (shard_width_px  / img_w) * WORLD_HEIGHT * aspect * (z_world / f_world)
+scale_y = (shard_height_px / img_h) * WORLD_HEIGHT           * (z_world / f_world)
 
 uv_offset = [shard_x_min / img_w, shard_y_min / img_h]
-uv_scale  = [shard_width / img_w, shard_height / img_h]
+uv_scale  = [shard_width_px / img_w, shard_height_px / img_h]
 ```
 
-`WORLD_HEIGHT = 10.0` units. From camera position `(0, 0, sweet_spot_Z)`, every shard appears exactly at its original pixel location. From any other position: chaos.
+`WORLD_HEIGHT = 10.0` units. From a camera at `(0, 0, 0)` looking in the −Z direction, every shard appears exactly at its original pixel location. From any other position: chaos.
 
 ### 2.4 Mirror Shards
 
-For each forward shard at world position `(wx, wy, wz)`:
+In baked coordinates (sweet spot at Z = 0), each forward shard is at `world_z = -z_world` (negative, in front). Its mirror is:
 
 ```
-mirror_wz = sweet_spot_Z + (sweet_spot_Z - wz)   # reflected through sweet spot plane
+mirror_wz = +z_world   # same distance behind the sweet spot (positive Z)
 ```
 
-`(wx, wy)` and scale are identical. The mirror shard is invisible from the sweet spot (it's behind the painting plane) but fills the void on the far side. Together, forward and mirror shards make the cloud continuous from in front of the painting to behind it, eliminating dead zones between paintings.
+`(wx, wy)` and scale are identical to the forward shard. From the sweet spot, mirrors are behind the camera and invisible. From the void between paintings, they fill the far side of the cloud. Together, forward and mirror shards make the field continuous through the sweet spot plane, eliminating dead zones.
+
+**Back-face culling:** mirror shards must render with `side = THREE.DoubleSide` so they are visible when the camera is past the sweet spot looking back.
 
 Both sets are included in the same baked file. Each shard carries an `isMirror` flag (0 or 1) for potential shader differentiation.
+
+**`totalCount`** in the baked JSON = forward count + mirror count (always even; `forwardCount = totalCount / 2`). First `totalCount / 2` entries are forward shards; remaining are mirrors.
 
 ### 2.5 DINOv2 Pareidolia Graph
 
@@ -134,16 +146,18 @@ Both sets are included in the same baked file. Each shard carries an `isMirror` 
 {
   "id": "painting_id",
   "res": [1920, 1080],
-  "count": 2400,
-  "aOffset":   [...],   // flat Float32Array, stride 3 (x, y, z)
-  "aScale":    [...],   // flat Float32Array, stride 2 (sx, sy)
-  "aColor":    [...],   // flat Float32Array, stride 3 (r, g, b, 0–1)
-  "aUvOffset": [...],   // flat Float32Array, stride 2
-  "aUvScale":  [...],   // flat Float32Array, stride 2
-  "isMirror":  [...]    // flat Uint8Array,   stride 1 (0 or 1)
+  "totalCount": 4800,
+  "aOffset":   [...],   // flat Float32, stride 3 (x, y, z) — coords relative to sweet spot at Z=0
+  "aScale":    [...],   // flat Float32, stride 2 (sx, sy)
+  "aColor":    [...],   // flat Float32, stride 3 (r, g, b, range 0–1)
+  "aUvOffset": [...],   // flat Float32, stride 2
+  "aUvScale":  [...],   // flat Float32, stride 2
+  "isMirror":  [...]    // flat Uint8,   stride 1 (0 = forward, 1 = mirror)
 }
 ```
-First `count/2` entries are forward shards; remaining are mirrors. Total instance count = forward + mirror.
+`totalCount` is always even. First `totalCount / 2` entries are forward shards; remaining are mirrors. Baked coordinates assume sweet spot at Z = 0; the viewer offsets to world space at load time.
+
+**Schema note:** this schema is **incompatible** with the existing `graph.json` and `.baked.json` files on disk. All existing data files must be regenerated by the new preprocessor before the new viewer will function.
 
 **`graph.json`:**
 ```json
@@ -169,69 +183,89 @@ First `count/2` entries are forward shards; remaining are mirrors. Total instanc
 
 ### 3.1 Unified Instanced Field
 
-**One `InstancedBufferGeometry` always.** It is partitioned into two slots:
-- Slot 0: current painting's shards (forward + mirror)
-- Slot 1: next painting's shards (forward + mirror)
+**One `InstancedBufferGeometry` always.** Pre-allocated at construction for `MAX_INSTANCES = 12000` total instances (`MAX_PER_SLOT = 6000` per painting — accommodates up to 3000 forward + 3000 mirror shards). The buffer is physically one contiguous allocation; Slot 0 occupies indices `[0, count_0)` and Slot 1 occupies indices `[count_0, count_0 + count_1)`. `geo.instanceCount` is set to `count_0 + count_1` so Three.js draws only the populated range; instances beyond that index are never drawn.
 
-A staging buffer holds the next-next painting's data while it loads. At segment completion:
-- Slot 0 ← Slot 1 data
-- Slot 1 ← staging buffer data
-- Begin fetching next-next
+A CPU-side staging `Float32Array` holds the next-next painting's data while fetching. At segment completion, the rollover sequence is:
+1. Copy current Slot 1 typed arrays into Slot 0 position (CPU-side `TypedArray.set`)
+2. Write staging into Slot 1 position
+3. Update `geo.instanceCount = new_count_0 + new_count_1`
+4. Mark all buffer attributes `needsUpdate = true`
+5. Begin fetching next-next into staging
 
-No mesh swaps. No alpha crossfades. The buffer rolls; shards update in-place.
+No mesh swaps. No alpha crossfades. The buffer rolls; shards update in-place. The CPU copy at rollover is bounded: `MAX_PER_SLOT × (3+2+3+2+2+3+1) × 4 bytes ≈ 960 KB` — acceptable for a one-time-per-segment operation.
 
 ### 3.2 Per-Instance Attributes
 
-Beyond the standard baked attributes, each instance receives two runtime-assigned values when written into the buffer:
+Beyond the baked attributes, each instance receives runtime-assigned values when written into the buffer:
 
-- `aSweetSpotZ` (float): the world Z at which this shard's painting resolves
-- `aRandom` (vec3): deterministic random values derived from shard index + painting ID hash (not `Math.random()` — must be reproducible)
+**`aSweetSpotZ` (float):** the world Z at which this shard's painting resolves. Computed at load time as `-(sessionIndex * SEGMENT_LENGTH)` where `sessionIndex` is the painting's position in the session history. All instances in the same slot receive the same value. After computing `aSweetSpotZ`, the viewer also adds it to each shard's `aOffset.z` to translate from baked local coordinates to world space: `worldOffsetZ = bakedOffsetZ + aSweetSpotZ`.
+
+**`aRandom` (vec3):** deterministic per-shard entropy. Derived via a hash, not `Math.random()`, so the chaos pattern is reproducible:
+```
+# FNV-1a 32-bit hash of the string "paintingId_shardIndex"
+seed_int = fnv1a_32(f"{paintingId}_{shardIndex}")
+# Reduce to float [0,1) — same formula in JS and Python
+seed = (seed_int & 0x7FFFFFFF) / 2147483647.0
+aRandom[0] = fract(sin(seed * 127.1) * 43758.5453)
+aRandom[1] = fract(sin(seed * 311.7) * 43758.5453)
+aRandom[2] = fract(sin(seed * 74.3)  * 43758.5453)
+```
+FNV-1a 32-bit is trivial to implement identically in Python and JS. The `& 0x7FFFFFFF` mask and `/2147483647.0` normalisation must be applied in both environments to guarantee matching float output. The resulting values are in `[0, 1)` and are remapped to `[-1, 1]` in the vertex shader (see Section 3.3) before use as a rotation axis.
 
 ### 3.3 Anamorphic Vertex Shader
 
 ```glsl
-attribute vec3  aOffset;
-attribute vec2  aScale;
-attribute vec3  aColor;
-attribute vec3  aRandom;
-attribute float aSweetSpotZ;
+attribute vec3  aOffset;      // world-space position (baked + sweetSpotZ offset applied by CPU)
+attribute vec2  aScale;       // (sx, sy) in world units
+attribute vec3  aColor;       // (r, g, b) 0–1
+attribute vec3  aRandom;      // deterministic per-shard entropy
+attribute float aSweetSpotZ;  // world Z of this shard's painting sweet spot
 attribute vec2  aUvOffset;
 attribute vec2  aUvScale;
 
 uniform float uCameraZ;
 uniform float uTime;
-uniform float uFocusWindow;   // default: 60.0
+uniform float uFocusWindow;   // default: 60.0 — at midpoint (100 units), progress = 1.0 (fully chaotic, intentional)
 
-varying vec2 vUv;
-varying vec3 vColor;
+varying vec2  vUv;
+varying vec2  vLocalUv;       // unit quad UV [0,1]² — used by fragment for circular mask
+varying vec3  vColor;
 varying float vAlpha;
 
 void main() {
-    vUv   = aUvOffset + (uv * aUvScale);
-    vColor = aColor;
+    vUv      = aUvOffset + (uv * aUvScale);
+    vLocalUv = uv;
+    vColor   = aColor;
 
     float dist     = abs(uCameraZ - aSweetSpotZ);
     float progress = smoothstep(0.0, uFocusWindow, dist);  // 0 = aligned, 1 = chaotic
 
-    // Chaos: drift and tumble proportional to distance from sweet spot
+    // 1. Apply scale to unit quad — BEFORE rotation so aspect ratio is preserved
+    vec3 pos = position;
+    pos.xy *= aScale;
+
+    // 2. Tumble: rotate the scaled shard when chaotic
+    // Remap [0,1] → [-1,1] before normalizing so axis covers the full sphere
+    vec3 axis   = normalize(aRandom * 2.0 - 1.0);
+    float angle = uTime * aRandom.z + progress * 8.0;
+    // Rodrigues rotation of the scaled position
+    vec3 tumbled = mix(dot(axis, pos) * axis, pos, cos(angle))
+                   + cross(axis, pos) * sin(angle);
+
+    pos = mix(pos, tumbled, progress);
+
+    // 3. Chaos drift: world-space displacement proportional to distance from sweet spot
     vec3 chaosOffset = vec3(
         sin(uTime * aRandom.z + aOffset.y) * 25.0,
         cos(uTime * aRandom.z + aOffset.x) * 25.0,
-        sin(uTime * 0.3 + aRandom.x)       * 60.0
+        sin(uTime * 0.3       + aRandom.x) * 60.0
     );
-
-    vec3 axis   = normalize(aRandom);
-    float angle = uTime * aRandom.z + progress * 8.0;
-    // Rodrigues rotation
-    vec3 tumbled = mix(dot(axis, position.xyz) * axis, position.xyz, cos(angle))
-                   + cross(axis, position.xyz) * sin(angle);
-
-    vec3 pos = mix(position.xyz, tumbled, progress);
-    pos.xy *= aScale;
+    // At midpoint between paintings (dist = 100, progress = 1.0), shards from both
+    // paintings intermingle — this is the intended pareidolia zone.
 
     vec3 finalPos = aOffset + pos + (chaosOffset * progress);
 
-    vAlpha = 1.0 - smoothstep(0.0, uFocusWindow * 0.3, dist) * 0.4; // subtle near-fade
+    vAlpha = 1.0 - smoothstep(0.0, uFocusWindow * 0.3, dist) * 0.4;
 
     gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
 }
@@ -239,7 +273,12 @@ void main() {
 
 ### 3.4 Fragment Shader
 
-Texture sample at `vUv`, fall back to `vColor` if texture unavailable. Alpha mask using smooth circle on `vLocalUv`. Final alpha = mask × `vAlpha` (from vertex). Discard if alpha < 0.05.
+Texture sample at `vUv`, fall back to `vColor` if texture unavailable. Alpha mask: smooth circle on `vLocalUv` (unit quad UV — supplied by vertex shader as `vLocalUv = uv`):
+```glsl
+float dist = length(vLocalUv - 0.5) * 2.0;
+float mask = smoothstep(1.0, 0.4, dist);
+```
+Final alpha = `mask × vAlpha`. Discard if alpha < 0.05.
 
 ### 3.5 ShardMaterial Registration
 
@@ -286,14 +325,14 @@ position: 0   // index into history of current painting
 **Going backward** (scroll increases Z back toward previous sweet spot):
 - Decrement `position`, follow stored spline in reverse
 
-**Stochastic walker** (frontier only):
+**Stochastic walker** (frontier only — never applied when retracing history):
 - Filter edges from current node
-- Exclude last 5 visited IDs
+- Exclude the last 5 IDs in the history array (loop suppression, forward-only)
 - Select probabilistically by `weight`
 
 ### 4.4 Pre-loading
 
-At `t = 0.6` on the current segment (where `t = (cameraZ - sweetZ_current) / SEGMENT_LENGTH`):
+At `t = 0.6` on the current segment (where `t = (sweetZ_current - cameraZ) / SEGMENT_LENGTH`, so `t` increases as the camera moves forward into negative Z):
 - Walker picks next-next node (or reads from history if not at frontier)
 - Fetch `{id}.baked.json` into staging buffer
 
