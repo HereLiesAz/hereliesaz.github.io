@@ -6,8 +6,9 @@ const useStore = create((set, get) => ({
   nodes: [],           
   edges: [],           
   
-  activeClusters: [],  // [{ id, worldPos, anchorId }]
-  currentPath: null,   // THREE.Curve for camera
+  activeClusters: [],  // [{ id, worldPos, anchorId, rotSway }]
+  currentPath: null,   // [startPoint, midPoint, endPoint]
+  history: [],         // Array of previous segments: { activeClusters, currentPath }
   
   currentNodeId: null, // Legacy support for Overlay
   currentShardCount: 0,
@@ -143,8 +144,11 @@ const useStore = create((set, get) => ({
   },
 
   completeTransition: () => {
-    const { activeClusters } = get();
+    const { activeClusters, currentPath, history } = get();
     if (activeClusters.length < 2) return;
+
+    // Save the current state to history before "sliding" the window
+    const newHistory = [...history, { activeClusters, currentPath }];
 
     const newActive = activeClusters.slice(-2); 
     const nextNodeId = newActive[newActive.length - 1].id;
@@ -152,11 +156,33 @@ const useStore = create((set, get) => ({
     set({ 
         activeClusters: newActive,
         currentNodeId: nextNodeId,
+        history: newHistory,
         transitionProgress: 0,
         isTransitioning: false
     });
 
     get().buildNextSegment();
+  },
+
+  goBackward: () => {
+    const { history } = get();
+    if (history.length === 0) return false;
+
+    // Pop the last state from history
+    const lastState = history[history.length - 1];
+    const remainingHistory = history.slice(0, -1);
+
+    set({
+        activeClusters: lastState.activeClusters,
+        currentPath: lastState.currentPath,
+        history: remainingHistory,
+        currentNodeId: lastState.activeClusters[lastState.activeClusters.length - 1].id,
+        transitionProgress: 1.0, // Start at the end of the previous segment
+        isTransitioning: false
+    });
+    
+    console.log("[Store] Navigating Backward. History depth:", remainingHistory.length);
+    return true;
   },
 
   setTransitionProgress: (val) => set({ transitionProgress: val, isTransitioning: val > 0.01 && val < 0.99 }),

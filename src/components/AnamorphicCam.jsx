@@ -71,6 +71,25 @@ export default function AnamorphicCam() {
             isTransitioningRef.current = false;
         }, 100);
     }
+    
+    // BACKWARD Traversal
+    if (r < 0.001 && !isTransitioningRef.current) {
+        const historyDepth = useStore.getState().history.length;
+        if (historyDepth > 0) {
+            isTransitioningRef.current = true;
+            
+            // Set scroll to bottom for the previous segment
+            if (scroll.el) {
+                scroll.el.scrollTop = scroll.el.scrollHeight;
+            }
+            
+            setTimeout(() => {
+                const { goBackward } = useStore.getState();
+                goBackward();
+                isTransitioningRef.current = false;
+            }, 100);
+        }
+    }
   });
 
   return null;
