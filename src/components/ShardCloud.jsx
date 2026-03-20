@@ -63,25 +63,15 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
 
   const [texture, setTexture] = useState(null);
 
-  // 1. Image Loader with Decode Guard
+  // 1. Robust Texture Loader
   useEffect(() => {
     if (!textureUrl) return;
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = textureUrl;
-    img.onload = () => {
-        img.decode().then(() => {
-            const tex = new THREE.Texture(img);
-            tex.needsUpdate = true;
-            tex.minFilter = THREE.LinearFilter;
-            setTexture(tex);
-        }).catch(() => {
-            const tex = new THREE.Texture(img);
-            tex.needsUpdate = true;
-            setTexture(tex);
-        });
-    };
-    img.onerror = () => setTexture(null);
+    const loader = new THREE.TextureLoader();
+    loader.load(textureUrl, (tex) => {
+        tex.minFilter = THREE.LinearFilter;
+        tex.generateMipmaps = false; 
+        setTexture(tex);
+    }, undefined, (err) => console.error("Texture Load Error:", err));
   }, [textureUrl]);
 
   // 3. Create Instanced Geometry
@@ -137,7 +127,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
             sw = w / imgW; sh = h / imgH;
         }
 
-        // --- SUBSTANTIVE DEPTH (Ensure no zero-size shards) ---
+        // --- SUBSTANTIVE DEPTH ---
         const z = - (Math.abs(raw_depth) * 50.0 + 5.0); 
         const factor = z / FULCRUM_Z;
 
@@ -146,7 +136,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         aOffset[i * 3 + 2] = z; 
 
         // --- BOLD BLOOM SCALE ---
-        const SIZE_MULTIPLIER = 45.0; 
+        const SIZE_MULTIPLIER = 30.0; 
         aScale[i * 2] = sw * worldWidth * factor * SIZE_MULTIPLIER;
         aScale[i * 2 + 1] = sh * 10 * factor * SIZE_MULTIPLIER;
 
@@ -159,7 +149,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         aRandom[i * 3 + 2] = Math.random();
         aIndex[i] = i; 
 
-        // UV Logic: Map shard to its image region
+        // UV Logic
         aUvOffset[i * 2] = nx + 0.5 - (sw * SIZE_MULTIPLIER / 2.0);
         aUvOffset[i * 2 + 1] = (1.0 - (ny + 0.5)) - (sh * SIZE_MULTIPLIER / 2.0);
         aUvScale[i * 2] = sw * SIZE_MULTIPLIER;
@@ -179,16 +169,19 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     return { geometry: geo, count };
   }, [shardData, resolution]);
 
-  // 4. Update Uniforms (Imperative to avoid re-renders)
+  // Shared color object to avoid GC pressure (60 FPS Fix)
+  const tempColor = useMemo(() => new THREE.Color(), []);
+
+  // 4. Update Uniforms (Imperative)
   useFrame((state) => {
     if (materialRef.current) {
         materialRef.current.uTime = state.clock.elapsedTime;
         const prog = useStore.getState().transitionProgress;
         
-        // --- BLOOM FADE (Fix for Overlapping Clusters) ---
-        // artwork 1 (not isCurrent) fades out, artwork 2 (isCurrent) fades in
+        // --- ALPHA FADE ---
         const alphaFade = isCurrent ? prog : (1.0 - prog);
-        materialRef.current.uColor = new THREE.Color(1, 1, 1).multiplyScalar(alphaFade);
+        tempColor.setRGB(alphaFade, alphaFade, alphaFade);
+        materialRef.current.uColor = tempColor;
         
         const glowPhase = Math.sin(prog * Math.PI);
         materialRef.current.uAnchorGlow = glowPhase * 0.8;
@@ -205,7 +198,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         uTexture={texture} 
         transparent={true}
         depthWrite={true}
-        alphaTest={0.1}
+        alphaTest={0.01}
       />
     </mesh>
   );

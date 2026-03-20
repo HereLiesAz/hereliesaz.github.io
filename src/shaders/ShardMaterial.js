@@ -69,15 +69,15 @@ const ShardMaterial = shaderMaterial(
             vec4 texColor = texture2D(uTexture, vUv);
             
             // Visibility Fallback (Fix for Black Screen)
-            float alpha = texColor.a * finalAlpha * uColor.r; // <--- FADE ALPHA TOO
+            float alpha = texColor.a * finalAlpha * uColor.r; 
             vec3 color = texColor.rgb;
             
-            // If texture is black or failing, use a bright vertex-color glow
-            if (length(color) < 0.05) {
+            // If texture is failing or transparent, use vertex-color as fallback
+            if (length(color) < 0.01 || texColor.a < 0.1) {
                 color = vColor * 1.5; 
             }
 
-            if (alpha < 0.01) discard; // <--- DISCARD INVISIBLE SHARDS (Stop depth occlusion)
+            if (alpha < 0.01) discard; 
             
             // --- ANCHOR HIGHLIGHT ---
             float glow = 0.0;
@@ -85,8 +85,10 @@ const ShardMaterial = shaderMaterial(
                 glow = uAnchorGlow;
             }
 
-            vec3 finalColor = (color * vColor * uColor) + (vec3(1.0, 0.9, 0.8) * glow);
-            gl_FragColor = vec4(finalColor, 1.0); // alphaTest handled the clip, so we output 1.0 or discard
+            // --- FINAL COLOR ---
+            // We multiply by uColor.r to fade out cluster-wide
+            vec3 finalColor = (color * uColor.r) + (vec3(1.0, 0.9, 0.8) * glow);
+            gl_FragColor = vec4(finalColor, 1.0); 
         }
   `
 );
