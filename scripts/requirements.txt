@@ -11,6 +11,3 @@ torch
 torchvision
 imagehash
 opencv-python
-transformers
-scikit-image>=0.22.0
-pytest>=8.0.0
