@@ -74,10 +74,27 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const { geometry, count } = useMemo(() => {
     if (!shardData || !resolution) return { geometry: null, count: 0 };
 
-    const MAX_SHARDS = 800; // <--- PRECISION BLOOM
-    const finalShardData = shardData.length > MAX_SHARDS 
-        ? [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS)
-        : shardData;
+    const MAX_SHARDS = 2500; // <--- UPPING BUDGET FOR RECOGNITION
+    
+    // SMART SAMPLING: Ensure we get both background (large) and ink (contrast)
+    let finalShardData = shardData;
+    if (shardData.length > MAX_SHARDS) {
+        const sortedBySize = [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0));
+        const structural = sortedBySize.slice(0, Math.floor(MAX_SHARDS * 0.4)); // 40% Background
+        
+        // Final 60%: High contrast (distance from dominant color, usually ink)
+        // Dominant color is often the paper yellow [200, 180, 100] approx.
+        // We take shards that are DARKEST as priority for sketches.
+        const remaining = sortedBySize.slice(Math.floor(MAX_SHARDS * 0.4));
+        const DARKNESS_PRIORITY = (s) => {
+            const r = s[5], g = s[6], b = s[7];
+            return -(r + g + b); // Smaller sum = darker = higher priority
+        };
+        const contrast = remaining.sort((a,b) => DARKNESS_PRIORITY(a) - DARKNESS_PRIORITY(b))
+                                  .slice(0, Math.floor(MAX_SHARDS * 0.6));
+        
+        finalShardData = [...structural, ...contrast];
+    }
 
     const count = finalShardData.length;
     const baseGeo = new THREE.PlaneGeometry(1, 1); 
@@ -188,13 +205,13 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     }
   });
 
-  if (!geometry) return null;
+  if (!geometry || !texture) return null;
 
   return (
     <mesh ref={meshRef} geometry={geometry} position={position} rotation={rotation} frustumCulled={true}>
       <shardMaterial 
         ref={materialRef} 
-        uTexture={texture} 
+        uTexture={texture.image ? texture : null} 
         transparent={true}
         depthWrite={true}
         alphaTest={0.01}
