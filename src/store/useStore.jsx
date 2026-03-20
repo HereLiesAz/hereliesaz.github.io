@@ -66,21 +66,21 @@ const useStore = create((set, get) => ({
     const worldWidth = worldHeight * imgAspect;
     const FULCRUM_Z = -10.0;
 
-    let nextPos = [0, 0, currentZ - 35.0]; 
+    let nextPos = [0, 0, currentZ - 100.0]; 
 
     let anchorWorldPos = null;
 
     if (edge.s_nx !== undefined && edge.t_nx !== undefined) {
-        const z_a = - (edge.s_depth * 50.0 + 5.0);
-        const factor_a = z_a / FULCRUM_Z;
+        const z_a = edge.s_depth;
+        const factor_a = Math.abs(z_a) / Math.abs(FULCRUM_Z);
         anchorWorldPos = new THREE.Vector3(
             current.worldPos[0] + edge.s_nx * worldWidth * factor_a,
             current.worldPos[1] + edge.s_ny * worldHeight * factor_a,
             current.worldPos[2] + z_a
         );
 
-        const z_next_local = - (edge.t_depth * 50.0 + 5.0);
-        const factor_next = z_next_local / FULCRUM_Z;
+        const z_next_local = edge.t_depth;
+        const factor_next = Math.abs(z_next_local) / Math.abs(FULCRUM_Z);
         
         nextPos = [
             anchorWorldPos.x - (edge.t_nx * worldWidth * factor_next),

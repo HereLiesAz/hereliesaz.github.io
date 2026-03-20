@@ -35,7 +35,7 @@ export default function Scene() {
       <ambientLight intensity={0.5} />
       <pointLight position={[10, 10, 10]} intensity={1} />
 
-      <ScrollControls pages={6} damping={0.2}>
+      <ScrollControls pages={12} damping={0.2}>
         <AnamorphicCam />
         <Suspense fallback={null}>
             <group>
@@ -44,7 +44,7 @@ export default function Scene() {
                         key={`${cluster.id}-${index}`}
                         id={cluster.id} 
                         position={cluster.worldPos} 
-                        isCurrent={index === activeClusters.length - 1} 
+                        isCurrent={index === 0} 
                         anchorId={cluster.anchorId}
                     />
                 ))}

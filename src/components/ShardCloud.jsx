@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
+import { useScroll as useDreiScroll } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import '../shaders/ShardMaterial'; // Register shader
@@ -52,46 +53,30 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
       });
   }, [id, nodes]);
 
-  // 2. Sync Metadata with Store (Fixed loop)
+  // 2. Sync Metadata with Store
   const lastId = useRef(id);
   useEffect(() => {
     if (isCurrent && shardData && resolution && id === lastId.current) {
-        setCurrentShardCount(Math.min(shardData.length, 100));
+        setCurrentShardCount(Math.min(shardData.length, 1500)); 
         setCurrentResolution(resolution);
     }
   }, [isCurrent, shardData, resolution, id]);
 
-  const [texture, setTexture] = useState(null);
-
-  // 1. Image Loader with Decode Guard
+  // 1. Suspension-based Texture Loader (Fix for WebGL BAD_IMAGE_DATA)
+  const texture = useLoader(THREE.TextureLoader, textureUrl || '/placeholder.jpg');
   useEffect(() => {
-    if (!textureUrl) return;
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = textureUrl;
-    img.onload = () => {
-        img.decode().then(() => {
-            const tex = new THREE.Texture(img);
-            tex.needsUpdate = true;
-            tex.minFilter = THREE.LinearFilter;
-            setTexture(tex);
-        }).catch(() => {
-            const tex = new THREE.Texture(img);
-            tex.needsUpdate = true;
-            setTexture(tex);
-        });
-    };
-    img.onerror = () => setTexture(null);
-  }, [textureUrl]);
+    if (texture) {
+        texture.minFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false; 
+    }
+  }, [texture, textureUrl]);
 
   // 3. Create Instanced Geometry
   const { geometry, count } = useMemo(() => {
     if (!shardData || !resolution) return { geometry: null, count: 0 };
 
-    const MAX_SHARDS = 100; 
-    const finalShardData = shardData.length > MAX_SHARDS 
-        ? [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS)
-        : shardData;
+    const MAX_SHARDS = 1500; 
+    const finalShardData = [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS);
 
     const count = finalShardData.length;
     const baseGeo = new THREE.PlaneGeometry(1, 1); 
@@ -137,16 +122,18 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
             sw = w / imgW; sh = h / imgH;
         }
 
-        // --- SUBSTANTIVE DEPTH (Ensure no zero-size shards) ---
-        const z = - (Math.abs(raw_depth) * 50.0 + 5.0); 
-        const factor = z / FULCRUM_Z;
+        // --- PHYSICAL DEPTH (1:1 Resolve) ---
+        const z = raw_depth; 
+        const factor = Math.abs(z) / Math.abs(FULCRUM_Z);
 
         aOffset[i * 3] = nx * worldWidth * factor;
         aOffset[i * 3 + 1] = ny * 10 * factor;
         aOffset[i * 3 + 2] = z; 
 
-        // --- BOLD BLOOM SCALE ---
-        const SIZE_MULTIPLIER = 45.0; 
+        // --- GRAINS OF ART (1.0x Scale) ---
+        // 1.0x creates a perfect resolve at the fulcrum. 
+        // Anything higher causes massive overdraw and destroys FPS.
+        const SIZE_MULTIPLIER = 1.0; 
         aScale[i * 2] = sw * worldWidth * factor * SIZE_MULTIPLIER;
         aScale[i * 2 + 1] = sh * 10 * factor * SIZE_MULTIPLIER;
 
@@ -159,7 +146,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         aRandom[i * 3 + 2] = Math.random();
         aIndex[i] = i; 
 
-        // UV Logic: Map shard to its image region
+        // UV Logic
         aUvOffset[i * 2] = nx + 0.5 - (sw * SIZE_MULTIPLIER / 2.0);
         aUvOffset[i * 2 + 1] = (1.0 - (ny + 0.5)) - (sh * SIZE_MULTIPLIER / 2.0);
         aUvScale[i * 2] = sw * SIZE_MULTIPLIER;
@@ -179,33 +166,43 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     return { geometry: geo, count };
   }, [shardData, resolution]);
 
-  // 4. Update Uniforms (Imperative to avoid re-renders)
+  // Shared color object to avoid GC pressure (60 FPS Fix)
+  const tempColor = useMemo(() => new THREE.Color(), []);
+
+  const scroll = useDreiScroll();
+
+  // 4. Update Uniforms (Direct Read)
   useFrame((state) => {
     if (materialRef.current) {
         materialRef.current.uTime = state.clock.elapsedTime;
-        const prog = useStore.getState().transitionProgress;
         
-        // --- BLOOM FADE (Fix for Overlapping Clusters) ---
-        // artwork 1 (not isCurrent) fades out, artwork 2 (isCurrent) fades in
-        const alphaFade = isCurrent ? prog : (1.0 - prog);
-        materialRef.current.uColor = new THREE.Color(1, 1, 1).multiplyScalar(alphaFade);
+        // --- PERFORMANCE FIX: Read scroll directly instead of store ---
+        const r = scroll.offset;
         
-        const glowPhase = Math.sin(prog * Math.PI);
+        // Art 1 (Source) is at offset 0, fades OUT to next.
+        // Art 2 (Target) is at offset 1 (next), fades IN.
+        const alphaFade = isCurrent ? (1.0 - r) : r;
+        
+        tempColor.setRGB(alphaFade, alphaFade, alphaFade);
+        materialRef.current.uColor = tempColor;
+        
+        const glowPhase = Math.sin(r * Math.PI);
         materialRef.current.uAnchorGlow = glowPhase * 0.8;
         materialRef.current.uAnchorId = anchorId !== undefined ? Number(anchorId) : -1.0;
     }
   });
 
-  if (!geometry) return null;
+  if (!geometry || !texture) return null;
 
   return (
     <mesh ref={meshRef} geometry={geometry} position={position} rotation={rotation} frustumCulled={true}>
       <shardMaterial 
         ref={materialRef} 
         uTexture={texture} 
+        uHasTexture={(texture?.image && texture.image.width > 0) ? 1.0 : 0.0}
         transparent={true}
         depthWrite={true}
-        alphaTest={0.1}
+        alphaTest={0.01}
       />
     </mesh>
   );
