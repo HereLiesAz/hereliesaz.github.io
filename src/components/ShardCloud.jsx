@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { useFrame, useLoader } from '@react-three/fiber';
+import { useFrame, useLoader, useScroll } from '@react-three/fiber';
+import { useScroll as useDreiScroll } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import '../shaders/ShardMaterial'; // Register shader
@@ -56,7 +57,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const lastId = useRef(id);
   useEffect(() => {
     if (isCurrent && shardData && resolution && id === lastId.current) {
-        setCurrentShardCount(Math.min(shardData.length, 1200)); 
+        setCurrentShardCount(Math.min(shardData.length, 1500)); 
         setCurrentResolution(resolution);
     }
   }, [isCurrent, shardData, resolution, id]);
@@ -74,7 +75,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const { geometry, count } = useMemo(() => {
     if (!shardData || !resolution) return { geometry: null, count: 0 };
 
-    const MAX_SHARDS = 1200; 
+    const MAX_SHARDS = 1500; 
     const finalShardData = [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS);
 
     const count = finalShardData.length;
@@ -121,8 +122,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
             sw = w / imgW; sh = h / imgH;
         }
 
-        // --- PHYSICAL DEPTH RESTORATION ---
-        // Use raw JSON depth (-40 to -50 approx). 
+        // --- PHYSICAL DEPTH (1:1 Resolve) ---
         const z = raw_depth; 
         const factor = Math.abs(z) / Math.abs(FULCRUM_Z);
 
@@ -130,8 +130,10 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         aOffset[i * 3 + 1] = ny * 10 * factor;
         aOffset[i * 3 + 2] = z; 
 
-        // --- BOLD RESOLVE (4.0x Scale) ---
-        const SIZE_MULTIPLIER = 4.0; 
+        // --- GRAINS OF ART (1.0x Scale) ---
+        // 1.0x creates a perfect resolve at the fulcrum. 
+        // Anything higher causes massive overdraw and destroys FPS.
+        const SIZE_MULTIPLIER = 1.0; 
         aScale[i * 2] = sw * worldWidth * factor * SIZE_MULTIPLIER;
         aScale[i * 2 + 1] = sh * 10 * factor * SIZE_MULTIPLIER;
 
@@ -167,19 +169,19 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   // Shared color object to avoid GC pressure (60 FPS Fix)
   const tempColor = useMemo(() => new THREE.Color(), []);
 
-  // 4. Update Uniforms (Imperative)
+  const scroll = useDreiScroll();
+
+  // 4. Update Uniforms (Direct Read)
   useFrame((state) => {
     if (materialRef.current) {
         materialRef.current.uTime = state.clock.elapsedTime;
-        const prog = useStore.getState().transitionProgress;
         
-        // --- ALPHA FADE (Source->Target) ---
-        const activeClusters = useStore.getState().activeClusters;
-        const isOnlyOne = activeClusters.length === 1;
-        // isCurrent is the OLD artwork (source). It should fade OUT (1.0 -> 0.0)
-        // !isCurrent is the NEW artwork (target). It should fade IN (0.0 -> 1.0)
-        const rawAlpha = isOnlyOne ? 1.0 : (isCurrent ? (1.0 - prog) : prog);
-        const alphaFade = Math.pow(Math.max(0, rawAlpha), 2.0); // Cubic-ish
+        // --- PERFORMANCE FIX: Read scroll directly instead of store ---
+        const r = scroll.offset;
+        
+        // Art 1 (Source) is at offset 0, fades OUT to next.
+        // Art 2 (Target) is at offset 1 (next), fades IN.
+        const alphaFade = isCurrent ? (1.0 - r) : r;
         
         tempColor.setRGB(alphaFade, alphaFade, alphaFade);
         materialRef.current.uColor = tempColor;
@@ -197,7 +199,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
       <shardMaterial 
         ref={materialRef} 
         uTexture={texture} 
-        uHasTexture={texture.image ? 1.0 : 0.0}
+        uHasTexture={(texture?.image && texture.image.width > 0) ? 1.0 : 0.0}
         transparent={true}
         depthWrite={true}
         alphaTest={0.01}

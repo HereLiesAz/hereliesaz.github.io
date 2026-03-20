@@ -27,7 +27,8 @@ export default function AnamorphicCam() {
     if (!curve) return;
 
     const r = scroll.offset;
-    setTransitionProgress(r);
+    // DO NOT set store state here! It triggers global re-renders.
+    // shards will read from scroll directly if needed, or we use a uniform.
     
     // Follow the store-provided spline
     const point = curve.getPointAt(r);
