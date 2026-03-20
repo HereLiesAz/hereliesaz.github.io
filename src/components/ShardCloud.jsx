@@ -56,29 +56,25 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const lastId = useRef(id);
   useEffect(() => {
     if (isCurrent && shardData && resolution && id === lastId.current) {
-        setCurrentShardCount(Math.min(shardData.length, 100));
+        setCurrentShardCount(Math.min(shardData.length, 800)); // <--- INCREASED BUDGET
         setCurrentResolution(resolution);
     }
   }, [isCurrent, shardData, resolution, id]);
 
-  const [texture, setTexture] = useState(null);
-
-  // 1. Robust Texture Loader
+  // 1. Suspension-based Texture Loader (Fix for WebGL BAD_IMAGE_DATA)
+  const texture = useLoader(THREE.TextureLoader, textureUrl || '/placeholder.jpg');
   useEffect(() => {
-    if (!textureUrl) return;
-    const loader = new THREE.TextureLoader();
-    loader.load(textureUrl, (tex) => {
-        tex.minFilter = THREE.LinearFilter;
-        tex.generateMipmaps = false; 
-        setTexture(tex);
-    }, undefined, (err) => console.error("Texture Load Error:", err));
-  }, [textureUrl]);
+    if (texture) {
+        texture.minFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false; 
+    }
+  }, [texture, textureUrl]);
 
   // 3. Create Instanced Geometry
   const { geometry, count } = useMemo(() => {
     if (!shardData || !resolution) return { geometry: null, count: 0 };
 
-    const MAX_SHARDS = 100; 
+    const MAX_SHARDS = 800; // <--- PRECISION BLOOM
     const finalShardData = shardData.length > MAX_SHARDS 
         ? [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS)
         : shardData;
@@ -178,10 +174,10 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         materialRef.current.uTime = state.clock.elapsedTime;
         const prog = useStore.getState().transitionProgress;
         
-        // --- ALPHA FADE ---
+        // --- ALPHA FADE (Cubic reveal for snappiness) ---
         const activeClusters = useStore.getState().activeClusters;
         const isOnlyOne = activeClusters.length === 1;
-        const alphaFade = isOnlyOne ? 1.0 : (isCurrent ? prog : (1.0 - prog));
+        const alphaFade = isOnlyOne ? 1.0 : (isCurrent ? Math.pow(prog, 3.0) : Math.pow(1.0 - prog, 3.0));
         
         tempColor.setRGB(alphaFade, alphaFade, alphaFade);
         materialRef.current.uColor = tempColor;
