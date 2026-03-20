@@ -11,6 +11,7 @@ const useStore = create((set, get) => ({
   
   currentNodeId: null, // Legacy support for Overlay
   currentShardCount: 0,
+  currentResolution: [1000, 1000],
   
   transitionProgress: 0, 
   isTransitioning: false,
@@ -34,6 +35,7 @@ const useStore = create((set, get) => ({
     get().buildNextSegment();
   },
 
+  setCurrentResolution: (res) => set({ currentResolution: res }),
   setCurrentShardCount: (count) => set({ currentShardCount: count }),
 
   // Build the next step in the infinite void
@@ -103,8 +105,8 @@ const useStore = create((set, get) => ({
     const W_SUM = randomWeights.reduce((a, b) => a + b, 0);
     const budget = randomWeights.map(w => (w / W_SUM) * TOTAL_BUDGET);
     
-    // Euler Swerve (Degrees to Radians)
-    const rotSway = budget.slice(0, 3).map(d => (d * Math.PI) / 180);
+    // Euler Swerve (Store in Degrees for unified verification)
+    const rotSway = budget.slice(0, 3);
     // Path Swerve (Lateral displacement in world units)
     // Approx: 1 unit of swerve at distance 17 is ~3 degrees? Let's scale for impact.
     const swerveDist = budget[3] * 0.5; 

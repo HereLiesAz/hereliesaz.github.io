@@ -6,8 +6,9 @@ const ShardMaterial = shaderMaterial(
   {
     uColor: new THREE.Color(1, 1, 1),
     uTexture: null,
-    uAnchorId: -1,
-    uAnchorGlow: 0,
+    uAnchorId: -1.0,
+    uAnchorGlow: 0.0,
+    uTime: 0.0,
   },
   // Vertex Shader
   `
@@ -44,6 +45,7 @@ const ShardMaterial = shaderMaterial(
     uniform sampler2D uTexture;
     uniform float uAnchorId;
     uniform float uAnchorGlow;
+    uniform float uTime;
 
     varying vec2 vUv;
     varying vec2 vLocalUv;
@@ -56,15 +58,28 @@ const ShardMaterial = shaderMaterial(
     }
 
     void main() {
-        // --- LIQUID CLIPPING ---
+        // --- LIQUID CLIPPING (Ultra-Clean for AlphaTest) ---
         float dist = length(vLocalUv - 0.5) * 2.0; 
         float noise = hash(vLocalUv * 5.0 + vRandom.xy * 10.0);
         float mask = smoothstep(0.8, 0.4, dist + noise * 0.3);
         
-        if (mask < 0.01) discard;
+        // Use hard mask for AlphaTest performance
+        float finalAlpha = step(0.1, mask);
+        if (finalAlpha < 0.01) discard;
 
         vec4 texColor = texture2D(uTexture, vUv);
-        if (texColor.a < 0.1) discard; 
+        
+        // Visibility Fallback (Fix for Black Screen)
+        float alpha = texColor.a * finalAlpha;
+        vec3 color = texColor.rgb;
+        
+        // If texture is black or failing, use a bright vertex-color glow
+        if (length(color) < 0.05) {
+            color = vColor * 1.5; // Emissive boost
+            alpha = (0.5 + 0.5 * sin(uTime * 3.0 + vRandom.x)) * finalAlpha; 
+        }
+
+        if (alpha < 0.01) discard; 
         
         // --- ANCHOR HIGHLIGHT ---
         float glow = 0.0;
@@ -72,11 +87,8 @@ const ShardMaterial = shaderMaterial(
             glow = uAnchorGlow;
         }
 
-        // Combine instance color with texture and global tint
-        vec3 coreColor = texColor.rgb * vColor * uColor;
-        vec3 finalColor = coreColor + (vec3(1.0, 0.9, 0.8) * glow);
-        
-        gl_FragColor = vec4(finalColor, texColor.a * mask);
+        vec3 finalColor = (color * vColor * uColor) + (vec3(1.0, 0.9, 0.8) * glow);
+        gl_FragColor = vec4(finalColor, alpha);
     }
   `
 );

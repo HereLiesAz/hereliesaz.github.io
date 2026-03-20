@@ -9,13 +9,13 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const materialRef = useRef();
   
   const nodes = useStore(state => state.nodes);
-  const transitionProgress = useStore(state => state.transitionProgress);
   
   const [shardData, setShardData] = useState(null);
   const [textureUrl, setTextureUrl] = useState(null);
   const [resolution, setResolution] = useState([1000, 1000]); 
 
   const setCurrentShardCount = useStore(state => state.setCurrentShardCount);
+  const setCurrentResolution = useStore(state => state.setCurrentResolution);
 
   // 1. Load data (Fixed Pathing)
   useEffect(() => {
@@ -23,7 +23,6 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     const node = nodes.find(n => n.id === id);
     if (!node) return;
     
-    // Always fetch metadata from /data/
     let fetchId = node.file || `${id}.json`;
     if (fetchId.includes('/')) fetchId = fetchId.split('/').pop();
     const fetchUrl = `/data/${fetchId}`;
@@ -32,10 +31,8 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
       .then(res => res.json())
       .then(data => {
         if (!data || !data.shards && !data.strokes) return;
-
         const shards = data.shards || data.strokes || [];
         setShardData(shards);
-        if (isCurrent) setCurrentShardCount(shards.length);
         
         const meta = data.meta || {};
         const res = data.resolution || meta.res || meta.resolution;
@@ -43,9 +40,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
 
         // --- ROBUST IMAGE DISCOVERY ---
         let baseName = node.id || id;
-        let fileName = `${baseName}.jpg`; // Most common
-
-        // For known exceptions:
+        let fileName = `${baseName}.jpg`;
         if (baseName.includes('05605923-7437-4BCA-B38C-74A73763ECA3')) fileName = `${baseName}.jpeg`;
         if (baseName.includes('141BE158-DE05-4670-8C0A-38E39B25A312')) fileName = `${baseName}.jpeg`;
         
@@ -53,19 +48,47 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
       })
       .catch(err => {
         console.error(`[ShardCloud] Error node ${id}:`, err);
-        // Fallback texture path if fetch fails
         setTextureUrl('/placeholder.jpg');
       });
-  }, [id, nodes, isCurrent, setCurrentShardCount]);
+  }, [id, nodes]);
 
-  const texture = useLoader(THREE.TextureLoader, textureUrl || '/placeholder.jpg'); 
+  // 2. Sync Metadata with Store (Fixed loop)
+  const lastId = useRef(id);
+  useEffect(() => {
+    if (isCurrent && shardData && resolution && id === lastId.current) {
+        setCurrentShardCount(Math.min(shardData.length, 100));
+        setCurrentResolution(resolution);
+    }
+  }, [isCurrent, shardData, resolution, id]);
+
+  const [texture, setTexture] = useState(null);
+
+  // 1. Image Loader with Decode Guard
+  useEffect(() => {
+    if (!textureUrl) return;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = textureUrl;
+    img.onload = () => {
+        img.decode().then(() => {
+            const tex = new THREE.Texture(img);
+            tex.needsUpdate = true;
+            tex.minFilter = THREE.LinearFilter;
+            setTexture(tex);
+        }).catch(() => {
+            const tex = new THREE.Texture(img);
+            tex.needsUpdate = true;
+            setTexture(tex);
+        });
+    };
+    img.onerror = () => setTexture(null);
+  }, [textureUrl]);
 
   // 3. Create Instanced Geometry
   const { geometry, count } = useMemo(() => {
-    if (!shardData) return { geometry: null, count: 0 };
+    if (!shardData || !resolution) return { geometry: null, count: 0 };
 
-    // --- DENSITY THROTTLING (Fix for 60fps) ---
-    const MAX_SHARDS = 2000;
+    const MAX_SHARDS = 100; 
     const finalShardData = shardData.length > MAX_SHARDS 
         ? [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS)
         : shardData;
@@ -106,67 +129,68 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
             let x, y, w, h;
             if (shard.bbox) [x, y, w, h] = shard.bbox;
             else { x = shard.x || 0; y = shard.y || 0; w = shard.scale || 1; h = shard.scale || 1; }
-            
             const col = shard.color || [100, 100, 100];
-            r = col[0] / 255;
-            g = col[1] / 255;
-            b = col[2] / 255;
-
+            r = col[0] / 255; g = col[1] / 255; b = col[2] / 255;
             nx = ((x + w / 2) / imgW) - 0.5;
             ny = -(((y + h / 2) / imgH) - 0.5); 
             raw_depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
-            sw = w / imgW;
-            sh = h / imgH;
+            sw = w / imgW; sh = h / imgH;
         }
 
-        // --- MASSIVE Z-SPREAD (FIXED MAPPING) ---
-        // Shard depth is already negative (e.g. -44), we map it to -10 -> -110 range
-        const z = raw_depth * 2.5; 
+        // --- SUBSTANTIVE DEPTH (Ensure no zero-size shards) ---
+        const z = - (Math.abs(raw_depth) * 50.0 + 5.0); 
         const factor = z / FULCRUM_Z;
 
         aOffset[i * 3] = nx * worldWidth * factor;
         aOffset[i * 3 + 1] = ny * 10 * factor;
         aOffset[i * 3 + 2] = z; 
 
-        // --- SHARD UPSCALING (Anti-Sand) ---
-        const SIZE_MULTIPLIER = 12.0; 
+        // --- BOLD BLOOM SCALE ---
+        const SIZE_MULTIPLIER = 45.0; 
         aScale[i * 2] = sw * worldWidth * factor * SIZE_MULTIPLIER;
         aScale[i * 2 + 1] = sh * 10 * factor * SIZE_MULTIPLIER;
 
-        aColor[i * 3] = Math.max(0.01, r || 1.0);
-        aColor[i * 3 + 1] = Math.max(0.01, g || 1.0);
-        aColor[i * 3 + 2] = Math.max(0.01, b || 1.0);
+        aColor[i * 3] = r || 1.0;
+        aColor[i * 3 + 1] = g || 1.0;
+        aColor[i * 3 + 2] = b || 1.0;
         
         aRandom[i * 3] = Math.random();
         aRandom[i * 3 + 1] = Math.random();
         aRandom[i * 3 + 2] = Math.random();
-
         aIndex[i] = i; 
 
-        aUvOffset[i * 2] = 0;
-        aUvOffset[i * 2 + 1] = 0;
-        aUvScale[i * 2] = 1;
-        aUvScale[i * 2 + 1] = 1;
+        // UV Logic: Map shard to its image region
+        aUvOffset[i * 2] = nx + 0.5 - (sw * SIZE_MULTIPLIER / 2.0);
+        aUvOffset[i * 2 + 1] = (1.0 - (ny + 0.5)) - (sh * SIZE_MULTIPLIER / 2.0);
+        aUvScale[i * 2] = sw * SIZE_MULTIPLIER;
+        aUvScale[i * 2 + 1] = sh * SIZE_MULTIPLIER;
     }
 
     geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(aOffset, 3));
     geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(aScale, 2));
-    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3)); // NEW
+    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3)); 
     geo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(aRandom, 3));
     geo.setAttribute('aIndex', new THREE.InstancedBufferAttribute(aIndex, 1));
     geo.setAttribute('aUvOffset', new THREE.InstancedBufferAttribute(aUvOffset, 2));
     geo.setAttribute('aUvScale', new THREE.InstancedBufferAttribute(aUvScale, 2));
     geo.instanceCount = count; 
+    geo.computeBoundingSphere();
+    if (geo.boundingSphere) geo.boundingSphere.radius = 150; 
     return { geometry: geo, count };
   }, [shardData, resolution]);
 
-  // 4. Update Uniforms
+  // 4. Update Uniforms (Imperative to avoid re-renders)
   useFrame((state) => {
     if (materialRef.current) {
         materialRef.current.uTime = state.clock.elapsedTime;
+        const prog = useStore.getState().transitionProgress;
         
-        // Glow peaks at transitionProgress 0.5 (Mid-void)
-        const glowPhase = Math.sin(transitionProgress * Math.PI);
+        // --- BLOOM FADE (Fix for Overlapping Clusters) ---
+        // artwork 1 (not isCurrent) fades out, artwork 2 (isCurrent) fades in
+        const alphaFade = isCurrent ? prog : (1.0 - prog);
+        materialRef.current.uColor = new THREE.Color(1, 1, 1).multiplyScalar(alphaFade);
+        
+        const glowPhase = Math.sin(prog * Math.PI);
         materialRef.current.uAnchorGlow = glowPhase * 0.8;
         materialRef.current.uAnchorId = anchorId !== undefined ? Number(anchorId) : -1.0;
     }
@@ -175,14 +199,13 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   if (!geometry) return null;
 
   return (
-    <mesh ref={meshRef} geometry={geometry} position={position} rotation={rotation} frustumCulled={false}>
+    <mesh ref={meshRef} geometry={geometry} position={position} rotation={rotation} frustumCulled={true}>
       <shardMaterial 
         ref={materialRef} 
         uTexture={texture} 
-        transparent 
-        depthWrite={false}
-        uAnchorId={-1.0}
-        uAnchorGlow={0.0}
+        transparent={true}
+        depthWrite={true}
+        alphaTest={0.1}
       />
     </mesh>
   );

@@ -9,6 +9,7 @@ const Overlay = () => {
   const toggleMenu = useStore(state => state.toggleMenu);
   
   const currentShardCount = useStore(state => state.currentShardCount);
+  const currentResolution = useStore(state => state.currentResolution);
   
   const activeNode = nodes && currentNodeId ? nodes.find(n => n.id === currentNodeId) : null;
   
@@ -126,7 +127,7 @@ const Overlay = () => {
             {activeNode.id.split('~')[0]}
           </h2>
           <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>
-            {currentShardCount} SHARDS // {(activeNode.res || activeNode.resolution || ['?','?']).join('x')}
+            {currentShardCount} SHARDS // {(currentResolution || ['?','?']).join('x')}
           </p>
         </div>
       )}

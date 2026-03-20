@@ -34,20 +34,27 @@ export default function AnamorphicCam() {
     camera.position.copy(point); 
     
     // --- CINEMATIC SWAY ---
-    // Apply rotation budget peak at 0.5
     const activeClusters = useStore.getState().activeClusters;
     const currentCluster = activeClusters[activeClusters.length - 1];
     
     if (currentCluster && currentCluster.rotSway) {
-        const swayFactor = Math.sin(r * Math.PI); // 0 -> 1 -> 0
+        const swayFactor = Math.sin(r * Math.PI); 
         camera.rotation.set(
-            currentCluster.rotSway[0] * swayFactor,
-            currentCluster.rotSway[1] * swayFactor,
-            currentCluster.rotSway[2] * swayFactor
+            currentCluster.rotSway[0] * swayFactor * (Math.PI / 180),
+            currentCluster.rotSway[1] * swayFactor * (Math.PI / 180),
+            currentCluster.rotSway[2] * swayFactor * (Math.PI / 180)
         );
+
+        // Verification Log at 35% mark
+        if (r >= 0.35 && r < 0.40 && !state.hasLogged35) {
+            const total = Math.abs(currentCluster.rotSway[0]) + Math.abs(currentCluster.rotSway[1]) + Math.abs(currentCluster.rotSway[2]);
+            console.log(`[VERIFY] 35% mark. Progress: ${r.toFixed(2)}. Cinematic Transformation: ${total.toFixed(2)} deg`);
+            state.hasLogged35 = true; 
+        }
     } else {
         camera.rotation.set(0, 0, 0); 
-    }    
+    }
+    if (r < 0.1) state.hasLogged35 = false; 
     // Commit Transition (Window slide)
     if (r > 0.99 && !isTransitioningRef.current) {
         isTransitioningRef.current = true;
