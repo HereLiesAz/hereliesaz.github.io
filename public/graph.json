@@ -3,102 +3,92 @@
     {
       "id": "00002IMG_00002_BURST20170227232032",
       "file": "00002IMG_00002_BURST20170227232032.json",
-      "title": "Void Artwork 1"
+      "title": "Void Artwork 1",
+      "image": "00002IMG_00002_BURST20170227232032.jpg"
     },
     {
       "id": "05605923-7437-4BCA-B38C-74A73763ECA3",
       "file": "05605923-7437-4BCA-B38C-74A73763ECA3.json",
-      "title": "Void Artwork 2"
+      "title": "Void Artwork 2",
+      "image": "05605923-7437-4BCA-B38C-74A73763ECA3.jpeg"
     },
     {
       "id": "1000024032 (2)",
       "file": "1000024032 (2).json",
-      "title": "Void Artwork 3"
+      "title": "Void Artwork 3",
+      "image": "1000024032 (2).jpg"
     },
     {
       "id": "10460",
       "file": "10460.json",
-      "title": "Void Artwork 4"
+      "title": "Void Artwork 4",
+      "image": "10460.jpg"
     },
     {
       "id": "10479",
       "file": "10479.json",
-      "title": "Void Artwork 5"
+      "title": "Void Artwork 5",
+      "image": "10479.jpg"
     },
     {
       "id": "10568",
       "file": "10568.json",
-      "title": "Void Artwork 6"
-    },
-    {
-      "id": "123_1-1",
-      "file": "123_1-1.json",
-      "title": "Void Artwork 7"
+      "title": "Void Artwork 6",
+      "image": "10568.jpg"
     },
     {
       "id": "123_1-2",
       "file": "123_1-2.json",
-      "title": "Void Artwork 8"
-    },
-    {
-      "id": "123_1-3",
-      "file": "123_1-3.json",
-      "title": "Void Artwork 9"
-    },
-    {
-      "id": "123_1-4",
-      "file": "123_1-4.json",
-      "title": "Void Artwork 10"
-    },
-    {
-      "id": "123_1-6",
-      "file": "123_1-6.json",
-      "title": "Void Artwork 11"
+      "title": "Void Artwork 8",
+      "image": "123_1-2.jpeg"
     },
     {
       "id": "123_1-7",
       "file": "123_1-7.json",
-      "title": "Void Artwork 12"
-    },
-    {
-      "id": "123_1",
-      "file": "123_1.json",
-      "title": "Void Artwork 13"
+      "title": "Void Artwork 12",
+      "image": "123_1-7.jpeg"
     },
     {
       "id": "141BE158-DE05-4670-8C0A-38E39B25A312",
       "file": "141BE158-DE05-4670-8C0A-38E39B25A312.json",
-      "title": "Void Artwork 14"
+      "title": "Void Artwork 14",
+      "image": "141BE158-DE05-4670-8C0A-38E39B25A312.jpg"
     },
     {
       "id": "154364353_2969900723237699_5011327150779702236_n",
       "file": "154364353_2969900723237699_5011327150779702236_n.json",
-      "title": "Void Artwork 15"
+      "title": "Void Artwork 15",
+      "image": "154364353_2969900723237699_5011327150779702236_n.jpg"
     },
     {
       "id": "1615079659894-c482447e-bd6e-4ca0-9276-4009497c8448",
       "file": "1615079659894-c482447e-bd6e-4ca0-9276-4009497c8448.json",
-      "title": "Void Artwork 16"
+      "title": "Void Artwork 16",
+      "image": "1615079659894-c482447e-bd6e-4ca0-9276-4009497c8448.jpg"
     },
     {
       "id": "1615079948195-981e20f6-5c72-4213-b7c4-bc379e0af3f8_",
       "file": "1615079948195-981e20f6-5c72-4213-b7c4-bc379e0af3f8_.json",
-      "title": "Void Artwork 17"
+      "title": "Void Artwork 17",
+      "image": "1615079948195-981e20f6-5c72-4213-b7c4-bc379e0af3f8_.jpg"
     },
     {
       "id": "1615080039729-eff3c95c-f0af-4951-8f57-ea5f67d9fc44_",
       "file": "1615080039729-eff3c95c-f0af-4951-8f57-ea5f67d9fc44_.json",
-      "title": "Void Artwork 18"
+      "title": "Void Artwork 18",
+      "image": "1615080039729-eff3c95c-f0af-4951-8f57-ea5f67d9fc44_.jpg"
     },
     {
       "id": "1717383357",
       "file": "1717383357.json",
-      "title": "Void Artwork 19"
+      "title": "Void Artwork 19",
+      "image": "1717383357.jpg"
     },
     {
       "id": "1717383358",
       "file": "1717383358.json",
-      "title": "Void Artwork 20"
+      "title": "Void Artwork 20",
+      "image": "1717383358.jpg"
     }
   ],
   "edges": [
@@ -113,140 +103,105 @@
       "t_nx": -0.1,
       "t_ny": 0.1,
       "t_depth": 0.5,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "05605923-7437-4BCA-B38C-74A73763ECA3",
       "target": "1000024032 (2)",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "1000024032 (2)",
       "target": "10460",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "10460",
       "target": "10479",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "10479",
       "target": "10568",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
-    },
-    {
-      "source": "10568",
-      "target": "123_1-1",
-      "source_shard": 500,
-      "target_shard": 500,
-      "weight": 1.0
-    },
-    {
-      "source": "123_1-1",
-      "target": "123_1-2",
-      "source_shard": 500,
-      "target_shard": 500,
-      "weight": 1.0
-    },
-    {
-      "source": "123_1-2",
-      "target": "123_1-3",
-      "source_shard": 500,
-      "target_shard": 500,
-      "weight": 1.0
-    },
-    {
-      "source": "123_1-3",
-      "target": "123_1-4",
-      "source_shard": 500,
-      "target_shard": 500,
-      "weight": 1.0
-    },
-    {
-      "source": "123_1-4",
-      "target": "123_1-6",
-      "source_shard": 500,
-      "target_shard": 500,
-      "weight": 1.0
-    },
-    {
-      "source": "123_1-6",
-      "target": "123_1-7",
-      "source_shard": 500,
-      "target_shard": 500,
-      "weight": 1.0
-    },
-    {
-      "source": "123_1-7",
-      "target": "123_1",
-      "source_shard": 500,
-      "target_shard": 500,
-      "weight": 1.0
-    },
-    {
-      "source": "123_1",
-      "target": "141BE158-DE05-4670-8C0A-38E39B25A312",
-      "source_shard": 500,
-      "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "141BE158-DE05-4670-8C0A-38E39B25A312",
       "target": "154364353_2969900723237699_5011327150779702236_n",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "154364353_2969900723237699_5011327150779702236_n",
       "target": "1615079659894-c482447e-bd6e-4ca0-9276-4009497c8448",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "1615079659894-c482447e-bd6e-4ca0-9276-4009497c8448",
       "target": "1615079948195-981e20f6-5c72-4213-b7c4-bc379e0af3f8_",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "1615079948195-981e20f6-5c72-4213-b7c4-bc379e0af3f8_",
       "target": "1615080039729-eff3c95c-f0af-4951-8f57-ea5f67d9fc44_",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "1615080039729-eff3c95c-f0af-4951-8f57-ea5f67d9fc44_",
       "target": "1717383357",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "1717383357",
       "target": "1717383358",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
     },
     {
       "source": "1717383358",
       "target": "00002IMG_00002_BURST20170227232032",
       "source_shard": 500,
       "target_shard": 500,
-      "weight": 1.0
+      "weight": 1
+    },
+    {
+      "source": "10568",
+      "target": "123_1-2",
+      "source_shard": 500,
+      "target_shard": 500,
+      "weight": 1
+    },
+    {
+      "source": "123_1-2",
+      "target": "123_1-7",
+      "source_shard": 500,
+      "target_shard": 500,
+      "weight": 1
+    },
+    {
+      "source": "123_1-7",
+      "target": "141BE158-DE05-4670-8C0A-38E39B25A312",
+      "source_shard": 500,
+      "target_shard": 500,
+      "weight": 1
     }
   ]
 }

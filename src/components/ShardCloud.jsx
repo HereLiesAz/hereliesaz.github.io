@@ -41,12 +41,15 @@ export default function ShardCloud({ id, position, rotation: rotDegrees, mySegme
         setShardData(data);
         if (data.res) setResolution(data.res);
 
-        // --- IMAGE DISCOVERY ---
-        let baseName = id;
-        let fileName = `${baseName}.jpg`;
-        if (baseName.includes('05605923-7437-4BCA-B38C-74A73763ECA3')) fileName = `${baseName}.jpeg`;
-        if (baseName.includes('141BE158-DE05-4670-8C0A-38E39B25A312')) fileName = `${baseName}.jpeg`;
-        setTextureUrl(`/assets/${fileName}`); 
+        // --- IMAGE DISCOVERY FROM STORE ---
+        const node = nodes.find(n => n.id === id);
+        if (node && node.image) {
+            setTextureUrl(`/assets/${node.image}`);
+        } else {
+            // Fallback for edge cases or newly added nodes not in graph index
+            let fileName = `${id}.jpg`;
+            setTextureUrl(`/assets/${fileName}`); 
+        }
       })
       .catch(err => {
         console.error(`[ShardCloud] Error loading baked data for ${id}:`, err);
