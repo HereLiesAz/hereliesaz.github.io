@@ -173,10 +173,13 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         materialRef.current.uTime = state.clock.elapsedTime;
         const prog = useStore.getState().transitionProgress;
         
-        // --- ALPHA FADE (Cubic reveal for snappiness) ---
+        // --- ALPHA FADE (Source->Target) ---
         const activeClusters = useStore.getState().activeClusters;
         const isOnlyOne = activeClusters.length === 1;
-        const alphaFade = isOnlyOne ? 1.0 : (isCurrent ? Math.pow(prog, 3.0) : Math.pow(1.0 - prog, 3.0));
+        // isCurrent is the OLD artwork (source). It should fade OUT (1.0 -> 0.0)
+        // !isCurrent is the NEW artwork (target). It should fade IN (0.0 -> 1.0)
+        const rawAlpha = isOnlyOne ? 1.0 : (isCurrent ? (1.0 - prog) : prog);
+        const alphaFade = Math.pow(Math.max(0, rawAlpha), 2.0); // Cubic-ish
         
         tempColor.setRGB(alphaFade, alphaFade, alphaFade);
         materialRef.current.uColor = tempColor;
@@ -193,7 +196,8 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     <mesh ref={meshRef} geometry={geometry} position={position} rotation={rotation} frustumCulled={true}>
       <shardMaterial 
         ref={materialRef} 
-        uTexture={texture.image ? texture : null} 
+        uTexture={texture} 
+        uHasTexture={texture.image ? 1.0 : 0.0}
         transparent={true}
         depthWrite={true}
         alphaTest={0.01}

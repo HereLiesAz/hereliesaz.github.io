@@ -41,8 +41,9 @@ const ShardMaterial = shaderMaterial(
   `,
   // Fragment Shader
   `
-    uniform vec3 uColor;
+     uniform vec3 uColor;
     uniform sampler2D uTexture;
+    uniform float uHasTexture; // 1.0 if texture is ready
     uniform float uAnchorId;
     uniform float uAnchorGlow;
     uniform float uTime;
@@ -57,40 +58,33 @@ const ShardMaterial = shaderMaterial(
         return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
     }
 
-        void main() {
-            // --- LIQUID CLIPPING (Ultra-Clean for AlphaTest) ---
-            float dist = length(vLocalUv - 0.5) * 2.0; 
-            float noise = hash(vLocalUv * 5.0 + vRandom.xy * 10.0);
-            float mask = smoothstep(0.8, 0.4, dist + noise * 0.3);
-            
-            float finalAlpha = step(0.1, mask);
-            if (finalAlpha < 0.01) discard;
+    void main() {
+        // --- LIQUID CLIPPING ---
+        float dist = length(vLocalUv - 0.5) * 2.0; 
+        float noise = hash(vLocalUv * 5.0 + vRandom.xy * 10.0);
+        float mask = smoothstep(0.8, 0.3, dist + noise * 0.2);
+        
+        // Final alpha from cluster-wide fade (uColor.r)
+        float alpha = mask * uColor.r; 
+        if (alpha < 0.05) discard;
 
+        vec3 color = vColor;
+        if (uHasTexture > 0.5) {
             vec4 texColor = texture2D(uTexture, vUv);
-            
-            // Visibility Fallback (Fix for Black Screen)
-            float alpha = texColor.a * finalAlpha * uColor.r; 
-            vec3 color = texColor.rgb;
-            
-            // If texture is failing or transparent, use vertex-color as fallback
-            if (length(color) < 0.01 || texColor.a < 0.1) {
-                color = vColor * 1.5; 
-                alpha = finalAlpha * uColor.r; // <--- RESTORE ALPHA FOR FALLBACK
+            if (texColor.a > 0.1) {
+                color = texColor.rgb;
             }
-
-            if (alpha < 0.01) discard; 
-            
-            // --- ANCHOR HIGHLIGHT ---
-            float glow = 0.0;
-            if (abs(vIndex - uAnchorId) < 0.5) {
-                glow = uAnchorGlow;
-            }
-
-            // --- FINAL COLOR ---
-            // We multiply by uColor.r to fade out cluster-wide
-            vec3 finalColor = (color * uColor.r) + (vec3(1.0, 0.9, 0.8) * glow);
-            gl_FragColor = vec4(finalColor, 1.0); 
         }
+
+        // --- ANCHOR HIGHLIGHT ---
+        float glow = 0.0;
+        if (abs(vIndex - uAnchorId) < 0.5) {
+            glow = uAnchorGlow;
+        }
+
+        vec3 finalColor = color + (vec3(1.0, 0.9, 0.8) * glow);
+        gl_FragColor = vec4(finalColor, alpha); 
+    }
   `
 );
 
