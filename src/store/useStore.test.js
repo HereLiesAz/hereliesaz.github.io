@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 // We test the store logic as pure functions extracted from the store.
 // Import helpers directly.
-import { buildHistoryEntry, computeT, pickNextNode } from './storeHelpers.js';
+import { buildHistoryEntry, computeT, pickNextNode, computeAnchorMidpoint } from './storeHelpers.js';
 
 describe('computeT', () => {
   it('returns 0 when camera is at sweet spot', () => {
@@ -67,5 +67,23 @@ describe('buildHistoryEntry', () => {
     expect(entry).toHaveProperty('sweetZ');
     expect(entry).toHaveProperty('splinePoints');
     expect(entry.splinePoints).toHaveLength(3);
+  });
+});
+
+describe('computeAnchorMidpoint', () => {
+  const nodeA = { res: [1000, 1000], sweetZ: 0 };
+  const nodeB = { res: [1000, 1000], sweetZ: -200 };
+
+  it('computes correct midpoint for valid edge data', () => {
+    const edge = { s_uv: [0.5, 0.5], t_uv: [0.5, 0.5] };
+    const result = computeAnchorMidpoint(edge, nodeA, nodeB, 200);
+    expect(result).toEqual([0, 0, -100]);
+  });
+
+  it('handles missing edge data by using default [0.5, 0.5] UVs', () => {
+    const edge = { source: 'A', target: 'B' };
+    const result = computeAnchorMidpoint(edge, nodeA, nodeB, 200);
+    // [0, 0, -100] is the result of ([0.5-0.5]*...) for both x and y
+    expect(result).toEqual([0, 0, -100]);
   });
 });

@@ -54,8 +54,8 @@ export function computeAnchorMidpoint(edge, nodeA, nodeB, segmentLength) {
   const sweetZB = nodeB.sweetZ;
   const midZ    = (sweetZA + sweetZB) / 2.0;
 
-  const [su, sv] = edge.s_uv;
-  const [tu, tv] = edge.t_uv;
+  const [su, sv] = edge.s_uv || [0.5, 0.5];
+  const [tu, tv] = edge.t_uv || [0.5, 0.5];
   const midX = ((su - 0.5) * wh * aspectA + (tu - 0.5) * wh * aspectB) / 2.0;
   const midY = ((0.5 - sv) * wh + (0.5 - tv) * wh) / 2.0;
 

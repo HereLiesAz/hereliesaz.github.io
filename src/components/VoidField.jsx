@@ -25,7 +25,7 @@ function allocateBuffers(maxInstances) {
 function writeBakedDataIntoBuffers(buffers, offset, bakedData, sweetSpotZ, paintingId) {
   const { aOffset: aO, aScale: aS, aColor: aC, aUvOffset: aUvO, aUvScale: aUvS,
           aRandom: aR, aSweetSpotZ: aSZ } = buffers;
-  const tc = bakedData.totalCount;
+  const tc = bakedData.count;
 
   for (let i = 0; i < tc; i++) {
     const bi = offset + i;
@@ -108,7 +108,7 @@ export default function VoidField() {
   const writeSlot = useCallback((slotOffset, bakedData, sweetZ, paintingId, count) => {
     writeBakedDataIntoBuffers(buffers, slotOffset, bakedData, sweetZ, paintingId);
     Object.values(geometry.attributes).forEach(attr => { attr.needsUpdate = true; });
-    geometry.instanceCount = slotOffset + bakedData.totalCount;
+    geometry.instanceCount = slotOffset + bakedData.count;
   }, [buffers, geometry]);
 
   // Initial load: slot 0 = current, slot 1 = next
@@ -125,11 +125,11 @@ export default function VoidField() {
         loadBaked(entry1.id),
       ]);
       writeBakedDataIntoBuffers(buffers, 0,                d0, entry0.sweetZ, entry0.id);
-      writeBakedDataIntoBuffers(buffers, d0.totalCount,    d1, entry1.sweetZ, entry1.id);
-      slot0Count.current = d0.totalCount;
-      slot1Count.current = d1.totalCount;
+      writeBakedDataIntoBuffers(buffers, d0.count,    d1, entry1.sweetZ, entry1.id);
+      slot0Count.current = d0.count;
+      slot1Count.current = d1.count;
       Object.values(geometry.attributes).forEach(a => { a.needsUpdate = true; });
-      geometry.instanceCount = d0.totalCount + d1.totalCount;
+      geometry.instanceCount = d0.count + d1.count;
     })();
   }, [historyPosition >= 0]); // run once on init
 
@@ -150,10 +150,10 @@ export default function VoidField() {
     // Write staging into slot 1
     writeBakedDataIntoBuffers(buffers, c0, data, sweetZ, id);
     slot0Count.current = c0;
-    slot1Count.current = data.totalCount;
+    slot1Count.current = data.count;
 
     Object.values(geometry.attributes).forEach(a => { a.needsUpdate = true; });
-    geometry.instanceCount = c0 + data.totalCount;
+    geometry.instanceCount = c0 + data.count;
     staging.current = { data: null, id: null, sweetZ: null };
   }, [rolloverCount]);
 
