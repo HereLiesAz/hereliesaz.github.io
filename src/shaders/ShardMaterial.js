@@ -75,6 +75,7 @@ const ShardMaterial = shaderMaterial(
             // If texture is failing or transparent, use vertex-color as fallback
             if (length(color) < 0.01 || texColor.a < 0.1) {
                 color = vColor * 1.5; 
+                alpha = finalAlpha * uColor.r; // <--- RESTORE ALPHA FOR FALLBACK
             }
 
             if (alpha < 0.01) discard; 

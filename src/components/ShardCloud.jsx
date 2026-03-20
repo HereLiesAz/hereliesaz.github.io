@@ -135,8 +135,8 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         aOffset[i * 3 + 1] = ny * 10 * factor;
         aOffset[i * 3 + 2] = z; 
 
-        // --- BOLD BLOOM SCALE ---
-        const SIZE_MULTIPLIER = 30.0; 
+        // --- PAINTERLY SCALE (12x Bloom) ---
+        const SIZE_MULTIPLIER = 12.0; 
         aScale[i * 2] = sw * worldWidth * factor * SIZE_MULTIPLIER;
         aScale[i * 2 + 1] = sh * 10 * factor * SIZE_MULTIPLIER;
 
@@ -179,7 +179,10 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         const prog = useStore.getState().transitionProgress;
         
         // --- ALPHA FADE ---
-        const alphaFade = isCurrent ? prog : (1.0 - prog);
+        const activeClusters = useStore.getState().activeClusters;
+        const isOnlyOne = activeClusters.length === 1;
+        const alphaFade = isOnlyOne ? 1.0 : (isCurrent ? prog : (1.0 - prog));
+        
         tempColor.setRGB(alphaFade, alphaFade, alphaFade);
         materialRef.current.uColor = tempColor;
         
