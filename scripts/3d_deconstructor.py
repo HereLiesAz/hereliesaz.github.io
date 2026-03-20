@@ -84,51 +84,40 @@ class ThreeDDeconstructor:
                 cv2.drawContours(m, [cnt], -1, 255, -1)
                 masks.append({'segmentation': m.astype(bool), 'bbox': cv2.boundingRect(cnt)})
 
-        # 2. Haphazard Slicing (Turn features into strips)
+        # 2. Extract Liquidy Slices (Semantic Layers)
         slices = []
-        for m in masks:
-            mask = m['segmentation']
-            bbox = [int(v) for v in m['bbox']]
-            x, y, sw, sh = bbox
+        
+        # Filter and sort masks by size to get major features
+        valid_masks = [m for m in masks if np.sum(m['segmentation']) > (w * h * 0.005)] # At least 0.5% of image
+        valid_masks.sort(key=lambda x: np.sum(x['segmentation']), reverse=True)
+        
+        # LIMIT to top 15 features to keep it "Liquidy" and not "Sharded"
+        for i, m in enumerate(valid_masks[:15]):
+            seg = m['segmentation']
+            rx, ry, rw, rh = m['bbox']
             
-            # Divide each semantic feature into organic, overlapping strips
-            # We use a mix of size-based and random counts
-            num_strips = max(2, min(8, int((sw * sh) / 5000)))
+            # Sample depth for this specific layer
+            mask_depth = depth_map[seg]
+            z_mean = float(np.mean(mask_depth))
+            z_var = float(np.std(mask_depth))
             
-            for _ in range(num_strips):
-                # We want strips that are haphazard but roughly follow the feature
-                # Random sub-region of the feature's bounding box
-                # Ensure they overlap significantly to create the 'ripped' density
-                rw = np.random.randint(sw // 3, sw + 1)
-                rh = np.random.randint(sh // 3, sh + 1)
-                rx = x + np.random.randint(0, max(1, sw - rw + 1))
-                ry = y + np.random.randint(0, max(1, sh - rh + 1))
-                
-                # Clip to image boundaries
-                rx, ry = max(0, rx), max(0, ry)
-                rw = min(w - rx, rw)
-                rh = min(h - ry, rh)
+            # 2. Interleaved Centered Distribution (Mirroring)
+            # Instead of 0..-20, we use -22..+22 to overlap with BOTH neighbors
+            # SEGMENT_LENGTH is 21.44, so 22.0 provides slight overlap
+            z_spread = (z_mean - 0.5) * 44.0 
+            
+            # Random variance for variety
+            r = [random.random() for _ in range(3)]
+            
+            slices.append({
+                "b": [int(rx), int(ry), int(rw), int(rh)], # Bounding box for UV mapping
+                "z": z_spread,      # Centered interleaved Z
+                "zl": z_mean,       # Component mean depth (structural)
+                "zv": z_var,        # Component depth variance
+                "r": r              # Random factors for shader noise
+            })
 
-                if rw < 4 or rh < 4: continue
-
-                # Interleaved Z-offset (-50 to +50 units from painting plane)
-                # This creates the 'continuous void' where paintings intermingle
-                z_offset = (np.random.random() - 0.5) * 100.0
-                
-                # Sample mean depth and variance in this strip for vertex weight
-                strip_depth = depth_map[ry:ry+rh, rx:rx+rw]
-                z_local = float(np.mean(strip_depth))
-                z_var   = float(np.std(strip_depth))
-
-                slices.append({
-                    "b": [rx, ry, rw, rh],
-                    "z": z_offset,
-                    "zl": z_local,
-                    "zv": z_var, # used for displacement amplitude
-                    "r": [np.random.random() for _ in range(3)] # entropy for shader
-                })
-
-        # Minify output
+        # Save refined deconstruction
         out_file = out_dir / f"{path.stem}.baked.json"
         with open(out_file, 'w') as f:
             json.dump({
@@ -149,10 +138,10 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     deconstructor = ThreeDDeconstructor()
-    images = sorted([f for f in in_dir.iterdir() if f.suffix.lower() in ['.jpg', '.png', '.webp']])
+    images = sorted([f for f in in_dir.iterdir() if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.webp']])
     
-    # LIMIT to first 40 for initial high-fidelity test
-    process_list = images[:40]
+    # LIMIT to first 5 for initial high-fidelity test
+    process_list = images[:5]
     
     for img in tqdm(process_list):
         try:

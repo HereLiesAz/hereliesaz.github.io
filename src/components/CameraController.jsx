@@ -53,24 +53,39 @@ export default function CameraController() {
     // Notify store (triggers preload and rollover logic)
     setCameraZ(cameraZ.current);
 
-    // Camera lateral position follows the spline for the current segment
-    const entry = history[historyPos];
-    const next  = history[historyPos + 1];
-    if (entry && next) {
-      const curve  = new THREE.CatmullRomCurve3(
-        entry.splinePoints.map(p => new THREE.Vector3(...p))
+    // 2. Continuous Trajectory (Global history spline)
+    if (history.length > 0) {
+      // Assemble the entire path so far
+      const allPoints = history.flatMap((h, i) => {
+        // Skip the first point of each segment to avoid overlap, except the very first
+        return i === 0 ? h.splinePoints : h.splinePoints.slice(1);
+      });
+      
+      if (allPoints.length < 2) return;
+
+      const curve = new THREE.CatmullRomCurve3(
+        allPoints.map(p => new THREE.Vector3(...p))
       );
-      const sweetZ = entry.sweetZ;
-      const t      = Math.max(0, Math.min(1, (sweetZ - cameraZ.current) / SEGMENT_LENGTH));
-      const pt     = curve.getPointAt(t);
-      camera.position.x = pt.x;
-      camera.position.y = pt.y;
-      camera.position.z = cameraZ.current;  // Z driven directly by scroll
+
+      // Map cameraZ into [0, 1] of the global trajectory
+      const firstZ = allPoints[0][2];
+      const lastZ  = allPoints[allPoints.length - 1][2];
+      const totalDist = firstZ - lastZ;
+      
+      if (totalDist > 0) {
+        const u = Math.max(0, Math.min(1, (firstZ - cameraZ.current) / totalDist));
+        const pt = curve.getPointAt(u);
+        
+        camera.position.x = pt.x;
+        camera.position.y = pt.y;
+        camera.position.z = cameraZ.current;
+      }
     } else {
       camera.position.z = cameraZ.current;
     }
 
-    camera.lookAt(camera.position.x, camera.position.y, cameraZ.current - 1);
+    // Look slightly ahead in Z to maintain the 'Infinite Void' feel
+    camera.lookAt(camera.position.x, camera.position.y, cameraZ.current - 10);
   });
 
   return null;

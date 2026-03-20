@@ -66,6 +66,6 @@ export function computeAnchorMidpoint(edge, nodeA, nodeB, segmentLength) {
   return [midX, midY, midZ];
 }
 
-export function buildHistoryEntry({ id, sweetZ, splineStart, splineMid, splineEnd }) {
-  return { id, sweetZ, splinePoints: [splineStart, splineMid, splineEnd] };
+export function buildHistoryEntry({ id, image, sweetZ, splinePoints }) {
+  return { id, image, sweetZ, splinePoints };
 }

@@ -15,8 +15,8 @@ export default function VoidField() {
   // to ensure a continuous, interleaved cloud.
   // Painting at historyPosition, historyPosition + 1, and historyPosition + 2 (preloading)
   const activeEntries = history.slice(
-    Math.max(0, historyPosition),
-    historyPosition + 3
+    Math.max(0, historyPosition - 1),
+    historyPosition + 4
   );
 
   return (
@@ -25,6 +25,7 @@ export default function VoidField() {
         <ShardCloud 
           key={entry.id + entry.sweetZ} 
           paintingId={entry.id} 
+          imageFile={entry.image}
           sweetZ={entry.sweetZ} 
           active={entry.id === history[historyPosition]?.id}
         />

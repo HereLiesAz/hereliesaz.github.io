@@ -28,7 +28,7 @@ export default function Scene() {
   return (
     <Canvas gl={{ antialias: true }} dpr={[1, 2]}>
       <color attach="background" args={['#050505']} />
-      <PerspectiveCamera makeDefault position={[0, 0, 0]} fov={50} near={0.01} far={2000} />
+      <PerspectiveCamera makeDefault position={[0, 0, 10]} fov={50} near={0.01} far={2000} />
       <CameraController />
       <Suspense fallback={null}>
         <VoidField />

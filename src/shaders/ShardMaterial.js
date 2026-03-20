@@ -33,28 +33,34 @@ const ShardMaterial = shaderMaterial(
   attribute float aZVar;
   attribute vec3 aRandom;
 
+  uniform sampler2D uTexture;
+  uniform float uTime;
+  uniform float uDisplacementScale;
+  uniform float uCameraZ;
+
   void main() {
     vLocalUv = uv;
     vUv = aUvOffsetScale.xy + uv * aUvOffsetScale.zw;
     vRandom = aRandom.x;
     
-    // 1. Initial Position
+    // 1. Initial Position (Instance Matrix includes sweetZ + aZOffset)
     vec4 instancePos = instanceMatrix * vec4(position, 1.0);
     
-    // 2. Vertex Displacement (The 3D Scene)
-    // Sample texture in vertex shader for physical height
+    // 2. Structural Depth (aZLocal)
+    instancePos.z += (aZLocal - 0.5) * 5.0;
+
+    // 3. Liquidy Vertex Displacement (Organic Relief)
     vec4 tex = texture2D(uTexture, vUv);
     float luminance = (tex.r + tex.g + tex.b) / 3.0;
     
-    // Displacement correlates with brightness ('thick paint' highlights)
-    // We also use aZVar to scale the intensity of the 'relief'
-    float spread = (luminance - 0.5) * uDisplacementScale * (0.5 + aZVar * 2.0);
-    instancePos.z += spread;
+    // Smooth, organic displacement for the "thick paint" look
+    float wave = sin(vLocalUv.x * 10.0 + uTime * 0.5 + aRandom.y * 6.28) * 0.05;
+    float relief = (luminance - 0.5) * uDisplacementScale * (0.5 + aZVar * 5.0) + wave;
+    instancePos.z += relief;
 
-    // 3. Atmosphere
+    // 4. Atmosphere
     float dist = abs(uCameraZ - instancePos.z);
-    // Darker as we move away from the specific 'sweet spot' focal range
-    vProgress = clamp(dist / 12.0, 0.0, 1.0);
+    vProgress = clamp(dist / 30.0, 0.0, 1.0);
 
     vWorldPos = instancePos.xyz;
     gl_Position = projectionMatrix * viewMatrix * instancePos;
@@ -71,37 +77,37 @@ const ShardMaterial = shaderMaterial(
   uniform sampler2D uTexture;
   uniform float uTime;
 
-  // More organic noise for torn edges
-  float noise(vec2 p) {
-    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+  // Faster hash-based noise
+  float hash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
   }
 
   void main() {
-    // 1. Texture Sample
     vec4 texColor = texture2D(uTexture, vUv);
     
-    // 2. Torn Edge Mask (Haphazard shape)
-    vec2 centerDelta = vLocalUv - 0.5;
-    float distFromCenter = length(centerDelta);
+    // 2. Optimized Liquidy Mask
+    vec2 edge = vLocalUv - 0.5;
+    float distToCenter = length(edge * 2.1); // Slightly broader
     
-    // Organic 'ripped' edge using multiple octaves of simple noise
-    float n = noise(vLocalUv * 15.0 + vRandom);
-    n += noise(vLocalUv * 30.0 - vRandom) * 0.5;
+    // Single-pass hash noise for wobbly edges
+    float h = hash(vUv * 0.5 + uTime * 0.05);
+    float wobble = h * 0.2;
     
-    float threshold = 0.46 + n * 0.06;
-    float alphaMask = smoothstep(threshold, threshold - 0.05, distFromCenter);
+    // Smoother organic transition
+    float alphaMask = 1.0 - smoothstep(0.75 - wobble, 1.1 + wobble, distToCenter);
     
-    if (alphaMask < 0.1) discard;
+    if (alphaMask < 0.01) discard;
 
-    // 3. Dark Closet Atmosphere
-    // Subliminal highlights to suggest volume
-    float brightness = smoothstep(1.0, 0.1, vProgress);
+    // 3. Dark Closet Atmosphere (Bubble-up Fading)
+    // We want a very soft arrival from the darkness
+    float brightness = pow(1.0 - vProgress, 2.0);
     
-    // Mock specular on 'paint' surface
-    float spec = pow(max(0.0, 1.0 - distFromCenter * 2.5), 12.0) * 0.4 * (1.0 - vProgress);
+    // Subtle wet paint specular
+    float spec = pow(max(0.0, 1.0 - distToCenter), 4.0) * 0.3 * (1.0 - vProgress);
     
     vec3 finalColor = texColor.rgb * brightness + spec;
-    
     gl_FragColor = vec4(finalColor, texColor.a * alphaMask * brightness);
   }
   `

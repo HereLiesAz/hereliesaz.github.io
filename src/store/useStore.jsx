@@ -43,9 +43,8 @@ const useStore = create((set, get) => ({
 
     const sweetZ     = 0;
     const firstEntry = buildHistoryEntry({
-      id: startNode.id, sweetZ,
-      splineStart: [0, 0, 0], splineMid: [0, 0, -SEGMENT_LENGTH / 2],
-      splineEnd:   [0, 0, -SEGMENT_LENGTH],
+      id: startNode.id, image: startNode.image, sweetZ,
+      splinePoints: [[0, 0, 0], [0, 0, -SEGMENT_LENGTH / 2], [0, 0, -SEGMENT_LENGTH]]
     });
 
     // Pick next node with safety
@@ -74,10 +73,8 @@ const useStore = create((set, get) => ({
       : [0, 0, -SEGMENT_LENGTH / 2];
 
     const secondEntry = buildHistoryEntry({
-      id: nextId, sweetZ: nextSweetZ,
-      splineStart: [0, 0, sweetZ],
-      splineMid:   midpoint,
-      splineEnd:   [0, 0, nextSweetZ],
+      id: nextId, image: nextNode.image, sweetZ: nextSweetZ,
+      splinePoints: [[0, 0, sweetZ], midpoint, [0, 0, nextSweetZ]]
     });
 
     set({
@@ -161,10 +158,8 @@ const useStore = create((set, get) => ({
       : [0, 0, currentEntry.sweetZ - SEGMENT_LENGTH / 2];
 
     const nextEntry = buildHistoryEntry({
-      id: pickId, sweetZ: nextSweetZ,
-      splineStart: [0, 0, currentEntry.sweetZ],
-      splineMid:   midpoint,
-      splineEnd:   [0, 0, nextSweetZ],
+      id: pickId, image: nextNode.image, sweetZ: nextSweetZ,
+      splinePoints: [[0, 0, currentEntry.sweetZ], midpoint, [0, 0, nextSweetZ]]
     });
 
     set({ history: [...history, nextEntry], nextPaintingId: pickId });
