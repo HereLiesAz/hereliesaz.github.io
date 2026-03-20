@@ -8,131 +8,122 @@ if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.json') && !f.endsWith('.baked.json'));
 
-console.log(`Baking ${files.length} files...`);
+console.log(`Baking ${files.length} files with Perspective Correction...`);
 
-const MAX_SHARDS = 1500;
-const FULCRUM_Z = -10.0;
+const MAX_TOTAL_SHARDS = 3000; // Total count including mirrored
+const FOV = 50;
 const WORLD_HEIGHT = 10.0;
+// Focal Distance D based on Camera FOV
+const D = (WORLD_HEIGHT / 2) / Math.tan(((FOV / 2) * Math.PI) / 180); // ~10.7232
 
 files.forEach(file => {
     try {
-        const rawData = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
-        const shards = rawData.shards || rawData.strokes || [];
-        if (shards.length === 0) return;
+        const rawPath = path.join(DATA_DIR, file);
+        const rawData = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
+        const strokes = rawData.strokes || rawData.shards || [];
+        if (strokes.length === 0) return;
 
-        const meta = rawData.meta || {};
-        const res = rawData.resolution || meta.res || meta.resolution || [1000, 1000];
-        const [imgW, imgH] = res;
-        const imgAspect = imgW / imgH;
-        const worldWidth = WORLD_HEIGHT * imgAspect;
+        // 1. Determine raw depth range for normalization
+        let minZ = Infinity, maxZ = -Infinity;
+        strokes.forEach(s => {
+            const z = (Array.isArray(s) ? s[2] : (s.z || s.depth || 0));
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+        });
 
-        // Sort by size (index 4) descending
-        const sortedShards = [...shards].sort((a, b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS);
-        const count = sortedShards.length;
+        // 2. Select and sort shards
+        // Half count because we mirror
+        const shardLimit = Math.floor(MAX_TOTAL_SHARDS / 2);
+        const sortedStrokes = [...strokes]
+            .sort((a, b) => {
+                const radA = Array.isArray(a) ? a[4] : (a.scale || 0);
+                const radB = Array.isArray(b) ? b[4] : (b.scale || 0);
+                return radB - radA;
+            })
+            .slice(0, shardLimit);
 
-        const baked = {
-            id: file.replace('.json', ''),
-            res,
-            count: count * 2, // Double for mirroring
-            attributes: {
-                aOffset: new Float32Array(count * 2 * 3),
-                aScale: new Float32Array(count * 2 * 2),
-                aColor: new Float32Array(count * 2 * 3),
-                aUvOffset: new Float32Array(count * 2 * 2),
-                aUvScale: new Float32Array(count * 2 * 2)
-            }
-        };
+        const count = sortedStrokes.length;
+        const outCount = count * 2;
 
-        const SIZE_MULTIPLIER = 1.3; 
+        const aOffset = new Float32Array(outCount * 3);
+        const aScale = new Float32Array(outCount * 2);
+        const aColor = new Float32Array(outCount * 3);
+        const aUvOffset = new Float32Array(outCount * 2);
+        const aUvScale = new Float32Array(outCount * 2);
 
         for (let i = 0; i < count; i++) {
-            const shard = sortedShards[i];
-            let nx, ny, nw, nh, raw_depth, r, g, b;
-            let worldW, worldH;
+            const s = sortedStrokes[i];
+            let rx, ry, rz, radius, cr, cg, cb;
 
-            if (Array.isArray(shard)) {
-                nx = shard[0] / 10.0;
-                ny = -(shard[1] / 10.0);
-                raw_depth = shard[2];
-                worldW = shard[4] * SIZE_MULTIPLIER;
-                worldH = shard[4] * SIZE_MULTIPLIER;
-                nw = shard[4] / 10.0; 
-                nh = shard[4] / 10.0;
-                r = (shard[5] || 255) / 255;
-                g = (shard[6] || 255) / 255;
-                b = (shard[7] || 255) / 255;
+            if (Array.isArray(s)) {
+                [rx, ry, rz, radius, , cr, cg, cb] = s;
+                ry = -ry; // JSON usually has Y-down
             } else {
-                let x, y, w, h;
-                if (shard.bbox) [x, y, w, h] = shard.bbox;
-                else { x = shard.x || 0; y = shard.y || 0; w = shard.scale || 1; h = shard.scale || 1; }
-                const col = shard.color || [255, 255, 255];
-                r = col[0] / 255; g = col[1] / 255; b = col[2] / 255;
-                nx = ((x + w / 2) / imgW) - 0.5;
-                ny = -(((y + h / 2) / imgH) - 0.5);
-                raw_depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
-                nw = w / imgW; 
-                nh = h / imgH;
-                worldW = nw * worldWidth * SIZE_MULTIPLIER;
-                worldH = nh * WORLD_HEIGHT * SIZE_MULTIPLIER;
+                rx = s.x || 0; ry = -(s.y || 0); rz = s.z || s.depth || 0;
+                radius = s.scale || 1.0;
+                [cr, cg, cb] = s.color || [255, 255, 255];
             }
 
-            // Original Shard
-            const z1 = raw_depth;
-            const factor1 = Math.abs(z1) / Math.abs(FULCRUM_Z);
+            // Map raw depth to normalized range [0, D]
+            // We want shallow raw depths near camera (closer to 0)
+            // t = 0 at maxZ (shallow), t = 1 at minZ (deep)
+            let t = (maxZ === minZ) ? 0.5 : (rz - maxZ) / (minZ - maxZ);
+            
+            // Forward depth in space [0, -D]
+            const zF = -t * D;
+            // Mirrored depth in space [-D, -2D]
+            const zM = -2.0 * D + t * D;
 
-            baked.attributes.aOffset[i * 3] = nx * worldWidth * factor1;
-            baked.attributes.aOffset[i * 3 + 1] = ny * WORLD_HEIGHT * factor1;
-            baked.attributes.aOffset[i * 3 + 2] = z1;
+            const writeShard = (groupIndex, worldZ) => {
+                const idx = groupIndex + i;
+                const factor = Math.abs(worldZ) / D;
 
-            baked.attributes.aScale[i * 2] = worldW * factor1;
-            baked.attributes.aScale[i * 2 + 1] = worldH * factor1;
+                // Position with Perspective Invariance
+                aOffset[idx * 3 + 0] = rx * factor;
+                aOffset[idx * 3 + 1] = ry * factor;
+                aOffset[idx * 3 + 2] = worldZ;
 
-            baked.attributes.aColor[i * 3] = r;
-            baked.attributes.aColor[i * 3 + 1] = g;
-            baked.attributes.aColor[i * 3 + 2] = b;
+                // Scale with Perspective Invariance
+                aScale[idx * 2 + 0] = radius * factor;
+                aScale[idx * 2 + 1] = radius * factor;
 
-            baked.attributes.aUvOffset[i * 2] = (nx + 0.5) - (nw / 2.0);
-            baked.attributes.aUvOffset[i * 2 + 1] = (ny + 0.5) - (nh / 2.0);
-            baked.attributes.aUvScale[i * 2] = nw;
-            baked.attributes.aUvScale[i * 2 + 1] = nh;
+                aColor[idx * 3 + 0] = cr / 255;
+                aColor[idx * 3 + 1] = cg / 255;
+                aColor[idx * 3 + 2] = cb / 255;
 
-            // Mirrored Shard (Lobe 2)
-            const idx2 = i + count;
-            const z2 = 2.0 * FULCRUM_Z - raw_depth; // Mirror across the fulcrum
-            const factor2 = Math.abs(z2) / Math.abs(FULCRUM_Z);
+                // UVs assuming raw x,y footprint of [-5, 5]
+                const uw = radius / 10;
+                const uh = radius / 10;
+                const ux = (rx + 5) / 10 - uw / 2;
+                const uy = (ry + 5) / 10 - uh / 2; // Corrected for Y-down in texture?
+                
+                // Texture space is typically Top-Left 0,0 but R3F textures can be flipped.
+                // Standard: U is right, V is up.
+                // Our ry is adjusted to be Y-up. So (ry+5)/10 is V.
+                aUvOffset[idx * 2 + 0] = ux;
+                aUvOffset[idx * 2 + 1] = uy;
+                aUvScale[idx * 2 + 0] = uw;
+                aUvScale[idx * 2 + 1] = uh;
+            };
 
-            baked.attributes.aOffset[idx2 * 3] = nx * worldWidth * factor2;
-            baked.attributes.aOffset[idx2 * 3 + 1] = ny * WORLD_HEIGHT * factor2;
-            baked.attributes.aOffset[idx2 * 3 + 2] = z2;
-
-            baked.attributes.aScale[idx2 * 2] = worldW * factor2;
-            baked.attributes.aScale[idx2 * 2 + 1] = worldH * factor2;
-
-            baked.attributes.aColor[idx2 * 3] = r;
-            baked.attributes.aColor[idx2 * 3 + 1] = g;
-            baked.attributes.aColor[idx2 * 3 + 2] = b;
-
-            baked.attributes.aUvOffset[idx2 * 2] = (nx + 0.5) - (nw / 2.0);
-            baked.attributes.aUvOffset[idx2 * 2 + 1] = (ny + 0.5) - (nh / 2.0);
-            baked.attributes.aUvScale[idx2 * 2] = nw;
-            baked.attributes.aUvScale[idx2 * 2 + 1] = nh;
+            writeShard(0, zF);
+            writeShard(count, zM);
         }
 
-        const serializable = {
-            id: baked.id,
-            res: baked.res,
-            count: baked.count,
-            aOffset: Array.from(baked.attributes.aOffset),
-            aScale: Array.from(baked.attributes.aScale),
-            aColor: Array.from(baked.attributes.aColor),
-            aUvOffset: Array.from(baked.attributes.aUvOffset),
-            aUvScale: Array.from(baked.attributes.aUvScale),
+        const result = {
+            id: file.replace('.json', ''),
+            count: outCount,
+            aOffset: Array.from(aOffset),
+            aScale: Array.from(aScale),
+            aColor: Array.from(aColor),
+            aUvOffset: Array.from(aUvOffset),
+            aUvScale: Array.from(aUvScale)
         };
 
-        fs.writeFileSync(path.join(OUTPUT_DIR, `${baked.id}.baked.json`), JSON.stringify(serializable));
-    } catch (e) {
-        console.error(`Error baking ${file}:`, e);
+        fs.writeFileSync(path.join(OUTPUT_DIR, `${result.id}.baked.json`), JSON.stringify(result));
+    } catch (err) {
+        console.error(`Error baking ${file}:`, err);
     }
 });
 
-console.log("Baking complete.");
+console.log("Baking Complete. Shards are now mathematically aligned for anamorphic coalescence.");

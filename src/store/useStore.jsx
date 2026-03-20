@@ -52,7 +52,13 @@ const useStore = create((set, get) => ({
 
     // The segment originates from the LAST cluster in the list
     const current = activeClusters[activeClusters.length - 1];
+    const FOV = 50.0;
+    const WORLD_HEIGHT = 10.0;
+    const D = (WORLD_HEIGHT / 2) / Math.tan(((FOV / 2) * Math.PI) / 180);
+    const SEGMENT_LENGTH = D * 2.0;
+
     const currentZ = current.worldPos[2];
+    const nextZ = currentZ - SEGMENT_LENGTH; 
     
     // 1. Pick next node (Stochastic)
     const candidates = edges.filter(e => e.source === current.id);
