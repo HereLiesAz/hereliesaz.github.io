@@ -52,11 +52,11 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
       });
   }, [id, nodes]);
 
-  // 2. Sync Metadata with Store (Fixed loop)
+  // 2. Sync Metadata with Store
   const lastId = useRef(id);
   useEffect(() => {
     if (isCurrent && shardData && resolution && id === lastId.current) {
-        setCurrentShardCount(Math.min(shardData.length, 5000)); // <--- UPDATED UI LIMIT
+        setCurrentShardCount(Math.min(shardData.length, 1200)); 
         setCurrentResolution(resolution);
     }
   }, [isCurrent, shardData, resolution, id]);
@@ -74,22 +74,8 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const { geometry, count } = useMemo(() => {
     if (!shardData || !resolution) return { geometry: null, count: 0 };
 
-    const MAX_SHARDS = 5000; // <--- GRAINS OF ART BUDGET
-    
-    // SMART SAMPLING: Ensure we get both background (large) and ink (contrast)
-    let finalShardData = shardData;
-    if (shardData.length > MAX_SHARDS) {
-        const sortedBySize = [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0));
-        const structural = sortedBySize.slice(0, Math.floor(MAX_SHARDS * 0.3)); // 30% Foundation
-        
-        // Final 70%: High contrast (Darkest shards = Subject details)
-        const remaining = sortedBySize.slice(Math.floor(MAX_SHARDS * 0.3));
-        const DARKNESS_PRIORITY = (s) => (Array.isArray(s) ? (s[5]+s[6]+s[7]) : 765);
-        const contrast = remaining.sort((a,b) => DARKNESS_PRIORITY(a) - DARKNESS_PRIORITY(b))
-                                  .slice(0, Math.floor(MAX_SHARDS * 0.7));
-        
-        finalShardData = [...structural, ...contrast];
-    }
+    const MAX_SHARDS = 1200; 
+    const finalShardData = [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0)).slice(0, MAX_SHARDS);
 
     const count = finalShardData.length;
     const baseGeo = new THREE.PlaneGeometry(1, 1); 
@@ -135,16 +121,17 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
             sw = w / imgW; sh = h / imgH;
         }
 
-        // --- SUBSTANTIVE DEPTH ---
-        const z = - (Math.abs(raw_depth) * 50.0 + 5.0); 
-        const factor = z / FULCRUM_Z;
+        // --- PHYSICAL DEPTH RESTORATION ---
+        // Use raw JSON depth (-40 to -50 approx). 
+        const z = raw_depth; 
+        const factor = Math.abs(z) / Math.abs(FULCRUM_Z);
 
         aOffset[i * 3] = nx * worldWidth * factor;
         aOffset[i * 3 + 1] = ny * 10 * factor;
         aOffset[i * 3 + 2] = z; 
 
-        // --- SCALE RESOLVE (2.5x Boldness) ---
-        const SIZE_MULTIPLIER = 2.5; 
+        // --- BOLD RESOLVE (4.0x Scale) ---
+        const SIZE_MULTIPLIER = 4.0; 
         aScale[i * 2] = sw * worldWidth * factor * SIZE_MULTIPLIER;
         aScale[i * 2 + 1] = sh * 10 * factor * SIZE_MULTIPLIER;
 
