@@ -23,6 +23,8 @@ export default function Scene() {
       .catch(err => console.error("Graph Load Error:", err));
   }, [setGraph, setStartNode]);
 
+  const currentSegmentIndex = useStore(state => state.currentSegmentIndex);
+
   return (
     <Canvas 
       gl={{ antialias: true, alpha: true }}
@@ -34,20 +36,27 @@ export default function Scene() {
       
       <ambientLight intensity={0.5} />
       <pointLight position={[10, 10, 10]} intensity={1} />
-
-      <ScrollControls pages={12} damping={0.2}>
+      
+      {/* 100 pages = 25 artworks at 4 pages/each */}
+      <ScrollControls pages={100} damping={0.2}>
         <AnamorphicCam />
         <Suspense fallback={null}>
             <group>
-                {activeClusters.map((cluster, index) => (
-                    <ShardCloud 
-                        key={`${cluster.id}-${index}`}
-                        id={cluster.id} 
-                        position={cluster.worldPos} 
-                        isCurrent={index === 0} 
-                        anchorId={cluster.anchorId}
-                    />
-                ))}
+                {activeClusters
+                    .map((cluster, index) => ({ ...cluster, index }))
+                    // Only render current, next, and immediate neighbors for blending/continuity
+                    .filter(c => c.index >= currentSegmentIndex - 1 && c.index <= currentSegmentIndex + 2)
+                    .map((cluster) => (
+                        <ShardCloud 
+                            key={`${cluster.id}-${cluster.index}`}
+                            id={cluster.id} 
+                            position={cluster.worldPos} 
+                            rotation={cluster.rotSway}
+                            mySegmentIndex={cluster.index} 
+                            anchorId={cluster.anchorId}
+                        />
+                    ))
+                }
             </group>
         </Suspense>
       </ScrollControls>

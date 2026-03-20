@@ -33,27 +33,31 @@ files.forEach(file => {
         const baked = {
             id: file.replace('.json', ''),
             res,
-            count,
-            // We'll use flat arrays for InterleavedBuffer accessibility or just compact JSON
+            count: count * 2, // Double for mirroring
             attributes: {
-                aOffset: new Float32Array(count * 3),
-                aScale: new Float32Array(count * 2),
-                aColor: new Float32Array(count * 3),
-                aUvOffset: new Float32Array(count * 2),
-                aUvScale: new Float32Array(count * 2)
+                aOffset: new Float32Array(count * 2 * 3),
+                aScale: new Float32Array(count * 2 * 2),
+                aColor: new Float32Array(count * 2 * 3),
+                aUvOffset: new Float32Array(count * 2 * 2),
+                aUvScale: new Float32Array(count * 2 * 2)
             }
         };
 
+        const SIZE_MULTIPLIER = 1.3; 
+
         for (let i = 0; i < count; i++) {
             const shard = sortedShards[i];
-            let nx, ny, raw_depth, sw, sh, r, g, b;
+            let nx, ny, nw, nh, raw_depth, r, g, b;
+            let worldW, worldH;
 
             if (Array.isArray(shard)) {
                 nx = shard[0] / 10.0;
-                ny = shard[1] / 10.0;
+                ny = -(shard[1] / 10.0);
                 raw_depth = shard[2];
-                sw = shard[4] * 0.5;
-                sh = shard[4] * 0.5;
+                worldW = shard[4] * SIZE_MULTIPLIER;
+                worldH = shard[4] * SIZE_MULTIPLIER;
+                nw = shard[4] / 10.0; 
+                nh = shard[4] / 10.0;
                 r = (shard[5] || 255) / 255;
                 g = (shard[6] || 255) / 255;
                 b = (shard[7] || 255) / 255;
@@ -66,35 +70,54 @@ files.forEach(file => {
                 nx = ((x + w / 2) / imgW) - 0.5;
                 ny = -(((y + h / 2) / imgH) - 0.5);
                 raw_depth = shard.depth !== undefined ? shard.depth : (shard.z || 0);
-                sw = w / imgW; sh = h / imgH;
+                nw = w / imgW; 
+                nh = h / imgH;
+                worldW = nw * worldWidth * SIZE_MULTIPLIER;
+                worldH = nh * WORLD_HEIGHT * SIZE_MULTIPLIER;
             }
 
-            const z = raw_depth;
-            const factor = Math.abs(z) / Math.abs(FULCRUM_Z);
+            // Original Shard
+            const z1 = raw_depth;
+            const factor1 = Math.abs(z1) / Math.abs(FULCRUM_Z);
 
-            // aOffset
-            baked.attributes.aOffset[i * 3] = nx * worldWidth * factor;
-            baked.attributes.aOffset[i * 3 + 1] = ny * WORLD_HEIGHT * factor;
-            baked.attributes.aOffset[i * 3 + 2] = z;
+            baked.attributes.aOffset[i * 3] = nx * worldWidth * factor1;
+            baked.attributes.aOffset[i * 3 + 1] = ny * WORLD_HEIGHT * factor1;
+            baked.attributes.aOffset[i * 3 + 2] = z1;
 
-            // aScale
-            baked.attributes.aScale[i * 2] = sw * worldWidth * factor;
-            baked.attributes.aScale[i * 2 + 1] = sh * WORLD_HEIGHT * factor;
+            baked.attributes.aScale[i * 2] = worldW * factor1;
+            baked.attributes.aScale[i * 2 + 1] = worldH * factor1;
 
-            // aColor
             baked.attributes.aColor[i * 3] = r;
             baked.attributes.aColor[i * 3 + 1] = g;
             baked.attributes.aColor[i * 3 + 2] = b;
 
-            // aUvOffset/Scale
-            baked.attributes.aUvOffset[i * 2] = nx + 0.5 - (sw / 2.0);
-            baked.attributes.aUvOffset[i * 2 + 1] = (1.0 - (ny + 0.5)) - (sh / 2.0);
-            baked.attributes.aUvScale[i * 2] = sw;
-            baked.attributes.aUvScale[i * 2 + 1] = sh;
+            baked.attributes.aUvOffset[i * 2] = (nx + 0.5) - (nw / 2.0);
+            baked.attributes.aUvOffset[i * 2 + 1] = (ny + 0.5) - (nh / 2.0);
+            baked.attributes.aUvScale[i * 2] = nw;
+            baked.attributes.aUvScale[i * 2 + 1] = nh;
+
+            // Mirrored Shard (Lobe 2)
+            const idx2 = i + count;
+            const z2 = 2.0 * FULCRUM_Z - raw_depth; // Mirror across the fulcrum
+            const factor2 = Math.abs(z2) / Math.abs(FULCRUM_Z);
+
+            baked.attributes.aOffset[idx2 * 3] = nx * worldWidth * factor2;
+            baked.attributes.aOffset[idx2 * 3 + 1] = ny * WORLD_HEIGHT * factor2;
+            baked.attributes.aOffset[idx2 * 3 + 2] = z2;
+
+            baked.attributes.aScale[idx2 * 2] = worldW * factor2;
+            baked.attributes.aScale[idx2 * 2 + 1] = worldH * factor2;
+
+            baked.attributes.aColor[idx2 * 3] = r;
+            baked.attributes.aColor[idx2 * 3 + 1] = g;
+            baked.attributes.aColor[idx2 * 3 + 2] = b;
+
+            baked.attributes.aUvOffset[idx2 * 2] = (nx + 0.5) - (nw / 2.0);
+            baked.attributes.aUvOffset[idx2 * 2 + 1] = (ny + 0.5) - (nh / 2.0);
+            baked.attributes.aUvScale[idx2 * 2] = nw;
+            baked.attributes.aUvScale[idx2 * 2 + 1] = nh;
         }
 
-        // Convert TypedArrays to regular arrays for JSON serialization (simplest for now)
-        // In the future, write to .bin and load with ArrayBuffer
         const serializable = {
             id: baked.id,
             res: baked.res,

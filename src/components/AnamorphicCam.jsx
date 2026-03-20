@@ -9,86 +9,65 @@ export default function AnamorphicCam() {
   const scroll = useScroll(); 
   const isTransitioningRef = useRef(false);
   
-  const transitionProgress = useStore(state => state.transitionProgress);
-  const setTransitionProgress = useStore(state => state.setTransitionProgress);
+  const segments = useStore(state => state.segments);
+  const activeClusters = useStore(state => state.activeClusters);
   const completeTransition = useStore(state => state.completeTransition);
   
-  const currentPathPoints = useStore(state => state.currentPath);
-  
-  // Create a spline from the store points
-  const curve = useMemo(() => {
-    if (!currentPathPoints || currentPathPoints.length < 2) return null;
-    return new THREE.CatmullRomCurve3(currentPathPoints);
-  }, [currentPathPoints]);
-
-  const isTransitioning = useStore(state => state.isTransitioning);
+  const PAGES_PER_SEGMENT = 4;
 
   useFrame((state, delta) => {
-    if (!curve) return;
+    if (segments.length === 0) return;
 
-    const r = scroll.offset;
-    // DO NOT set store state here! It triggers global re-renders.
-    // shards will read from scroll directly if needed, or we use a uniform.
+    // --- SEGMENT MAPPING ---
+    // totalPages is what we set in Scene.jsx (e.g. 100)
+    const totalPages = scroll.pages; 
+    const totalProgress = (scroll.offset * totalPages) / PAGES_PER_SEGMENT;
+    const segmentIndex = Math.min(Math.floor(totalProgress), segments.length - 1);
+    const r = totalProgress - Math.floor(totalProgress);
+
+    const currentSegment = segments[segmentIndex];
+    if (!currentSegment) return;
+
+    // Create a spline for this specific segment if not already done
+    // (Optimization: we could pre-calculate these in the store, but here is fine for now)
+    const curve = new THREE.CatmullRomCurve3(currentSegment.path);
     
-    // Follow the store-provided spline
+    // Follow the segment spline
     const point = curve.getPointAt(r);
     camera.position.copy(point); 
     
-    // --- CINEMATIC SWAY ---
-    const activeClusters = useStore.getState().activeClusters;
-    const currentCluster = activeClusters[activeClusters.length - 1];
-    
-    if (currentCluster && currentCluster.rotSway) {
-        const swayFactor = Math.sin(r * Math.PI); 
-        camera.rotation.set(
-            currentCluster.rotSway[0] * swayFactor * (Math.PI / 180),
-            currentCluster.rotSway[1] * swayFactor * (Math.PI / 180),
-            currentCluster.rotSway[2] * swayFactor * (Math.PI / 180)
-        );
+    // --- ROTATION ALIGNMENT & COALESCENCE ---
+    // Rotation A = Start of segment, Rotation B = End of segment
+    const rotA = activeClusters[segmentIndex]?.rotSway || [0,0,0];
+    const rotB = activeClusters[segmentIndex + 1]?.rotSway || [0,0,0];
 
-        // Verification Log at 35% mark
-        if (r >= 0.35 && r < 0.40 && !state.hasLogged35) {
-            const total = Math.abs(currentCluster.rotSway[0]) + Math.abs(currentCluster.rotSway[1]) + Math.abs(currentCluster.rotSway[2]);
-            console.log(`[VERIFY] 35% mark. Progress: ${r.toFixed(2)}. Cinematic Transformation: ${total.toFixed(2)} deg`);
-            state.hasLogged35 = true; 
-        }
-    } else {
-        camera.rotation.set(0, 0, 0); 
+    const rx = THREE.MathUtils.lerp(rotA[0], rotB[0], r);
+    const ry = THREE.MathUtils.lerp(rotA[1], rotB[1], r);
+    const rz = THREE.MathUtils.lerp(rotA[2], rotB[2], r);
+
+    camera.rotation.set(
+        THREE.MathUtils.degToRad(rx),
+        THREE.MathUtils.degToRad(ry),
+        THREE.MathUtils.degToRad(rz)
+    );
+
+    // Update store state (for visibility and pre-loading)
+    if (r > 0.8 && segments.length < segmentIndex + 2) {
+        // Pre-build next segment when getting close
+        useStore.getState().buildNextSegment();
     }
-    if (r < 0.1) state.hasLogged35 = false; 
-    // Commit Transition (Window slide)
-    if (r > 0.99 && !isTransitioningRef.current) {
+
+    // Sync current segment index to store for ShardCloud visibility
+    if (useStore.getState().currentSegmentIndex !== segmentIndex) {
+        useStore.getState().completeTransition(); // This increments currentSegmentIndex
+    }
+
+    // ONLY reset if we hit the ABSOLUTE end of the 100 pages
+    if (scroll.offset > 0.999 && !isTransitioningRef.current) {
         isTransitioningRef.current = true;
-        
-        // Reset scroll position to beginning for next segment
-        if (scroll.el) {
-            scroll.el.scrollTop = 0;
-        }
-        
-        // Brief delay to prevent race conditions during reset
-        setTimeout(() => {
-            completeTransition();
-            isTransitioningRef.current = false;
-        }, 100);
-    }
-    
-    // BACKWARD Traversal
-    if (r < 0.001 && !isTransitioningRef.current) {
-        const historyDepth = useStore.getState().history.length;
-        if (historyDepth > 0) {
-            isTransitioningRef.current = true;
-            
-            // Set scroll to bottom for the previous segment
-            if (scroll.el) {
-                scroll.el.scrollTop = scroll.el.scrollHeight;
-            }
-            
-            setTimeout(() => {
-                const { goBackward } = useStore.getState();
-                goBackward();
-                isTransitioningRef.current = false;
-            }, 100);
-        }
+        if (scroll.el) scroll.el.scrollTop = 0;
+        // Logic to clear old segments could go here if memory is an issue
+        setTimeout(() => { isTransitioningRef.current = false; }, 100);
     }
   });
 

@@ -5,9 +5,18 @@ import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import '../shaders/ShardMaterial'; // Register shader
 
-export default function ShardCloud({ id, position, rotation, isCurrent = false, anchorId }) {
+export default function ShardCloud({ id, position, rotation: rotDegrees, mySegmentIndex, anchorId }) {
   const meshRef = useRef();
   const materialRef = useRef();
+  
+  const rotation = useMemo(() => {
+    if (!rotDegrees) return new THREE.Euler(0, 0, 0);
+    return new THREE.Euler(
+        THREE.MathUtils.degToRad(rotDegrees[0] || 0),
+        THREE.MathUtils.degToRad(rotDegrees[1] || 0),
+        THREE.MathUtils.degToRad(rotDegrees[2] || 0)
+    );
+  }, [rotDegrees]);
   
   const nodes = useStore(state => state.nodes);
   
@@ -17,6 +26,8 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
 
   const setCurrentShardCount = useStore(state => state.setCurrentShardCount);
   const setCurrentResolution = useStore(state => state.setCurrentResolution);
+  const currentSegmentIndex = useStore(state => state.currentSegmentIndex);
+  const PAGES_PER_SEGMENT = 4; // Should match AnamorphicCam
 
   // 1. Load Baked Data
   useEffect(() => {
@@ -45,11 +56,13 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
 
   // 2. Sync Metadata with Store
   useEffect(() => {
-    if (isCurrent && shardData && resolution) {
+    // Only update if this shard cloud is the one currently being displayed or transitioned to
+    const isActiveSegment = mySegmentIndex === currentSegmentIndex || mySegmentIndex === currentSegmentIndex + 1;
+    if (isActiveSegment && shardData && resolution) {
         setCurrentShardCount(shardData.count || 0); 
         setCurrentResolution(resolution);
     }
-  }, [isCurrent, shardData, resolution]);
+  }, [mySegmentIndex, currentSegmentIndex, shardData, resolution]);
 
   // 1. Suspension-based Texture Loader
   const texture = useLoader(THREE.TextureLoader, textureUrl || '/placeholder.jpg');
@@ -107,18 +120,32 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
     if (materialRef.current) {
         materialRef.current.uTime = state.clock.elapsedTime;
         
-        // --- PERFORMANCE FIX: Read scroll directly instead of store ---
-        const r = scroll.offset;
+        // --- CONTINUOUS SCROLL ALPHA LOGIC ---
+        const totalPages = scroll.pages; 
+        const totalProgress = (scroll.offset * totalPages) / PAGES_PER_SEGMENT;
+        const globalSegmentIndex = Math.floor(totalProgress);
+        const r = totalProgress - globalSegmentIndex;
         
-        // Art 1 (Source) is at offset 0, fades OUT to next.
-        // Art 2 (Target) is at offset 1 (next), fades IN.
-        const alphaFade = isCurrent ? (1.0 - r) : r;
+        // This shard belongs to a specific node (mySegmentIndex).
+        // It is the SOURCE for segment 'mySegmentIndex' (fades out as r increases).
+        // It is the TARGET for segment 'mySegmentIndex - 1' (fades in as r' increases).
+        
+        let alphaFade = 0;
+        if (mySegmentIndex === globalSegmentIndex) {
+            alphaFade = 1.0 - r; 
+        } else if (mySegmentIndex === globalSegmentIndex + 1) {
+            alphaFade = r;
+        } else if (mySegmentIndex < globalSegmentIndex) {
+            alphaFade = 0; // Past
+        } else {
+            alphaFade = 0; // Future
+        }
         
         tempColor.setRGB(alphaFade, alphaFade, alphaFade);
         materialRef.current.uColor = tempColor;
         
         const glowPhase = Math.sin(r * Math.PI);
-        materialRef.current.uAnchorGlow = glowPhase * 0.8;
+        materialRef.current.uAnchorGlow = (mySegmentIndex === globalSegmentIndex) ? glowPhase * 0.8 : 0;
         materialRef.current.uAnchorId = anchorId !== undefined ? Number(anchorId) : -1.0;
     }
   });

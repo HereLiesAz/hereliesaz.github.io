@@ -7,13 +7,14 @@ const useStore = create((set, get) => ({
   edges: [],           
   
   activeClusters: [],  // [{ id, worldPos, anchorId, rotSway }]
-  currentPath: null,   // [startPoint, midPoint, endPoint]
-  history: [],         // Array of previous segments: { activeClusters, currentPath }
+  segments: [],        // [{ path, startId, endId }]
+  history: [],         // Not strictly needed for forward scroll, but kept for logic
   
-  currentNodeId: null, // Legacy support for Overlay
+  currentNodeId: null, 
   currentShardCount: 0,
   currentResolution: [1000, 1000],
   
+  currentSegmentIndex: 0,
   transitionProgress: 0, 
   isTransitioning: false,
   
@@ -32,18 +33,24 @@ const useStore = create((set, get) => ({
   setStartNode: (id) => {
     console.log("[Store] Starting at:", id);
     const firstCluster = { id, worldPos: [0, 0, 0] };
-    set({ activeClusters: [firstCluster], currentNodeId: id });
+    set({ 
+        activeClusters: [firstCluster], 
+        currentNodeId: id,
+        segments: [],
+        currentSegmentIndex: 0 
+    });
     get().buildNextSegment();
   },
 
   setCurrentResolution: (res) => set({ currentResolution: res }),
   setCurrentShardCount: (count) => set({ currentShardCount: count }),
 
-  // Build the next step in the infinite void
+  // Build the next step in the infinite void (Append mode)
   buildNextSegment: () => {
-    const { nodes, edges, activeClusters } = get();
+    const { nodes, edges, activeClusters, segments } = get();
     if (activeClusters.length === 0) return;
 
+    // The segment originates from the LAST cluster in the list
     const current = activeClusters[activeClusters.length - 1];
     const currentZ = current.worldPos[2];
     
@@ -68,7 +75,6 @@ const useStore = create((set, get) => ({
     const FULCRUM_Z = -10.0;
 
     let nextPos = [0, 0, currentZ - 100.0]; 
-
     let anchorWorldPos = null;
 
     if (edge.s_nx !== undefined && edge.t_nx !== undefined) {
@@ -89,7 +95,7 @@ const useStore = create((set, get) => ({
             anchorWorldPos.z - z_next_local
         ];
 
-        // Update the current cluster's exit anchor properly (no mutation)
+        // Update the current cluster's exit anchor
         set(state => ({
             activeClusters: state.activeClusters.map(c => 
                 c.id === current.id ? { ...c, anchorId: edge.source_shard } : c
@@ -101,15 +107,11 @@ const useStore = create((set, get) => ({
     }
 
     // --- CINEMATIC TRANSFORMATION BUDGET (35°) ---
-    const TOTAL_BUDGET = 35.0; // Degrees
+    const TOTAL_BUDGET = 35.0; 
     const randomWeights = [Math.random(), Math.random(), Math.random(), Math.random()];
     const W_SUM = randomWeights.reduce((a, b) => a + b, 0);
     const budget = randomWeights.map(w => (w / W_SUM) * TOTAL_BUDGET);
-    
-    // Euler Swerve (Store in Degrees for unified verification)
     const rotSway = budget.slice(0, 3);
-    // Path Swerve (Lateral displacement in world units)
-    // Approx: 1 unit of swerve at distance 17 is ~3 degrees? Let's scale for impact.
     const swerveDist = budget[3] * 0.5; 
 
     const nextCluster = { 
@@ -119,49 +121,43 @@ const useStore = create((set, get) => ({
         rotSway: rotSway
     };
     
-    // 3. Camera Spline through Anchor with Swerve
+    // 3. Camera Spline
     const startPoint = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ);
     const endPoint = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2]);
-    
-    // Displace anchorWorldPos laterally for the "Path Curve" part of the 35°
     const midPoint = (anchorWorldPos || new THREE.Vector3(
         (startPoint.x + endPoint.x) * 0.5,
         (startPoint.y + endPoint.y) * 0.5,
         (startPoint.z + endPoint.z) * 0.5
     )).clone();
 
-    // Apply lateral swerve (Random direction in XY)
     const swerveAngle = Math.random() * Math.PI * 2;
     midPoint.x += Math.cos(swerveAngle) * swerveDist;
     midPoint.y += Math.sin(swerveAngle) * swerveDist;
 
+    const newSegment = {
+        path: [startPoint, midPoint, endPoint],
+        startId: current.id,
+        endId: nextId
+    };
+
     set({ 
         activeClusters: [...activeClusters, nextCluster],
-        currentPath: [startPoint, midPoint, endPoint]
+        segments: [...segments, newSegment]
     });
     
-    console.log(`[Store] Pareidolic Bridge Formed: ${current.id} -> ${nextId}`);
+    console.log(`[Store] Segment ${segments.length} Appended: ${current.id} -> ${nextId}`);
   },
 
   completeTransition: () => {
-    const { activeClusters, currentPath, history } = get();
-    if (activeClusters.length < 2) return;
-
-    // Save the current state to history before "sliding" the window
-    const newHistory = [...history, { activeClusters, currentPath }];
-
-    const newActive = activeClusters.slice(-2); 
-    const nextNodeId = newActive[newActive.length - 1].id;
-    
-    set({ 
-        activeClusters: newActive,
-        currentNodeId: nextNodeId,
-        history: newHistory,
-        transitionProgress: 0,
-        isTransitioning: false
-    });
-
-    get().buildNextSegment();
+    // This now just cleans up far-away segments or prepares for the next
+    const { segments, currentSegmentIndex } = get();
+    if (currentSegmentIndex < segments.length - 1) {
+        set({ currentSegmentIndex: currentSegmentIndex + 1 });
+    }
+    // We can verify if we need to build more
+    if (segments.length < currentSegmentIndex + 3) {
+        get().buildNextSegment();
+    }
   },
 
   goBackward: () => {
