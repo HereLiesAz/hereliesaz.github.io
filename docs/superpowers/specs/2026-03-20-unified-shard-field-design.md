@@ -163,7 +163,7 @@ Both sets are included in the same baked file. Each shard carries an `isMirror` 
 ```json
 {
   "nodes": [
-    { "id": "...", "image": "painting.jpg", "title": "...", "shardCount": 2400 }
+    { "id": "...", "image": "painting.jpg", "title": "...", "totalCount": 4800 }
   ],
   "edges": [
     {
