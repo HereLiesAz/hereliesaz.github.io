@@ -37,7 +37,9 @@ const useStore = create((set, get) => ({
     const { nodes, edges } = get();
     if (nodes.length === 0) return;
 
-    const startNode  = nodes[Math.floor(Math.random() * nodes.length)];
+    const startNode = nodes[Math.floor(Math.random() * nodes.length)];
+    if (!startNode) return;
+
     const sweetZ     = 0;
     const firstEntry = buildHistoryEntry({
       id: startNode.id, sweetZ,
@@ -47,11 +49,22 @@ const useStore = create((set, get) => ({
 
     // Pre-pick the next painting
     const recentIds   = [startNode.id];
-    const nextId      = pickNextNode(startNode.id, edges, recentIds);
+    let nextId = null;
+    try {
+      nextId = pickNextNode(startNode.id, edges, recentIds);
+    } catch (e) {
+      console.warn("Could not pick next node:", e.message);
+      // If we can't find a next node, just keep the current one active
+      set({ history: [firstEntry], historyPosition: 0 });
+      return;
+    }
+
     const nextNode    = nodes.find(n => n.id === nextId);
     const nextSweetZ  = -SEGMENT_LENGTH;
     const edge        = edges.find(e => e.source === startNode.id && e.target === nextId);
-    const midpoint    = edge
+    
+    // Safety: ensure we have both nodes for the spline computation
+    const midpoint    = (edge && startNode && nextNode)
       ? computeAnchorMidpoint(
           edge,
           { ...startNode, sweetZ },
@@ -123,21 +136,31 @@ const useStore = create((set, get) => ({
       .slice(Math.max(0, currentPos - RECENT_EXCLUDE), currentPos + 1)
       .map(e => e.id);
 
-    const nextId     = pickNextNode(currentEntry.id, edges, recentIds);
-    const nextNode   = nodes.find(n => n.id === nextId);
+    // Pick next node with safety
+    let pickId = null;
+    try {
+      pickId = pickNextNode(currentEntry.id, edges, recentIds);
+    } catch (e) {
+       console.warn("Could not pick next node:", e.message);
+       return;
+    }
+
+    const nextNode   = nodes.find(n => n.id === pickId);
     const nextSweetZ = currentEntry.sweetZ - SEGMENT_LENGTH;
-    const edge       = edges.find(e => e.source === currentEntry.id && e.target === nextId);
-    const midpoint   = edge
+    const edge       = edges.find(e => e.source === currentEntry.id && e.target === pickId);
+    const startNode  = nodes.find(n => n.id === currentEntry.id);
+
+    const midpoint   = (edge && startNode && nextNode)
       ? computeAnchorMidpoint(
           edge,
-          { ...nodes.find(n => n.id === currentEntry.id), sweetZ: currentEntry.sweetZ },
+          { ...startNode, sweetZ: currentEntry.sweetZ },
           { ...nextNode, sweetZ: nextSweetZ },
           SEGMENT_LENGTH
         )
       : [0, 0, currentEntry.sweetZ - SEGMENT_LENGTH / 2];
 
     const nextEntry = buildHistoryEntry({
-      id: nextId, sweetZ: nextSweetZ,
+      id: pickId, sweetZ: nextSweetZ,
       splineStart: [0, 0, currentEntry.sweetZ],
       splineMid:   midpoint,
       splineEnd:   [0, 0, nextSweetZ],

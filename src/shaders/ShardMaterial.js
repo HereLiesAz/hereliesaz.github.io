@@ -4,6 +4,7 @@ import { extend } from '@react-three/fiber';
 
 const ShardMaterial = shaderMaterial(
   // Uniforms
+  // Uniforms
   {
     uCameraZ:     0.0,
     uTime:        0.0,
@@ -14,11 +15,11 @@ const ShardMaterial = shaderMaterial(
 
   // ---- Vertex Shader ----
   /* glsl */`
-    attribute vec3  aOffset;      // world-space (baked + sweetSpotZ applied by CPU)
-    attribute vec2  aScale;       // (sx, sy) in world units
+    attribute vec3  aOffset;      
+    attribute vec2  aScale;       
     attribute vec3  aColor;
-    attribute vec3  aRandom;      // deterministic per-shard entropy [0,1)
-    attribute float aSweetSpotZ;  // world Z of this shard's painting sweet spot
+    attribute vec3  aRandom;      
+    attribute float aSweetSpotZ;  
     attribute vec2  aUvOffset;
     attribute vec2  aUvScale;
 
@@ -30,6 +31,7 @@ const ShardMaterial = shaderMaterial(
     varying vec2  vLocalUv;
     varying vec3  vColor;
     varying float vAlpha;
+    varying float vSharpness;
 
     void main() {
       vUv      = aUvOffset + (uv * aUvScale);
@@ -38,29 +40,38 @@ const ShardMaterial = shaderMaterial(
 
       float dist     = abs(uCameraZ - aSweetSpotZ);
       float progress = smoothstep(0.0, uFocusWindow, dist);
+      
+      // Higher sharpness when close to sweet spot
+      vSharpness = 1.0 - smoothstep(0.0, uFocusWindow * 0.1, dist);
 
-      // 1. Scale BEFORE rotation so aspect ratio is preserved in tumble
+      // 1. Base Scale & Growth
+      // Grow slightly when near sweet spot to ensure no gaps (coalescence)
+      float growth = mix(1.25, 1.0, progress);
       vec3 pos = position;
-      pos.xy *= aScale;
+      pos.xy *= aScale * growth;
 
-      // 2. Tumble: rotate the scaled quad when chaotic
-      // Remap aRandom [0,1] → [-1,1] so axis covers the full sphere
+      // 2. Static Random Rotation (The 'Shard' look)
+      float rot = aRandom.x * 6.28318;
+      mat2 rotMat = mat2(cos(rot), -sin(rot), sin(rot), cos(rot));
+      pos.xy = rotMat * pos.xy;
+
+      // 4. Tumble (Only when chaotic)
       vec3  axis  = normalize(aRandom * 2.0 - 1.0);
-      float angle = uTime * aRandom.z + progress * 8.0;
-      vec3 tumbled = mix(dot(axis, pos) * axis, pos, cos(angle))
-                   + cross(axis, pos) * sin(angle);
+      float tumbleAngle = uTime * (0.5 + aRandom.z) + progress * 8.0;
+      vec3 tumbled = mix(dot(axis, pos) * axis, pos, cos(tumbleAngle))
+                   + cross(axis, pos) * sin(tumbleAngle);
       pos = mix(pos, tumbled, progress);
 
-      // 3. World-space chaos drift
+      // 5. World-space chaos drift
       vec3 chaosOffset = vec3(
-        sin(uTime * aRandom.z + aOffset.y) * 25.0,
-        cos(uTime * aRandom.z + aOffset.x) * 25.0,
-        sin(uTime * 0.3       + aRandom.x) * 60.0
+        sin(uTime * aRandom.z + aOffset.y) * 20.0,
+        cos(uTime * aRandom.z + aOffset.x) * 20.0,
+        sin(uTime * 0.3       + aRandom.x) * 40.0
       );
 
       vec3 finalPos = aOffset + pos + (chaosOffset * progress);
 
-      vAlpha = 1.0 - smoothstep(0.0, uFocusWindow * 0.3, dist) * 0.4;
+      vAlpha = 1.0 - smoothstep(0.0, uFocusWindow * 0.5, dist) * 0.5;
 
       gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
     }
@@ -75,11 +86,16 @@ const ShardMaterial = shaderMaterial(
     varying vec2  vLocalUv;
     varying vec3  vColor;
     varying float vAlpha;
+    varying float vSharpness;
 
     void main() {
-      // Soft circular mask on the unit quad
-      float d    = length(vLocalUv - 0.5) * 2.0;
-      float mask = smoothstep(1.0, 0.4, d);
+      // Liquid Shard Mask: Elongated soft ellipsoid
+      vec2 centerDelta = vLocalUv - 0.5;
+      // Intrinsic aspect ratio of the shard (roughly) + stretching
+      float d = length(centerDelta * vec2(1.0, 2.0)) * 2.5;
+      
+      // Transitions from a soft splat to a sharp stroke at sweet spot
+      float mask = smoothstep(1.0, 0.4 - (vSharpness * 0.3), d);
 
       vec3 color = vColor;
       if (uHasTexture > 0.5) {
@@ -88,9 +104,12 @@ const ShardMaterial = shaderMaterial(
       }
 
       float alpha = mask * vAlpha;
-      if (alpha < 0.05) discard;
+      if (alpha < 0.02) discard;
 
-      gl_FragColor = vec4(color, alpha);
+      // Pulse color slightly at sweet spot
+      vec3 finalColor = mix(color, color * 1.1, vSharpness);
+
+      gl_FragColor = vec4(finalColor, alpha);
     }
   `
 );

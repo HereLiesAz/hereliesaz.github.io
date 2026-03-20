@@ -1,8 +1,8 @@
 export const SEGMENT_LENGTH = 200.0;
 export const WORLD_HEIGHT   = 10.0;
 export const FOV_DEG        = 50.0;
-export const MAX_PER_SLOT   = 6000;
-export const MAX_INSTANCES  = 12000;
+export const MAX_PER_SLOT   = 10000;
+export const MAX_INSTANCES  = 20000;
 export const FOCUS_WINDOW   = 60.0;
 export const PRELOAD_T      = 0.6;
 export const RECENT_EXCLUDE = 5;
@@ -47,15 +47,19 @@ export function pickNextNode(currentId, edges, recentIds) {
  */
 export function computeAnchorMidpoint(edge, nodeA, nodeB, segmentLength) {
   const wh = WORLD_HEIGHT;
+  
+  const sweetZA = nodeA?.sweetZ || 0;
+  const sweetZB = nodeB?.sweetZ || 0;
+  const midZ    = (sweetZA + sweetZB) / 2.0;
+
+  // Safety: If nodes are missing, return early with default midpoint
+  if (!nodeA || !nodeB) return [0, 0, midZ || -segmentLength / 2];
+
   const aspectA = (nodeA.res?.[0] || 1000) / (nodeA.res?.[1] || 1000);
   const aspectB = (nodeB.res?.[0] || 1000) / (nodeB.res?.[1] || 1000);
 
-  const sweetZA = nodeA.sweetZ;
-  const sweetZB = nodeB.sweetZ;
-  const midZ    = (sweetZA + sweetZB) / 2.0;
-
-  const [su, sv] = edge.s_uv || [0.5, 0.5];
-  const [tu, tv] = edge.t_uv || [0.5, 0.5];
+  const [su, sv] = edge?.s_uv || [0.5, 0.5];
+  const [tu, tv] = edge?.t_uv || [0.5, 0.5];
   const midX = ((su - 0.5) * wh * aspectA + (tu - 0.5) * wh * aspectB) / 2.0;
   const midY = ((0.5 - sv) * wh + (0.5 - tv) * wh) / 2.0;
 

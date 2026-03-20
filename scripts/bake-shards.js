@@ -10,7 +10,7 @@ const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.json') && !f.end
 
 console.log(`Baking ${files.length} files with Perspective Correction...`);
 
-const MAX_TOTAL_SHARDS = 3000; // Total count including mirrored
+const MAX_TOTAL_SHARDS = 10000; // Total count including mirrored
 const FOV = 50;
 const WORLD_HEIGHT = 10.0;
 // Focal Distance D based on Camera FOV
@@ -32,12 +32,11 @@ files.forEach(file => {
         });
 
         // 2. Select and sort shards
-        // Half count because we mirror
         const shardLimit = Math.floor(MAX_TOTAL_SHARDS / 2);
         const sortedStrokes = [...strokes]
             .sort((a, b) => {
-                const radA = Array.isArray(a) ? a[4] : (a.scale || 0);
-                const radB = Array.isArray(b) ? b[4] : (b.scale || 0);
+                const radA = Array.isArray(a) ? a[3] : (a.scale || 0);
+                const radB = Array.isArray(b) ? b[3] : (b.scale || 0);
                 return radB - radA;
             })
             .slice(0, shardLimit);
@@ -53,53 +52,47 @@ files.forEach(file => {
 
         for (let i = 0; i < count; i++) {
             const s = sortedStrokes[i];
-            let rx, ry, rz, radius, cr, cg, cb;
+            let rx, ry, rz, radius, randVal, cr, cg, cb;
 
             if (Array.isArray(s)) {
-                [rx, ry, rz, radius, , cr, cg, cb] = s;
+                [rx, ry, rz, radius, randVal, cr, cg, cb] = s;
                 ry = -ry; // JSON usually has Y-down
             } else {
                 rx = s.x || 0; ry = -(s.y || 0); rz = s.z || s.depth || 0;
                 radius = s.scale || 1.0;
+                randVal = s.random || Math.random();
                 [cr, cg, cb] = s.color || [255, 255, 255];
             }
 
             // Map raw depth to normalized range [0, D]
-            // We want shallow raw depths near camera (closer to 0)
-            // t = 0 at maxZ (shallow), t = 1 at minZ (deep)
             let t = (maxZ === minZ) ? 0.5 : (rz - maxZ) / (minZ - maxZ);
-            
-            // Forward depth in space [0, -D]
             const zF = -t * D;
-            // Mirrored depth in space [-D, -2D]
             const zM = -2.0 * D + t * D;
 
             const writeShard = (groupIndex, worldZ) => {
                 const idx = groupIndex + i;
                 const factor = Math.abs(worldZ) / D;
 
-                // Position with Perspective Invariance
+                // Simple 'liquid' aspect ratio variation [0.8, 1.5]
+                // Derived from the shard's own random value to stay deterministic
+                const aspect = 0.8 + (randVal % 1.0) * 0.7;
+
                 aOffset[idx * 3 + 0] = rx * factor;
                 aOffset[idx * 3 + 1] = ry * factor;
                 aOffset[idx * 3 + 2] = worldZ;
 
-                // Scale with Perspective Invariance
-                aScale[idx * 2 + 0] = radius * factor;
+                aScale[idx * 2 + 0] = radius * factor * aspect;
                 aScale[idx * 2 + 1] = radius * factor;
 
                 aColor[idx * 3 + 0] = cr / 255;
                 aColor[idx * 3 + 1] = cg / 255;
                 aColor[idx * 3 + 2] = cb / 255;
 
-                // UVs assuming raw x,y footprint of [-5, 5]
-                const uw = radius / 10;
+                const uw = (radius * aspect) / 10;
                 const uh = radius / 10;
                 const ux = (rx + 5) / 10 - uw / 2;
-                const uy = (ry + 5) / 10 - uh / 2; // Corrected for Y-down in texture?
+                const uy = (ry + 5) / 10 - uh / 2;
                 
-                // Texture space is typically Top-Left 0,0 but R3F textures can be flipped.
-                // Standard: U is right, V is up.
-                // Our ry is adjusted to be Y-up. So (ry+5)/10 is V.
                 aUvOffset[idx * 2 + 0] = ux;
                 aUvOffset[idx * 2 + 1] = uy;
                 aUvScale[idx * 2 + 0] = uw;
