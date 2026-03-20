@@ -56,7 +56,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const lastId = useRef(id);
   useEffect(() => {
     if (isCurrent && shardData && resolution && id === lastId.current) {
-        setCurrentShardCount(Math.min(shardData.length, 800)); // <--- INCREASED BUDGET
+        setCurrentShardCount(Math.min(shardData.length, 5000)); // <--- UPDATED UI LIMIT
         setCurrentResolution(resolution);
     }
   }, [isCurrent, shardData, resolution, id]);
@@ -74,24 +74,19 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
   const { geometry, count } = useMemo(() => {
     if (!shardData || !resolution) return { geometry: null, count: 0 };
 
-    const MAX_SHARDS = 2500; // <--- UPPING BUDGET FOR RECOGNITION
+    const MAX_SHARDS = 5000; // <--- GRAINS OF ART BUDGET
     
     // SMART SAMPLING: Ensure we get both background (large) and ink (contrast)
     let finalShardData = shardData;
     if (shardData.length > MAX_SHARDS) {
         const sortedBySize = [...shardData].sort((a,b) => (b[4] || 0) - (a[4] || 0));
-        const structural = sortedBySize.slice(0, Math.floor(MAX_SHARDS * 0.4)); // 40% Background
+        const structural = sortedBySize.slice(0, Math.floor(MAX_SHARDS * 0.3)); // 30% Foundation
         
-        // Final 60%: High contrast (distance from dominant color, usually ink)
-        // Dominant color is often the paper yellow [200, 180, 100] approx.
-        // We take shards that are DARKEST as priority for sketches.
-        const remaining = sortedBySize.slice(Math.floor(MAX_SHARDS * 0.4));
-        const DARKNESS_PRIORITY = (s) => {
-            const r = s[5], g = s[6], b = s[7];
-            return -(r + g + b); // Smaller sum = darker = higher priority
-        };
+        // Final 70%: High contrast (Darkest shards = Subject details)
+        const remaining = sortedBySize.slice(Math.floor(MAX_SHARDS * 0.3));
+        const DARKNESS_PRIORITY = (s) => (Array.isArray(s) ? (s[5]+s[6]+s[7]) : 765);
         const contrast = remaining.sort((a,b) => DARKNESS_PRIORITY(a) - DARKNESS_PRIORITY(b))
-                                  .slice(0, Math.floor(MAX_SHARDS * 0.6));
+                                  .slice(0, Math.floor(MAX_SHARDS * 0.7));
         
         finalShardData = [...structural, ...contrast];
     }
@@ -148,8 +143,8 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         aOffset[i * 3 + 1] = ny * 10 * factor;
         aOffset[i * 3 + 2] = z; 
 
-        // --- PAINTERLY SCALE (12x Bloom) ---
-        const SIZE_MULTIPLIER = 12.0; 
+        // --- SCALE RESOLVE (2.5x Boldness) ---
+        const SIZE_MULTIPLIER = 2.5; 
         aScale[i * 2] = sw * worldWidth * factor * SIZE_MULTIPLIER;
         aScale[i * 2 + 1] = sh * 10 * factor * SIZE_MULTIPLIER;
 
