@@ -91,33 +91,41 @@ class ThreeDDeconstructor:
             bbox = [int(v) for v in m['bbox']]
             x, y, sw, sh = bbox
             
-            # Split features into 1-4 haphazard strips
-            num_strips = np.random.randint(2, 5)
+            # Divide each semantic feature into organic, overlapping strips
+            # We use a mix of size-based and random counts
+            num_strips = max(2, min(8, int((sw * sh) / 5000)))
+            
             for _ in range(num_strips):
-                # Random "strip" within the feature
-                # We use a noisy rect within the mask
-                rx = x + np.random.randint(0, sw // 2)
-                ry = y + np.random.randint(0, sh // 2)
-                rw = np.random.randint(sw // 2, sw + 1)
-                rh = np.random.randint(sh // 2, sh + 1)
+                # We want strips that are haphazard but roughly follow the feature
+                # Random sub-region of the feature's bounding box
+                # Ensure they overlap significantly to create the 'ripped' density
+                rw = np.random.randint(sw // 3, sw + 1)
+                rh = np.random.randint(sh // 3, sh + 1)
+                rx = x + np.random.randint(0, max(1, sw - rw + 1))
+                ry = y + np.random.randint(0, max(1, sh - rh + 1))
                 
-                # Clip to image
+                # Clip to image boundaries
                 rx, ry = max(0, rx), max(0, ry)
                 rw = min(w - rx, rw)
                 rh = min(h - ry, rh)
 
-                # Each strip gets a random Z-offset in a deep field
-                # Spanned across adjacent painting spaces (-50 to +50 units)
+                if rw < 4 or rh < 4: continue
+
+                # Interleaved Z-offset (-50 to +50 units from painting plane)
+                # This creates the 'continuous void' where paintings intermingle
                 z_offset = (np.random.random() - 0.5) * 100.0
                 
-                # Calculate mean depth in this strip
-                z_local = float(np.mean(depth_map[ry:ry+rh, rx:rx+rw]))
+                # Sample mean depth and variance in this strip for vertex weight
+                strip_depth = depth_map[ry:ry+rh, rx:rx+rw]
+                z_local = float(np.mean(strip_depth))
+                z_var   = float(np.std(strip_depth))
 
                 slices.append({
                     "b": [rx, ry, rw, rh],
                     "z": z_offset,
-                    "zl": z_local, # internal displacement scale
-                    "r": [np.random.random() for _ in range(3)] # entropy
+                    "zl": z_local,
+                    "zv": z_var, # used for displacement amplitude
+                    "r": [np.random.random() for _ in range(3)] # entropy for shader
                 })
 
         # Minify output

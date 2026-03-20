@@ -38,15 +38,16 @@ const ShardCloud = ({ paintingId, sweetZ, active }) => {
     const count = slices.length;
 
     const uvOffsetScale = new Float32Array(count * 4);
-    const zOffsets = new Float32Array(count);
-    const randoms = new Float32Array(count * 3);
+    const zOffsets      = new Float32Array(count);
+    const zLocals       = new Float32Array(count);
+    const zVars         = new Float32Array(count);
+    const randoms       = new Float32Array(count * 3);
     
     const dummy = new THREE.Object3D();
     const [imgW, imgH] = data.res;
     const aspect = imgW / imgH;
     
-    // Constant for anamorphic scaling (distance from sweet spot to camera origin)
-    // In our store, SEGMENT_LENGTH is 21.44. Let's assume a focal distance of 10.
+    // Constant for anamorphic scaling
     const FOCAL_DIST = 10.0;
 
     slices.forEach((s, i) => {
@@ -54,11 +55,14 @@ const ShardCloud = ({ paintingId, sweetZ, active }) => {
       
       // Normalized UVs
       uvOffsetScale[i * 4 + 0] = rx / imgW;
-      uvOffsetScale[i * 4 + 1] = 1.0 - (ry + rh) / imgH; // Flip Y for Three.js
+      uvOffsetScale[i * 4 + 1] = 1.0 - (ry + rh) / imgH; 
       uvOffsetScale[i * 4 + 2] = rw / imgW;
       uvOffsetScale[i * 4 + 3] = rh / imgH;
 
       zOffsets[i] = s.z;
+      zLocals[i]  = s.zl || 0.5;
+      zVars[i]    = s.zv || 0.1;
+      
       randoms[i * 3 + 0] = s.r[0];
       randoms[i * 3 + 1] = s.r[1];
       randoms[i * 3 + 2] = s.r[2];
@@ -72,9 +76,7 @@ const ShardCloud = ({ paintingId, sweetZ, active }) => {
       
       dummy.position.set(nx * worldW, ny * worldH, sweetZ + s.z);
       
-      // Anamorphic Scaling: Resize so it looks perfect from front
-      // Scale = (FocalDist - offsetZ) / FocalDist
-      // Since s.z is negative if it's further away, we use (FocalDist - s.z)
+      // Anamorphic Scaling
       const scaleToCompensate = (FOCAL_DIST - s.z) / FOCAL_DIST;
       dummy.scale.set(
         (rw / imgW) * worldW * scaleToCompensate, 
@@ -88,6 +90,8 @@ const ShardCloud = ({ paintingId, sweetZ, active }) => {
 
     mesh.geometry.setAttribute('aUvOffsetScale', new THREE.InstancedBufferAttribute(uvOffsetScale, 4));
     mesh.geometry.setAttribute('aZOffset', new THREE.InstancedBufferAttribute(zOffsets, 1));
+    mesh.geometry.setAttribute('aZLocal', new THREE.InstancedBufferAttribute(zLocals, 1));
+    mesh.geometry.setAttribute('aZVar', new THREE.InstancedBufferAttribute(zVars, 1));
     mesh.geometry.setAttribute('aRandom', new THREE.InstancedBufferAttribute(randoms, 3));
     
     mesh.instanceMatrix.needsUpdate = true;
