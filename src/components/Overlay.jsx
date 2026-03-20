@@ -2,97 +2,147 @@ import React, { useEffect } from 'react';
 import useStore from '../store/useStore';
 
 const Overlay = () => {
-  const currentNodeId = useStore(state => state.currentNodeId);
+  const history = useStore(state => state.history);
+  const historyPosition = useStore(state => state.historyPosition);
   const nodes = useStore(state => state.nodes);
   const transitionProgress = useStore(state => state.transitionProgress);
   const showMenu = useStore(state => state.showMenu);
   const toggleMenu = useStore(state => state.toggleMenu);
   
-  const currentShardCount = useStore(state => state.currentShardCount);
-  const currentResolution = useStore(state => state.currentResolution);
+  const currentEntry = history[historyPosition];
+  const activeNode   = currentEntry ? nodes.find(n => n.id === currentEntry.id) : null;
   
-  const activeNode = nodes && currentNodeId ? nodes.find(n => n.id === currentNodeId) : null;
-  
-  // Calculate Opacity for Info
-  // Fade in when progress is near 0 (Sweet Spot), fade out as we fly away
-  const infoOpacity = Math.max(0, 1 - (transitionProgress * 3));
+  // Calculate Opacity for Info: only visible near sweet spots (t < 0.25)
+  // We use a steep power curve for an "ethereal" fade
+  const infoOpacity = Math.max(0, Math.pow(1 - transitionProgress * 4.0, 2.0));
 
   // CSS Injection
   useEffect(() => {
     const styles = `
-      .overlay-container {
+      .overlay-root {
         position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none; /* Let clicks pass through to canvas */
-        color: #eee;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        color: rgba(255, 255, 255, 0.85);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        overflow: hidden;
+      }
+      
+      .signature-layer {
+        position: absolute;
+        top: 2rem; left: 2rem;
+        pointer-events: auto;
+        cursor: pointer;
+        transition: opacity 0.5s ease;
+      }
+      
+      .signature-text {
         font-family: 'Courier New', Courier, monospace;
-        padding: 2rem;
-        box-sizing: border-box;
+        font-weight: 300;
+        font-size: 1.5rem;
+        letter-spacing: 0.2em;
+        opacity: 0.8;
+        transition: opacity 0.3s ease;
       }
+      .signature-layer:hover .signature-text { opacity: 1.0; }
       
-      .signature {
+      .info-layer {
         position: absolute;
-        top: 2rem;
-        left: 2rem;
-        text-shadow: 0 0 10px rgba(0,0,0,0.5);
-      }
-      
-      .info-panel {
-        position: absolute;
-        bottom: 2rem;
-        width: 100%;
+        bottom: 4rem;
+        left: 0; width: 100%;
         text-align: center;
-        transition: opacity 0.2s ease;
-        text-shadow: 0 0 10px rgba(0,0,0,0.8);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
       }
-    
-      .glass-modal {
+      
+      .artwork-title {
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.4em;
+        opacity: 0.9;
+        font-weight: 300;
+      }
+      
+      .artwork-meta {
+        font-size: 0.7rem;
+        letter-spacing: 0.2em;
+        opacity: 0.4;
+        font-weight: 300;
+      }
+
+      .glass-modal-overlay {
         position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
         display: flex;
         justify-content: center;
         align-items: center;
-        background: rgba(0, 0, 0, 0.4);
+        background: rgba(0, 0, 0, 0.2);
+        backdrop-filter: blur(25px);
+        -webkit-backdrop-filter: blur(25px);
         pointer-events: auto;
-        backdrop-filter: blur(10px);
-        z-index: 100;
+        z-index: 1000;
+        transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
       }
-    
-      .glass-content {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        padding: 3rem;
-        max-width: 400px;
-        box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+      
+      .glass-card {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 4rem;
+        max-width: 500px;
+        text-align: center;
         position: relative;
+        box-shadow: 0 40px 100px rgba(0,0,0,0.4);
       }
       
-      .close-btn {
-        position: absolute;
-        top: 1rem;
-        right: 1rem;
-        background: none;
-        border: none;
-        color: white;
-        font-size: 1.5rem;
-        cursor: pointer;
+      .glass-card h2 {
+        font-family: "Georgia", serif;
+        font-style: italic;
+        font-weight: 300;
+        font-size: 2rem;
+        margin-bottom: 2rem;
+        opacity: 0.9;
       }
       
-      .links {
+      .glass-card p {
+        line-height: 1.8;
+        font-size: 0.95rem;
+        opacity: 0.7;
+        font-weight: 300;
+      }
+      
+      .menu-links {
+        margin-top: 3rem;
+        display: flex;
+        justify-content: center;
+        gap: 2rem;
         list-style: none;
         padding: 0;
-        margin-top: 2rem;
       }
       
-      .links li { margin: 0.5rem 0; }
-      .links a { color: white; text-decoration: none; border-bottom: 1px solid transparent; }
-      .links a:hover { border-bottom: 1px solid white; }
+      .menu-links a {
+        color: inherit;
+        text-decoration: none;
+        font-size: 0.8rem;
+        letter-spacing: 0.1em;
+        opacity: 0.5;
+        border-bottom: 1px solid transparent;
+        transition: all 0.3s ease;
+      }
+      .menu-links a:hover { opacity: 1; border-bottom-color: rgba(255,255,255,0.4); }
+      
+      .close-icon {
+        position: absolute;
+        top: 2rem; right: 2rem;
+        cursor: pointer;
+        opacity: 0.3;
+        font-size: 1.5rem;
+        transition: opacity 0.3s ease;
+      }
+      .close-icon:hover { opacity: 1; }
     `;
     
     const styleSheet = document.createElement("style");
@@ -105,48 +155,38 @@ const Overlay = () => {
   }, []);
 
   return (
-    <div className="overlay-container">
-      {/* 1. Signature (Top Left) */}
-      <div 
-        className="signature"
-        onClick={toggleMenu}
-        style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-      >
-        <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 300, letterSpacing: '0.2em' }}>
-          HereLiesAz
-        </h1>
+    <div className="overlay-root">
+      {/* 1. Persistent Signature (Top Left) */}
+      <div className="signature-layer" onClick={toggleMenu} aria-label="Menu">
+        <span className="signature-text">HereLiesAz</span>
       </div>
 
-      {/* 2. Info Panel (Bottom, Fades) */}
+      {/* 2. Ethereal Info (Bottom, Perspective Faded) */}
       {activeNode && (
-        <div 
-          className="info-panel"
-          style={{ opacity: infoOpacity }}
-        >
-          <h2 style={{ fontSize: '1rem', fontWeight: 600, textTransform: 'uppercase' }}>
-            {activeNode.id.split('~')[0]}
-          </h2>
-          <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>
-            {currentShardCount} SHARDS // {(currentResolution || ['?','?']).join('x')}
-          </p>
+        <div className="info-layer" style={{ opacity: infoOpacity }}>
+          <div className="artwork-title">{activeNode.id.split('~')[0].replace(/-/g, ' ')}</div>
+          <div className="artwork-meta">Fragments of a Void</div>
         </div>
       )}
 
-      {/* 3. Glass Menu (Center) */}
+      {/* 3. The Central Glass Window */}
       {showMenu && (
-        <div className="glass-modal">
-          <div className="glass-content">
-             <button className="close-btn" onClick={toggleMenu}>×</button>
-             <h2>Manifesto</h2>
-             <p>
-               The canvas is infinite. The paint is data.
-               We are merely pattern matching in the void.
-             </p>
-             <ul className="links">
-               <li><a href="#">Github</a></li>
-               <li><a href="#">Instagram</a></li>
-               <li><a href="#">Email</a></li>
-             </ul>
+        <div className="glass-modal-overlay" onClick={toggleMenu}>
+          <div className="glass-card" onClick={e => e.stopPropagation()}>
+            <div className="close-icon" onClick={toggleMenu}>×</div>
+            <h2>Manifesto</h2>
+            <p>
+              "Imagine you're in a dark closet and can't see anything. 
+              How little light does it take to be able to make something out?"
+              <br/><br/>
+              The Infinite Canvas is a psychological experience of pattern, paint, and memory.
+              A shifting world where navigation and content are one.
+            </p>
+            <ul className="menu-links">
+              <li><a href="#">Github</a></li>
+              <li><a href="#">Instagram</a></li>
+              <li><a href="#">Contact</a></li>
+            </ul>
           </div>
         </div>
       )}
@@ -155,3 +195,4 @@ const Overlay = () => {
 };
 
 export default Overlay;
+

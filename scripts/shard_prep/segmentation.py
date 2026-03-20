@@ -5,12 +5,12 @@ from skimage.color import rgb2lab
 from skimage.measure import label, regionprops
 
 # Merge adjacent superpixels whose LAB distance is below this threshold
-_LAB_MERGE_THRESHOLD = 15.0
+_LAB_MERGE_THRESHOLD = 5.0
 # Split any region larger than this fraction of the image
-_MAX_REGION_FRACTION = 0.05
+_MAX_REGION_FRACTION = 0.01
 
 
-def segment_image(img_rgb: np.ndarray, n_segments: int = 800) -> list[np.ndarray]:
+def segment_image(img_rgb: np.ndarray, n_segments: int = 3000) -> list[np.ndarray]:
     """
     Segment a painting image into organic shards following color/lighting regions.
 

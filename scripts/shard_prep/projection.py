@@ -41,7 +41,12 @@ def project_shard(
     world_y = (0.5 - v) * WORLD_HEIGHT           * ratio
     world_z = -z_world  # negative = in front of sweet spot
 
-    scale_x = (shard_w_px / img_w) * WORLD_HEIGHT * aspect * ratio
+    # 'Liquid Shard' aspect ratio variation [1.0, 3.5]
+    # We use u, v, z_world to seed a deterministic random value
+    seed = int((u + v + abs(z_world)) * 10000) % 1000
+    elongation = 1.0 + (seed / 1000.0) * 2.5 
+    
+    scale_x = (shard_w_px / img_w) * WORLD_HEIGHT * aspect * ratio * elongation
     scale_y = (shard_h_px / img_h) * WORLD_HEIGHT           * ratio
 
     uv_offset = [shard_x_min / img_w, shard_y_min / img_h]

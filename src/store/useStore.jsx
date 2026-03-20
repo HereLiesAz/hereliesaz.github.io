@@ -18,6 +18,7 @@ const useStore = create((set, get) => ({
 
   // UI
   showMenu: false,
+  transitionProgress: 0,
 
   // Buffer rollover signal (incremented to trigger VoidField to roll)
   rolloverCount: 0,
@@ -47,14 +48,13 @@ const useStore = create((set, get) => ({
       splineEnd:   [0, 0, -SEGMENT_LENGTH],
     });
 
-    // Pre-pick the next painting
-    const recentIds   = [startNode.id];
+    // Pick next node with safety
+    const recentIds = [startNode.id];
     let nextId = null;
     try {
       nextId = pickNextNode(startNode.id, edges, recentIds);
     } catch (e) {
-      console.warn("Could not pick next node:", e.message);
-      // If we can't find a next node, just keep the current one active
+      console.warn("initSession: No edges found. Keeping single entry.");
       set({ history: [firstEntry], historyPosition: 0 });
       return;
     }
@@ -88,7 +88,7 @@ const useStore = create((set, get) => ({
   },
 
   setCameraZ(z) {
-    const { history, historyPosition, nodes, edges, rolloverCount } = get();
+    const { history, historyPosition, rolloverCount } = get();
     if (history.length === 0) return;
 
     const currentEntry = history[historyPosition];
@@ -96,19 +96,18 @@ const useStore = create((set, get) => ({
 
     const t = computeT({ sweetZ: currentEntry.sweetZ, cameraZ: z });
 
-    // Trigger preload at 60%
+    // Preload next-next painting at 60% transition
     if (t >= 0.6 && historyPosition + 1 < history.length) {
       const upcomingId = history[historyPosition + 1]?.id;
-      set({ nextPaintingId: upcomingId, cameraZ: z });
+      set({ nextPaintingId: upcomingId, cameraZ: z, transitionProgress: t });
     } else {
-      set({ cameraZ: z });
+      set({ cameraZ: z, transitionProgress: t });
     }
 
     // Rollover at 100%: advance history position
     if (t >= 1.0) {
       const nextPos = historyPosition + 1;
       if (nextPos < history.length) {
-        // Moving forward in known history (deterministic)
         set({ historyPosition: nextPos, rolloverCount: rolloverCount + 1 });
         get()._ensureNextEntryExists(nextPos);
       }
@@ -117,11 +116,13 @@ const useStore = create((set, get) => ({
     // Going backward: detect by comparing cameraZ to previous sweet spot
     if (historyPosition > 0) {
       const prevEntry = history[historyPosition - 1];
-      // camera has passed prevEntry's sweet spot going backward (cameraZ is larger/less negative than sweetZ)
       if (z > prevEntry.sweetZ) {
         const prevPos = historyPosition - 1;
-        set({ historyPosition: prevPos, rolloverCount: rolloverCount + 1,
-              nextPaintingId: currentEntry.id });
+        set({
+          historyPosition: prevPos,
+          rolloverCount: rolloverCount + 1,
+          nextPaintingId: currentEntry.id
+        });
       }
     }
   },
@@ -141,8 +142,8 @@ const useStore = create((set, get) => ({
     try {
       pickId = pickNextNode(currentEntry.id, edges, recentIds);
     } catch (e) {
-       console.warn("Could not pick next node:", e.message);
-       return;
+      console.warn("Next node selection failed:", e.message);
+      return; 
     }
 
     const nextNode   = nodes.find(n => n.id === pickId);
@@ -166,7 +167,7 @@ const useStore = create((set, get) => ({
       splineEnd:   [0, 0, nextSweetZ],
     });
 
-    set({ history: [...history, nextEntry], nextPaintingId: nextId });
+    set({ history: [...history, nextEntry], nextPaintingId: pickId });
   },
 
   toggleMenu() { set(state => ({ showMenu: !state.showMenu })); },

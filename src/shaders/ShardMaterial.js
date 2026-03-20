@@ -1,116 +1,102 @@
-import { shaderMaterial } from '@react-three/drei';
 import * as THREE from 'three';
 import { extend } from '@react-three/fiber';
+import { shaderMaterial } from '@react-three/drei';
 
+/**
+ * ShardMaterial - The aesthetic engine of the Infinite Canvas.
+ * Supports:
+ * 1. Texture-mapped feature slices.
+ * 2. Vertex displacement for 3D weighting.
+ * 3. Torn-edge "ripped canvas" masks.
+ * 4. 'Dark Closet' atmosphere (emergence from shadow).
+ */
 const ShardMaterial = shaderMaterial(
-  // Uniforms
-  // Uniforms
   {
-    uCameraZ:     0.0,
-    uTime:        0.0,
-    uFocusWindow: 60.0,
-    uTexture:     null,
-    uHasTexture:  0.0,
+    uTexture: null,
+    uSweetZ: 0,
+    uCameraZ: 0,
+    uFocalDist: 10.0,
+    uTime: 0,
   },
+  // Vertex Shader
+  `
+  varying vec2 vUv;
+  varying vec2 vLocalUv;
+  varying float vProgress;
+  varying float vRandom;
+  varying vec3 vWorldPos;
+  
+  attribute vec4 aUvOffsetScale;
+  attribute float aZOffset;
+  attribute vec3 aRandom;
 
-  // ---- Vertex Shader ----
-  /* glsl */`
-    attribute vec3  aOffset;      
-    attribute vec2  aScale;       
-    attribute vec3  aColor;
-    attribute vec3  aRandom;      
-    attribute float aSweetSpotZ;  
-    attribute vec2  aUvOffset;
-    attribute vec2  aUvScale;
+  void main() {
+    vLocalUv = uv;
+    // Map local plane UV to the part of the painting texture it represents
+    vUv = aUvOffsetScale.xy + uv * aUvOffsetScale.zw;
+    vRandom = aRandom.x;
+    
+    // 1. Initial Position (Instance Mesh handles scaling/translation)
+    vec4 instancePos = instanceMatrix * vec4(position, 1.0);
+    
+    // 2. Vertex Displacement (The 3D Scene)
+    // We use a noise-like displacement in the vertex shader to give strips volume.
+    // In a future pass, this will use the luminance of uTexture or a depth map.
+    float displacement = (aRandom.y - 0.5) * 0.4;
+    instancePos.z += displacement;
 
-    uniform float uCameraZ;
-    uniform float uTime;
-    uniform float uFocusWindow;
+    // 3. Atmosphere (Progress towards sweet spot)
+    // Distance from camera to this specific instance's Z
+    float dist = abs(uCameraZ - instancePos.z);
+    // Progress 0.0 at sweet spot, increasing as we move away
+    vProgress = clamp(dist / 15.0, 0.0, 1.0);
 
-    varying vec2  vUv;
-    varying vec2  vLocalUv;
-    varying vec3  vColor;
-    varying float vAlpha;
-    varying float vSharpness;
-
-    void main() {
-      vUv      = aUvOffset + (uv * aUvScale);
-      vLocalUv = uv;
-      vColor   = aColor;
-
-      float dist     = abs(uCameraZ - aSweetSpotZ);
-      float progress = smoothstep(0.0, uFocusWindow, dist);
-      
-      // Higher sharpness when close to sweet spot
-      vSharpness = 1.0 - smoothstep(0.0, uFocusWindow * 0.1, dist);
-
-      // 1. Base Scale & Growth
-      // Grow slightly when near sweet spot to ensure no gaps (coalescence)
-      float growth = mix(1.25, 1.0, progress);
-      vec3 pos = position;
-      pos.xy *= aScale * growth;
-
-      // 2. Static Random Rotation (The 'Shard' look)
-      float rot = aRandom.x * 6.28318;
-      mat2 rotMat = mat2(cos(rot), -sin(rot), sin(rot), cos(rot));
-      pos.xy = rotMat * pos.xy;
-
-      // 4. Tumble (Only when chaotic)
-      vec3  axis  = normalize(aRandom * 2.0 - 1.0);
-      float tumbleAngle = uTime * (0.5 + aRandom.z) + progress * 8.0;
-      vec3 tumbled = mix(dot(axis, pos) * axis, pos, cos(tumbleAngle))
-                   + cross(axis, pos) * sin(tumbleAngle);
-      pos = mix(pos, tumbled, progress);
-
-      // 5. World-space chaos drift
-      vec3 chaosOffset = vec3(
-        sin(uTime * aRandom.z + aOffset.y) * 20.0,
-        cos(uTime * aRandom.z + aOffset.x) * 20.0,
-        sin(uTime * 0.3       + aRandom.x) * 40.0
-      );
-
-      vec3 finalPos = aOffset + pos + (chaosOffset * progress);
-
-      vAlpha = 1.0 - smoothstep(0.0, uFocusWindow * 0.5, dist) * 0.5;
-
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
-    }
+    vWorldPos = instancePos.xyz;
+    gl_Position = projectionMatrix * viewMatrix * instancePos;
+  }
   `,
+  // Fragment Shader
+  `
+  varying vec2 vUv;
+  varying vec2 vLocalUv;
+  varying float vProgress;
+  varying float vRandom;
+  varying vec3 vWorldPos;
 
-  // ---- Fragment Shader ----
-  /* glsl */`
-    uniform sampler2D uTexture;
-    uniform float     uHasTexture;
+  uniform sampler2D uTexture;
 
-    varying vec2  vUv;
-    varying vec2  vLocalUv;
-    varying vec3  vColor;
-    varying float vAlpha;
-    varying float vSharpness;
+  // Simple noise for torn edges
+  float hash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+  }
 
-    void main() {
-      // Liquid Shard Mask: Elongated soft ellipsoid
-      vec2 centerDelta = vLocalUv - 0.5;
-      // Intrinsic aspect ratio of the shard (roughly) + stretching
-      float d = length(centerDelta * vec2(1.0, 2.0)) * 2.5;
-      
-      // Transitions from a soft splat to a sharp stroke at sweet spot
-      float mask = smoothstep(1.0, 0.4 - (vSharpness * 0.3), d);
+  void main() {
+    // 1. Texture Sample
+    vec4 texColor = texture2D(uTexture, vUv);
+    
+    // 2. Torn Edge Mask (Haphazard shape)
+    vec2 centerDelta = vLocalUv - 0.5;
+    float distFromCenter = length(centerDelta);
+    
+    // Noisy threshold for 'ripped canvas' edge
+    float noise = hash(vLocalUv * 10.0 + vRandom);
+    float alphaMask = smoothstep(0.48 + noise * 0.05, 0.45, distFromCenter);
+    
+    if (alphaMask < 0.1) discard;
 
-      vec3 color = vColor;
-      if (uHasTexture > 0.5) {
-        vec4 tex = texture2D(uTexture, vUv);
-        if (tex.a > 0.1) color = tex.rgb;
-      }
-
-      float alpha = mask * vAlpha;
-      if (alpha < 0.02) discard;
-
-      // Pulse color slightly at sweet spot
-      vec3 finalColor = mix(color, color * 1.1, vSharpness);
-
-      gl_FragColor = vec4(finalColor, alpha);
-    }
+    // 3. Dark Closet Atmosphere (How little light does it take?)
+    // Far away = near black. Sweet spot = full color.
+    float brightness = smoothstep(1.0, 0.2, vProgress);
+    
+    // Subliminal highlights (specular sheen on 'thick paint')
+    float highlight = pow(clamp(1.0 - distFromCenter * 2.0, 0.0, 1.0), 8.0) * 0.3 * (1.0 - vProgress);
+    
+    vec3 finalColor = texColor.rgb * brightness + highlight;
+    
+    gl_FragColor = vec4(finalColor, texColor.a * brightness);
+  }
   `
 );
 

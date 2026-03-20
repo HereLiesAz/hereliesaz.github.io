@@ -1,4 +1,4 @@
-export const SEGMENT_LENGTH = 200.0;
+export const SEGMENT_LENGTH = 21.44; // Matches 2 * D for continuous cloud coverage
 export const WORLD_HEIGHT   = 10.0;
 export const FOV_DEG        = 50.0;
 export const MAX_PER_SLOT   = 10000;
