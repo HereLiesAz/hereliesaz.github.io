@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { useFrame, useLoader, useScroll } from '@react-three/fiber';
+import { useFrame, useLoader } from '@react-three/fiber';
 import { useScroll as useDreiScroll } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
@@ -186,7 +186,7 @@ export default function ShardCloud({ id, position, rotation, isCurrent = false, 
         tempColor.setRGB(alphaFade, alphaFade, alphaFade);
         materialRef.current.uColor = tempColor;
         
-        const glowPhase = Math.sin(prog * Math.PI);
+        const glowPhase = Math.sin(r * Math.PI);
         materialRef.current.uAnchorGlow = glowPhase * 0.8;
         materialRef.current.uAnchorId = anchorId !== undefined ? Number(anchorId) : -1.0;
     }
