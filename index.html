@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PaperPlanes - Temporal Bleed</title>
+    <title>PaperPlanes - Serpentine Bleed</title>
     <style>
         body {
             margin: 0;
@@ -11,26 +11,27 @@
             color: #ddd;
             overflow-x: hidden;
             font-family: 'Courier New', Courier, monospace;
-            height: 400vh; /* Sufficient depth for the descent */
+            height: 500vh; /* Lengthen the descent */
         }
 
         .theater-container {
-            position: relative;
+            position: fixed; /* Trap the viewport */
             width: 100vw;
             height: 100vh;
-            perspective: 1000px;
+            perspective: 1200px;
+            transform-style: preserve-3d; /* Force true 3D intersections */
             display: flex;
             align-items: center;
             justify-content: center;
         }
 
         .paper-layer {
-            position: fixed;
+            position: absolute;
             width: 60vw;
             height: 60vh;
-            background-color: #111;
-            border: 1px solid #333;
-            box-shadow: inset 0 0 50px #000, 0 20px 50px rgba(0,0,0,0.8);
+            background-color: rgba(17, 17, 17, 0.8); /* Translucency allows intersection bleed */
+            border: 1px solid #444;
+            box-shadow: inset 0 0 50px #000, 0 0 30px rgba(0,0,0,0.8);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -39,6 +40,7 @@
             letter-spacing: 0.5rem;
             will-change: transform;
             filter: grayscale(100%);
+            mix-blend-mode: exclusion; /* Art incorporating into art */
         }
 
         /* The Parasite */
@@ -60,8 +62,8 @@
             }
             100% {
                 opacity: 0;
-                transform: scale(1.02) translateY(20px);
-                filter: grayscale(100%) contrast(300%) brightness(50%) blur(8px);
+                transform: scale(1.05) translateY(30px) rotate(2deg);
+                filter: grayscale(100%) contrast(300%) brightness(40%) blur(12px);
             }
         }
     </style>
@@ -69,7 +71,9 @@
 <body>
 
     <div class="theater-container">
-        <div class="paper-layer" id="plane-zero">Subject Zero</div>
+        <div class="paper-layer" style="background-image: repeating-linear-gradient(45deg, #111 0, #111 2px, transparent 2px, transparent 8px);">Subject Zero</div>
+        <div class="paper-layer" style="background-image: repeating-linear-gradient(-45deg, #333 0, #333 4px, transparent 4px, transparent 12px);">Subject One</div>
+        <div class="paper-layer" style="background-image: radial-gradient(circle at center, rgba(80,80,80,0.5) 0%, transparent 60%);">Subject Two</div>
     </div>
 
     <script>
@@ -112,12 +116,9 @@
                     ghost.style.width = `${rect.width}px`;
                     ghost.style.height = `${rect.height}px`;
                     
-                    // Invert the physical drag against the scroll velocity
-                    ghost.style.transform = `translateY(${-velocity * 0.8}px)`;
+                    ghost.style.transform = `translateY(${-velocity * 0.5}px) scale(0.98)`;
 
                     this.container.appendChild(ghost);
-
-                    // Let it rot
                     setTimeout(() => ghost.remove(), 800);
                 });
             }
@@ -126,11 +127,27 @@
         document.addEventListener('DOMContentLoaded', () => {
             new GhostState();
             
-            // Forced parallax descent
-            const layer = document.getElementById('plane-zero');
+            const layers = document.querySelectorAll('.paper-layer');
+            
             window.addEventListener('scroll', () => {
                 const scrolled = window.scrollY;
-                layer.style.transform = `translateY(${scrolled * 0.4}px) scale(${1 - scrolled * 0.0002}) rotateX(${scrolled * 0.02}deg)`;
+                
+                layers.forEach((layer, index) => {
+                    // Offset each layer's mathematical phase so they don't move uniformly
+                    const phase = index * (Math.PI / 1.2);
+                    
+                    // Force a serpentine sweep across the X axis
+                    const lateralX = Math.sin((scrolled * 0.002) + phase) * (window.innerWidth * 0.4);
+                    
+                    // Push and pull through the Z axis to force intersections
+                    const depthZ = Math.cos((scrolled * 0.002) + phase) * 600;
+                    
+                    // Twist the knife
+                    const rotationY = Math.sin((scrolled * 0.001) + phase) * 35;
+                    const rotationZ = Math.cos((scrolled * 0.0015) + phase) * 5;
+                    
+                    layer.style.transform = `translateX(${lateralX}px) translateZ(${depthZ}px) rotateY(${rotationY}deg) rotateZ(${rotationZ}deg)`;
+                });
             });
         });
     </script>
