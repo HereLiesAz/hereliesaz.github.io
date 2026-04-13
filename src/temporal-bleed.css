@@ -1,0 +1,22 @@
+.temporal-bleed {
+    position: absolute;
+    pointer-events: none;
+    opacity: 0.7;
+    filter: grayscale(100%) contrast(250%) brightness(80%) blur(1px);
+    mix-blend-mode: difference;
+    animation: temporal-decay 0.8s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+    z-index: 9999;
+    will-change: transform, opacity, filter;
+}
+
+@keyframes temporal-decay {
+    0% {
+        opacity: 0.7;
+        filter: grayscale(100%) contrast(250%) brightness(80%) blur(1px);
+    }
+    100% {
+        opacity: 0;
+        transform: scale(1.02) translateY(20px);
+        filter: grayscale(100%) contrast(300%) brightness(50%) blur(8px);
+    }
+}

@@ -1,18 +1,155 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' blob: https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; connect-src 'self' https: ws: wss: data: blob:;">
-    
-    <title>HereLiesAz | The Infinite Canvas</title>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PaperPlanes - Serpentine Bleed</title>
     <style>
-      body, html { margin: 0; padding: 0; overflow: hidden; background: #000; }
+        body {
+            margin: 0;
+            background-color: #000;
+            color: #ddd;
+            overflow-x: hidden;
+            font-family: 'Courier New', Courier, monospace;
+            height: 500vh; /* Lengthen the descent */
+        }
+
+        .theater-container {
+            position: fixed; /* Trap the viewport */
+            width: 100vw;
+            height: 100vh;
+            perspective: 1200px;
+            transform-style: preserve-3d; /* Force true 3D intersections */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .paper-layer {
+            position: absolute;
+            width: 60vw;
+            height: 60vh;
+            background-color: rgba(17, 17, 17, 0.8); /* Translucency allows intersection bleed */
+            border: 1px solid #444;
+            box-shadow: inset 0 0 50px #000, 0 0 30px rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5rem;
+            will-change: transform;
+            filter: grayscale(100%);
+            mix-blend-mode: exclusion; /* Art incorporating into art */
+        }
+
+        /* The Parasite */
+        .temporal-bleed {
+            position: absolute;
+            pointer-events: none;
+            opacity: 0.7;
+            filter: grayscale(100%) contrast(250%) brightness(80%) blur(1px);
+            mix-blend-mode: difference;
+            animation: temporal-decay 0.8s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+            z-index: 9999;
+            will-change: transform, opacity, filter;
+        }
+
+        @keyframes temporal-decay {
+            0% {
+                opacity: 0.7;
+                filter: grayscale(100%) contrast(250%) brightness(80%) blur(1px);
+            }
+            100% {
+                opacity: 0;
+                transform: scale(1.05) translateY(30px) rotate(2deg);
+                filter: grayscale(100%) contrast(300%) brightness(40%) blur(12px);
+            }
+        }
     </style>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+</head>
+<body>
+
+    <div class="theater-container">
+        <div class="paper-layer" style="background-image: repeating-linear-gradient(45deg, #111 0, #111 2px, transparent 2px, transparent 8px);">Subject Zero</div>
+        <div class="paper-layer" style="background-image: repeating-linear-gradient(-45deg, #333 0, #333 4px, transparent 4px, transparent 12px);">Subject One</div>
+        <div class="paper-layer" style="background-image: radial-gradient(circle at center, rgba(80,80,80,0.5) 0%, transparent 60%);">Subject Two</div>
+    </div>
+
+    <script>
+        class GhostState {
+            constructor(targetSelector = '.paper-layer') {
+                this.targetSelector = targetSelector;
+                this.container = document.body;
+                this.ticking = false;
+                this.initScrollGhosts();
+            }
+
+            initScrollGhosts() {
+                let lastScroll = window.scrollY;
+                window.addEventListener('scroll', () => {
+                    const currentScroll = window.scrollY;
+                    const delta = currentScroll - lastScroll;
+                    
+                    if (Math.abs(delta) > 5 && !this.ticking) {
+                        window.requestAnimationFrame(() => {
+                            this.spawnGhost(delta);
+                            this.ticking = false;
+                        });
+                        this.ticking = true;
+                    }
+                    lastScroll = currentScroll;
+                });
+            }
+
+            spawnGhost(velocity) {
+                const targets = document.querySelectorAll(this.targetSelector);
+                if (!targets.length) return;
+
+                targets.forEach(target => {
+                    const rect = target.getBoundingClientRect();
+                    const ghost = target.cloneNode(true);
+                    
+                    ghost.classList.add('temporal-bleed');
+                    ghost.style.top = `${rect.top + window.scrollY}px`;
+                    ghost.style.left = `${rect.left}px`;
+                    ghost.style.width = `${rect.width}px`;
+                    ghost.style.height = `${rect.height}px`;
+                    
+                    ghost.style.transform = `translateY(${-velocity * 0.5}px) scale(0.98)`;
+
+                    this.container.appendChild(ghost);
+                    setTimeout(() => ghost.remove(), 800);
+                });
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            new GhostState();
+            
+            const layers = document.querySelectorAll('.paper-layer');
+            
+            window.addEventListener('scroll', () => {
+                const scrolled = window.scrollY;
+                
+                layers.forEach((layer, index) => {
+                    // Offset each layer's mathematical phase so they don't move uniformly
+                    const phase = index * (Math.PI / 1.2);
+                    
+                    // Force a serpentine sweep across the X axis
+                    const lateralX = Math.sin((scrolled * 0.002) + phase) * (window.innerWidth * 0.4);
+                    
+                    // Push and pull through the Z axis to force intersections
+                    const depthZ = Math.cos((scrolled * 0.002) + phase) * 600;
+                    
+                    // Twist the knife
+                    const rotationY = Math.sin((scrolled * 0.001) + phase) * 35;
+                    const rotationZ = Math.cos((scrolled * 0.0015) + phase) * 5;
+                    
+                    layer.style.transform = `translateX(${lateralX}px) translateZ(${depthZ}px) rotateY(${rotationY}deg) rotateZ(${rotationZ}deg)`;
+                });
+            });
+        });
+    </script>
+</body>
 </html>
