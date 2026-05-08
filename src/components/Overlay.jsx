@@ -76,8 +76,15 @@ const STYLES = `
   text-transform: lowercase;
   letter-spacing: 0.18em;
   text-shadow: 0 0 16px rgba(0, 0, 0, 0.95);
-  transition: opacity 240ms ease;
   pointer-events: none;
+  /* Initial state lives here, not on the JSX style prop, so a React
+     re-render (e.g. showMenu toggling) doesn't stomp the per-frame
+     ref-driven opacity / visibility updates. */
+  opacity: 0;
+  visibility: hidden;
+  /* Manual per-frame updates would otherwise be smoothed by the
+     browser's transition machinery — kill it. */
+  transition: none;
 }
 .ink-caption__title { font-size: 0.95rem; letter-spacing: 0.22em; }
 
@@ -239,7 +246,7 @@ const Overlay = () => {
         </svg>
       </button>
 
-      <div ref={captionRef} className="ink-caption" style={{ opacity: 0, visibility: 'hidden' }}>
+      <div ref={captionRef} className="ink-caption">
         <div ref={titleRef} className="ink-caption__title" />
       </div>
 
