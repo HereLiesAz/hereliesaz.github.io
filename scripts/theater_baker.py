@@ -47,6 +47,15 @@ MORPH_KERNEL_PX        = 3
 ACCENT_SAT_FLOOR       = 0.18    # below this, painting is treated as desaturated
 ACCENT_COUNT           = 2
 
+# Stroke extraction (AESTHETIC §3, §8.3). Strokes trace the contours of each
+# layer's mask — white ink that draws light onto the black field.
+MAX_STROKES_PER_LAYER  = 24
+STROKE_MIN_LEN_FRAC    = 0.05    # contour perimeter ÷ image diagonal
+STROKE_APPROX_FRAC     = 0.005   # douglas–peucker epsilon ÷ perimeter
+STROKE_MIN_VERTS       = 4
+STROKE_MAX_VERTS       = 32
+STROKE_JITTER_FRAC     = 0.0035  # ÷ image diagonal, paper-feel wobble
+
 Z_FRONT                = 0.0
 Z_BACK                 = -240.0  # darkest layer sits this far behind front
 FULCRUM                = {"z": 0, "fov": 35}
@@ -133,6 +142,70 @@ def find_blotches(mask: np.ndarray, min_area_px: int, max_count: int) -> list[di
     return components
 
 
+# ---- stroke extraction ------------------------------------------------------
+
+def _densify_polyline(pts: np.ndarray, min_verts: int, max_verts: int) -> np.ndarray:
+    """Resample a Nx2 polyline to a vertex count in [min_verts, max_verts]."""
+    n = len(pts)
+    if n >= min_verts and n <= max_verts:
+        return pts
+    # Cumulative arc length, sample uniformly.
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    if seg.sum() == 0:
+        return pts
+    arc = np.concatenate([[0.0], np.cumsum(seg)])
+    target = np.clip(n, min_verts, max_verts)
+    s = np.linspace(0.0, arc[-1], target)
+    x = np.interp(s, arc, pts[:, 0])
+    y = np.interp(s, arc, pts[:, 1])
+    return np.stack([x, y], axis=1)
+
+
+def find_strokes(mask: np.ndarray, image_diag: float, rng: np.random.Generator) -> list[dict]:
+    """Trace contours of the cleaned mask → jittered polylines (AESTHETIC §3)."""
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                       (MORPH_KERNEL_PX, MORPH_KERNEL_PX))
+    cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    h, w = mask.shape
+    min_len_px = STROKE_MIN_LEN_FRAC * image_diag
+
+    candidates = []
+    for c in contours:
+        if len(c) < 3:
+            continue
+        perim = float(cv2.arcLength(c, closed=False))
+        if perim < min_len_px:
+            continue
+        epsilon = max(1.0, STROKE_APPROX_FRAC * perim)
+        approx = cv2.approxPolyDP(c, epsilon, closed=False)
+        pts = approx[:, 0, :].astype(np.float32)
+        pts = _densify_polyline(pts, STROKE_MIN_VERTS, STROKE_MAX_VERTS)
+        if len(pts) < STROKE_MIN_VERTS:
+            continue
+        candidates.append((perim, pts))
+
+    candidates.sort(key=lambda x: -x[0])
+    candidates = candidates[:MAX_STROKES_PER_LAYER]
+
+    jitter = STROKE_JITTER_FRAC * image_diag
+    strokes = []
+    for perim, pts in candidates:
+        pts = pts + rng.normal(scale=jitter, size=pts.shape).astype(np.float32)
+        # Map pixel → normalized centered y-up, like blotches.
+        nx = (2.0 * pts[:, 0] / w) - 1.0
+        ny = 1.0 - (2.0 * pts[:, 1] / h)
+        norm = np.stack([nx, ny], axis=1)
+        # Round to 4 decimals to keep JSON small.
+        norm = np.round(norm, 4)
+        strokes.append({
+            "points": norm.tolist(),
+            "weight": round(float(min(1.0, perim / image_diag)), 3),
+        })
+    return strokes
+
+
 # ---- accents ----------------------------------------------------------------
 
 def pick_accents(centers: np.ndarray, weights: np.ndarray) -> dict | None:
@@ -157,6 +230,7 @@ def _hex(rgb: np.ndarray) -> str:
 def bake_image(path: Path, k: int, max_side: int) -> dict:
     rgb, w_src, h_src = load_image_rgb(path, max_side)
     h, w = rgb.shape[:2]
+    diag = float(np.hypot(w, h))
 
     labels, centers = kmeans_palette(rgb, k)
 
@@ -172,6 +246,9 @@ def bake_image(path: Path, k: int, max_side: int) -> dict:
     else:
         zs = np.array([Z_FRONT])
 
+    # Deterministic jitter per painting so re-bakes don't churn the output.
+    rng = np.random.default_rng(abs(hash(path.stem)) & 0xFFFFFFFF)
+
     layers = []
     for ci in range(k):
         mask = (labels == ci).astype(np.uint8) * 255
@@ -181,11 +258,12 @@ def bake_image(path: Path, k: int, max_side: int) -> dict:
         color_hex = _hex(centers[ci])
         for b in blotches:
             b["color"] = color_hex
+        strokes = find_strokes(mask, diag, rng)
         layers.append({
             "z":        round(float(zs[ci]), 2),
             "weight":   round(float(cluster_weight[ci]), 4),
             "blotches": blotches,
-            "strokes":  [],
+            "strokes":  strokes,
         })
 
     accents = pick_accents(centers, cluster_weight)
