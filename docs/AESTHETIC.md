@@ -137,36 +137,110 @@ reference).
 - Hover styles that change color. Hover may add a stroke or thicken
   one; it may not introduce hue.
 
-## 8. Mapping to the existing pipeline
+## 8. The paper-theater primitive
 
-The Curator (SAM → mask polygons → flat shards filled with average
-color, in `scripts/grinder.py`, `scripts/curator.py`,
-`scripts/prepare.py`) produces *region* shards. That output stays.
+**Polygons are out.** The SAM-mask pipeline produces one unique
+sharp-edged polygon per region, which gives a stained-glass look — the
+opposite of what is wanted. The painting primitive is replaced with two
+things that compose:
 
-The closet aesthetic adds a parallel primitive: **strokes** — vector
-poly-lines extracted along edges and within high-gradient regions, with
-brush profile and a single ink intensity. A new prototype lives at
-`scripts/stroke_extractor.py` and emits a `strokes` block alongside the
-existing `aOffset` block. The renderer draws strokes in white ink on
-black; mask shards are kept for cases where a region should read as a
-flat color block (e.g., a mural's sky).
+### 8.1 Depth layers (the paper theater)
 
-A painting's `baked.json` becomes:
+Each painting decomposes into a **small, fixed number of flat planes**
+(~3–7), like the cardboard cutouts in a Victorian toy theater or a
+pop-up book. Each plane carries a portion of the painting and sits at
+its own discrete Z-depth in the 3D scene. There is no per-pixel depth
+field — depth is *staged*, not *measured*.
+
+For murals, the same primitive carries the world the mural lives in:
+the wall plane, the sidewalk in front, the building across the street.
+The camera moving through the layers is moving through the place.
+
+A layer is a flat paper plane with:
+
+- a Z-depth (one of the ~3–7 stops for that painting),
+- an alpha mask (where the layer carries content vs. lets the layer
+  behind it through),
+- a content body (see §8.2),
+- optional drawn ink strokes overlaid on top of the body.
+
+Depth ordering is decided by the preprocessor (heuristics plus optional
+manual override per painting), not by a continuous depth model.
+
+### 8.2 Color-matching blotches (the body of each layer)
+
+A layer is filled by **soft-edged color blotches** — irregular,
+watercolor-like patches of similar hue and value, placed where the
+source image has matching color clusters. Edges are organic, not
+polygonal. Blotches **may repeat**: the same blotch shape can recur
+across a layer, across a painting, across the whole library. Repetition
+is part of the hand-built feel and is not a bug.
+
+This means the preprocessor maintains a small **library of blotch
+shapes** (sampled or hand-authored), and per-painting layer assembly is
+mostly: pick a shape, pick a color from the painting's accent palette,
+stamp it where the source image has that color in that depth band. Many
+paintings will share blotch geometry; that is the point.
+
+### 8.3 Strokes still apply
+
+Strokes (§3) are the mark vocabulary used **on top of** layer bodies —
+white ink that draws form into the blotch field, black ink that carves
+form back out. Strokes are per-layer — they sit in front of their
+layer's blotches and behind whatever layer is in front. Strokes can also
+recur across paintings; a fixed scribble stamp reused as hatching is
+acceptable.
+
+### 8.4 Updated `baked.json`
 
 ```jsonc
 {
   "id": "...",
-  "count": 3000,           // existing shard count
-  "aOffset": [...],        // existing shard offsets
-  "strokes": {             // NEW
-    "count": 1200,
-    "polylines": [...],    // flat array of [x,y,z, x,y,z, ...] segments
-    "widths":    [...],    // per-stroke nominal width
-    "intensity": [...]     // per-stroke ink intensity 0..1 (white)
-  },
-  "accents": {             // NEW — optional per-painting color seeds
+  "layers": [
+    {
+      "z": -120,                    // discrete depth stop
+      "alpha":   "<png ref>",       // where this layer carries content
+      "blotches": [
+        { "shape": "blotch_07",     // id into blotch library
+          "color": "#1a1a1a",       // hue (often near-black for closet feel)
+          "x": 0.34, "y": 0.71,
+          "scale": 0.42, "rot": 0.18 }
+        // ...
+      ],
+      "strokes": [
+        { "path": "stroke_42",      // id into stroke library OR inline polyline
+          "x": 0.36, "y": 0.69,
+          "scale": 0.20, "rot": 0.05,
+          "ink": "white", "weight": 0.6 }
+        // ...
+      ]
+    }
+    // ... 2–6 more layers
+  ],
+  "accents": {                      // per-painting color palette
     "swatches": ["#a31818", "#e8b400"],
     "weights":  [0.08, 0.03]
+  },
+  "fulcrum": {                      // where the camera "sits" for this painting
+    "z": 0,
+    "fov": 35
   }
 }
 ```
+
+The existing `aOffset` SAM output is now **legacy** — kept on disk for
+reference, ignored by the new renderer. The new preprocessor
+(`scripts/stroke_extractor.py`, despite the name, will be renamed to
+something like `scripts/theater_baker.py`) writes the layered format
+above. Library files (`public/data/blotches/`, `public/data/strokes/`)
+hold the shared shape banks.
+
+### 8.5 Pareidolia under this model
+
+The pareidolia hinge from §5 still works — but the shared piece is now
+a **blotch placement** or **stroke placement** rather than a polygon.
+Two paintings share a transition edge if a same-id blotch sits at
+similar (x, y, scale, rot) on a comparable depth layer. Repetition of
+blotch geometry across the library is what *makes* these matches
+abundant; the pareidolia graph is computed over (shape-id, position,
+rotation) tuples, not over per-image features.
