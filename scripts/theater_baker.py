@@ -260,8 +260,16 @@ def main(argv: list[str]) -> int:
               f"({len(data['layers'])} layers, "
               f"{sum(len(L['blotches']) for L in data['layers'])} blotches)")
 
+    write_manifest(args.output)
     print(f"\nbaked={baked} skipped={skipped} failed={failed} total={len(images)}")
     return 0 if failed == 0 else 1
+
+
+def write_manifest(out_dir: Path) -> None:
+    """Emit _manifest.json listing every painting id with theater data on disk."""
+    ids = sorted(p.stem.removesuffix(".theater") for p in out_dir.glob("*.theater.json"))
+    (out_dir / "_manifest.json").write_text(json.dumps(ids))
+    print(f"[m] {len(ids)} ids -> {out_dir / '_manifest.json'}")
 
 
 if __name__ == "__main__":
