@@ -58,13 +58,20 @@ const useStore = create((set, get) => ({
     const SEGMENT_LENGTH = D * 2.0;
 
     const currentZ = current.worldPos[2];
-    const nextZ = currentZ - SEGMENT_LENGTH; 
-    
-    // 1. Pick next node (Stochastic)
+
+    // 1. Pick next node — weighted by pareidolia edge strength so paintings
+    //    that share more marks with the current one are preferred. Fall back
+    //    to a uniform random other-node if there are no edges.
     const candidates = edges.filter(e => e.source === current.id);
     let edge;
     if (candidates.length > 0) {
-        edge = candidates[Math.floor(Math.random() * candidates.length)];
+        const totalW = candidates.reduce((s, e) => s + (e.weight || 1), 0);
+        let r = Math.random() * totalW;
+        edge = candidates[candidates.length - 1];
+        for (const e of candidates) {
+            r -= (e.weight || 1);
+            if (r <= 0) { edge = e; break; }
+        }
     } else {
         const others = nodes.filter(n => n.id !== current.id);
         const randomTarget = others[Math.floor(Math.random() * others.length)].id;
@@ -72,59 +79,34 @@ const useStore = create((set, get) => ({
     }
 
     const nextId = edge.target;
-    const nextNode = nodes.find(n => n.id === nextId);
-    
-    // --- PRECISE ANCHOR ALIGNMENT ---
-    const worldHeight = 10;
-    const imgAspect = (nextNode?.res?.[0] || 1000) / (nextNode?.res?.[1] || 1000);
-    const worldWidth = worldHeight * imgAspect;
-    const FULCRUM_Z = -10.0;
 
-    let nextPos = [0, 0, currentZ - 100.0]; 
-    let anchorWorldPos = null;
+    // 2. Place the next painting one segment-length further down the
+    //    Z-axis at the SAME xy as the current painting. With both
+    //    paintings on the same xy axis, any shared blotch (the pareidolia
+    //    hinge from §5) sits at exactly the same world point in both —
+    //    so during the transit the shared mark holds while non-shared
+    //    blotches resolve to whichever painting's null the camera is
+    //    closest to.
+    const nextPos = [
+        current.worldPos[0],
+        current.worldPos[1],
+        currentZ - SEGMENT_LENGTH,
+    ];
+    const anchorWorldPos = null;
 
-    if (edge.s_nx !== undefined && edge.t_nx !== undefined) {
-        const z_a = edge.s_depth;
-        const factor_a = Math.abs(z_a) / Math.abs(FULCRUM_Z);
-        anchorWorldPos = new THREE.Vector3(
-            current.worldPos[0] + edge.s_nx * worldWidth * factor_a,
-            current.worldPos[1] + edge.s_ny * worldHeight * factor_a,
-            current.worldPos[2] + z_a
-        );
+    // Paintings stay axis-aligned so a shared blotch at the same
+    // normalized (x, y) lands at the same world point in both A and B —
+    // the pareidolia hinge from AESTHETIC §5 only works under that
+    // invariant. Camera parallax comes from a small mid-segment swerve
+    // in xy position (below), not from rotating the paintings.
+    const rotSway = [0, 0, 0];
+    const swerveDist = 0.4 + Math.random() * 0.8;  // ~0.4–1.2 scene units
 
-        const z_next_local = edge.t_depth;
-        const factor_next = Math.abs(z_next_local) / Math.abs(FULCRUM_Z);
-        
-        nextPos = [
-            anchorWorldPos.x - (edge.t_nx * worldWidth * factor_next),
-            anchorWorldPos.y - (edge.t_ny * worldHeight * factor_next),
-            anchorWorldPos.z - z_next_local
-        ];
-
-        // Update the current cluster's exit anchor
-        set(state => ({
-            activeClusters: state.activeClusters.map(c => 
-                c.id === current.id ? { ...c, anchorId: edge.source_shard } : c
-            )
-        }));
-    } else {
-        nextPos[0] += (Math.random() - 0.5) * 10;
-        nextPos[1] += (Math.random() - 0.5) * 10;
-    }
-
-    // --- CINEMATIC TRANSFORMATION BUDGET (35°) ---
-    const TOTAL_BUDGET = 35.0; 
-    const randomWeights = [Math.random(), Math.random(), Math.random(), Math.random()];
-    const W_SUM = randomWeights.reduce((a, b) => a + b, 0);
-    const budget = randomWeights.map(w => (w / W_SUM) * TOTAL_BUDGET);
-    const rotSway = budget.slice(0, 3);
-    const swerveDist = budget[3] * 0.5; 
-
-    const nextCluster = { 
-        id: nextId, 
-        worldPos: nextPos, 
-        anchorId: edge.target_shard,
-        rotSway: rotSway
+    const nextCluster = {
+        id: nextId,
+        worldPos: nextPos,
+        anchorId: undefined,
+        rotSway,
     };
     
     // 3. Camera Spline
