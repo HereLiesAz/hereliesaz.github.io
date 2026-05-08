@@ -10,29 +10,39 @@ export default function Scene() {
   const setGraph = useStore(state => state.setGraph);
   const setStartNode = useStore(state => state.setStartNode);
 
-  // Load graph + theater manifest in parallel; only walk paintings that
-  // actually have baked theater data, so the renderer never 404s.
+  // Load the theater graph — nodes for everything baked, edges weighted
+  // by pareidolia (shared-blotch) similarity. Falls back to legacy
+  // /graph.json + manifest filtering if the theater graph is missing.
   useEffect(() => {
-    Promise.all([
-      fetch('/graph.json').then(r => (r.ok ? r.json() : null)),
-      fetch('/data/theater/_manifest.json').then(r => (r.ok ? r.json() : [])).catch(() => []),
-    ])
-      .then(([graph, manifest]) => {
-        if (!graph) return;
-        const allowed = new Set(Array.isArray(manifest) ? manifest : []);
-        const filtered = allowed.size > 0
-          ? {
-              ...graph,
-              nodes: (graph.nodes || []).filter(n => allowed.has(n.id)),
-              edges: (graph.edges || []).filter(e => allowed.has(e.source) && allowed.has(e.target)),
-            }
-          : graph;
-        setGraph(filtered);
-        if (filtered.nodes && filtered.nodes.length > 0) {
-          setStartNode(filtered.nodes[0].id);
-        } else {
-          console.warn("[Scene] No nodes available after manifest filter; check public/data/theater/_manifest.json.");
+    fetch('/data/theater/graph.theater.json')
+      .then(r => (r.ok ? r.json() : null))
+      .then(graph => {
+        if (graph && Array.isArray(graph.nodes) && graph.nodes.length > 0) {
+          setGraph(graph);
+          setStartNode(graph.nodes[0].id);
+          return;
         }
+        // Legacy fallback.
+        return Promise.all([
+          fetch('/graph.json').then(r => (r.ok ? r.json() : null)),
+          fetch('/data/theater/_manifest.json').then(r => (r.ok ? r.json() : [])).catch(() => []),
+        ]).then(([legacy, manifest]) => {
+          if (!legacy) return;
+          const allowed = new Set(Array.isArray(manifest) ? manifest : []);
+          const filtered = allowed.size > 0
+            ? {
+                ...legacy,
+                nodes: (legacy.nodes || []).filter(n => allowed.has(n.id)),
+                edges: (legacy.edges || []).filter(e => allowed.has(e.source) && allowed.has(e.target)),
+              }
+            : legacy;
+          setGraph(filtered);
+          if (filtered.nodes && filtered.nodes.length > 0) {
+            setStartNode(filtered.nodes[0].id);
+          } else {
+            console.warn("[Scene] No paintings available; bake some via scripts/theater_baker.py.");
+          }
+        });
       })
       .catch(err => console.error("Graph Load Error:", err));
   }, [setGraph, setStartNode]);
