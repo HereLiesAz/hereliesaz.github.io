@@ -12,6 +12,23 @@ const WORLD_HEIGHT = 10.0;
 // toward as the camera pulls away from the painting's null.
 const BONE_WHITE = new THREE.Color('#f4f0e6');
 
+// Module-level cache: paintings re-appear over the course of an infinite
+// scroll, and several clusters can be alive at once. Keyed by id, value is
+// the in-flight or settled Promise so concurrent requests share a single
+// fetch.
+const theaterFetchCache = new Map();
+
+function fetchTheater(id) {
+  if (!id) return Promise.resolve(null);
+  const hit = theaterFetchCache.get(id);
+  if (hit) return hit;
+  const p = fetch(`/data/theater/${encodeURIComponent(id)}.theater.json`)
+    .then(res => (res.ok ? res.json() : null))
+    .catch(() => null);
+  theaterFetchCache.set(id, p);
+  return p;
+}
+
 // Distance envelope (in scene units) that gates accent colour and intensity.
 // Tuned roughly to the existing inter-painting Z spacing (~21 units).
 //   dist <= COLOR_HOT       full painting accent colour
@@ -156,10 +173,9 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    fetch(`/data/theater/${encodeURIComponent(id)}.theater.json`)
-      .then(res => (res.ok ? res.json() : null))
-      .then(json => { if (!cancelled) setData(json); })
-      .catch(() => { if (!cancelled) setData(null); });
+    fetchTheater(id).then(json => {
+      if (!cancelled) setData(json);
+    });
     return () => { cancelled = true; };
   }, [id]);
 
@@ -223,15 +239,24 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     );
   }, [mySegmentIndex, currentSegmentIndex, data, setCurrentResolution, setCurrentShardCount]);
 
-  // Cleanup geometries on unmount or when data changes.
+  // Dispose the previous layers' geometries when `layers` changes (e.g. the
+  // painting JSON arrives or the id swaps). This closes over the *old*
+  // layers array, so React calls it just before the new geometries take
+  // their place.
   useEffect(() => () => {
     layers.forEach(L => {
       if (L.blotches) L.blotches.dispose();
       if (L.strokes)  L.strokes.dispose();
     });
+  }, [layers]);
+
+  // Materials are stable across the component's lifetime (memoized on []),
+  // so dispose them only on unmount. Disposing them on every `layers`
+  // change would invalidate the materials still bound to the new meshes.
+  useEffect(() => () => {
     blotchMaterial.dispose();
     strokeMaterial.dispose();
-  }, [layers, blotchMaterial, strokeMaterial]);
+  }, [blotchMaterial, strokeMaterial]);
 
   // Drive accent gating off the camera's distance to the painting's anchor.
   // Inside FULL_DISTANCE the painting reads at full intensity and full
