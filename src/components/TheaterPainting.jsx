@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 
@@ -7,6 +7,36 @@ import { useStore } from '../store/useStore';
 // scene units. AESTHETIC §8.1 wants layers close together but distinct.
 const LAYER_Z_GAIN = 1.0 / 240.0;
 const WORLD_HEIGHT = 10.0;
+
+// Bone-white from AESTHETIC §2 — the colour painting accents desaturate
+// toward as the camera pulls away from the painting's null.
+const BONE_WHITE = new THREE.Color('#f4f0e6');
+
+// Module-level cache: paintings re-appear over the course of an infinite
+// scroll, and several clusters can be alive at once. Keyed by id, value is
+// the in-flight or settled Promise so concurrent requests share a single
+// fetch.
+const theaterFetchCache = new Map();
+
+function fetchTheater(id) {
+  if (!id) return Promise.resolve(null);
+  const hit = theaterFetchCache.get(id);
+  if (hit) return hit;
+  const p = fetch(`/data/theater/${encodeURIComponent(id)}.theater.json`)
+    .then(res => (res.ok ? res.json() : null))
+    .catch(() => null);
+  theaterFetchCache.set(id, p);
+  return p;
+}
+
+// Distance envelope (in scene units) that gates accent colour and intensity.
+// Tuned roughly to the existing inter-painting Z spacing (~21 units).
+//   dist <= COLOR_HOT       full painting accent colour
+//   COLOR_HOT..COLOR_GONE   colour fades to bone-white (still visible)
+//   COLOR_GONE..FADE_GONE   bone-white painting fades to invisible
+const COLOR_HOT  = 4.0;
+const COLOR_GONE = 6.0;
+const FADE_GONE  = 22.0;
 
 const blotchVS = /* glsl */ `
 attribute vec2 aPos;
@@ -25,22 +55,43 @@ void main() {
 }
 `;
 
-// Soft radial falloff. Color is the painting-sampled blotch color from the
-// baker; intensity is driven by camera proximity to this segment.
+// Soft radial falloff. Sampled blotch colour is mixed toward bone-white as
+// the camera pulls away from the painting's null (AESTHETIC §2 / §5).
 const blotchFS = /* glsl */ `
 precision highp float;
 varying vec2 vUv;
 varying vec3 vColor;
 uniform float uIntensity;
+uniform float uColorBleed;
+uniform vec3  uBoneWhite;
 void main() {
   float d = distance(vUv, vec2(0.5));
   float a = smoothstep(0.5, 0.0, d);
   a = pow(a, 1.4);
-  gl_FragColor = vec4(vColor, a * uIntensity);
+  vec3 hue = mix(uBoneWhite, vColor, uColorBleed);
+  gl_FragColor = vec4(hue, a * uIntensity);
 }
 `;
 
-function buildLayerGeometry(blotches, planeWidth, planeHeight) {
+const strokeVS = /* glsl */ `
+void main() {
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+// White ink. AESTHETIC §3 — strokes are how form precipitates onto the
+// black field. Alpha is gated by uIntensity (camera proximity).
+const strokeFS = /* glsl */ `
+precision highp float;
+uniform float uIntensity;
+uniform vec3  uBoneWhite;
+void main() {
+  gl_FragColor = vec4(uBoneWhite, uIntensity * 0.9);
+}
+`;
+
+function buildBlotchGeometry(blotches, planeWidth, planeHeight) {
   const geo = new THREE.InstancedBufferGeometry();
   const base = new THREE.PlaneGeometry(1, 1);
 
@@ -77,19 +128,54 @@ function buildLayerGeometry(blotches, planeWidth, planeHeight) {
   return geo;
 }
 
+function buildStrokeGeometry(strokes, planeWidth, planeHeight) {
+  if (!strokes || strokes.length === 0) return null;
+  // Each polyline of N points → (N-1) line segments → 2*(N-1) vertices.
+  let segCount = 0;
+  for (const s of strokes) segCount += Math.max(0, (s.points?.length || 0) - 1);
+  if (segCount === 0) return null;
+
+  const positions = new Float32Array(segCount * 2 * 3);
+  let v = 0;
+  const halfW = planeWidth * 0.5;
+  const halfH = planeHeight * 0.5;
+  for (const s of strokes) {
+    const pts = s.points;
+    if (!pts || pts.length < 2) continue;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ax, ay] = pts[i];
+      const [bx, by] = pts[i + 1];
+      positions[v++] = ax * halfW;
+      positions[v++] = ay * halfH;
+      positions[v++] = 0;
+      positions[v++] = bx * halfW;
+      positions[v++] = by * halfH;
+      positions[v++] = 0;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.computeBoundingSphere();
+  if (geo.boundingSphere) {
+    geo.boundingSphere.radius = Math.max(planeWidth, planeHeight);
+  }
+  return geo;
+}
+
 export default function TheaterPainting({ id, position, rotation, mySegmentIndex }) {
   const [data, setData] = useState(null);
+  const { camera } = useThree();
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const setCurrentShardCount = useStore(s => s.setCurrentShardCount);
+  const tmpVec = useRef(new THREE.Vector3());
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    fetch(`/data/theater/${encodeURIComponent(id)}.theater.json`)
-      .then(res => (res.ok ? res.json() : null))
-      .then(json => { if (!cancelled) setData(json); })
-      .catch(() => { if (!cancelled) setData(null); });
+    fetchTheater(id).then(json => {
+      if (!cancelled) setData(json);
+    });
     return () => { cancelled = true; };
   }, [id]);
 
@@ -102,13 +188,29 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     );
   }, [rotation]);
 
-  const material = useMemo(() => new THREE.ShaderMaterial({
+  const blotchMaterial = useMemo(() => new THREE.ShaderMaterial({
     vertexShader:   blotchVS,
     fragmentShader: blotchFS,
     transparent:    true,
     depthWrite:     false,
     blending:       THREE.AdditiveBlending,
-    uniforms:       { uIntensity: { value: 0.0 } },
+    uniforms: {
+      uIntensity:  { value: 0.0 },
+      uColorBleed: { value: 0.0 },
+      uBoneWhite:  { value: BONE_WHITE.clone() },
+    },
+  }), []);
+
+  const strokeMaterial = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   strokeVS,
+    fragmentShader: strokeFS,
+    transparent:    true,
+    depthWrite:     false,
+    blending:       THREE.AdditiveBlending,
+    uniforms: {
+      uIntensity: { value: 0.0 },
+      uBoneWhite: { value: BONE_WHITE.clone() },
+    },
   }), []);
 
   const layers = useMemo(() => {
@@ -120,7 +222,8 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     const planeHeight = WORLD_HEIGHT;
     return (data.layers || []).map(layer => ({
       z: (layer.z || 0) * LAYER_Z_GAIN,
-      geometry: buildLayerGeometry(layer.blotches || [], planeWidth, planeHeight),
+      blotches: buildBlotchGeometry(layer.blotches || [], planeWidth, planeHeight),
+      strokes:  buildStrokeGeometry(layer.strokes  || [], planeWidth, planeHeight),
     }));
   }, [data]);
 
@@ -136,18 +239,41 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     );
   }, [mySegmentIndex, currentSegmentIndex, data, setCurrentResolution, setCurrentShardCount]);
 
-  // Cleanup geometries on unmount or when data changes.
+  // Dispose the previous layers' geometries when `layers` changes (e.g. the
+  // painting JSON arrives or the id swaps). This closes over the *old*
+  // layers array, so React calls it just before the new geometries take
+  // their place.
   useEffect(() => () => {
-    layers.forEach(L => L.geometry.dispose());
-    material.dispose();
-  }, [layers, material]);
+    layers.forEach(L => {
+      if (L.blotches) L.blotches.dispose();
+      if (L.strokes)  L.strokes.dispose();
+    });
+  }, [layers]);
 
+  // Materials are stable across the component's lifetime (memoized on []),
+  // so dispose them only on unmount. Disposing them on every `layers`
+  // change would invalidate the materials still bound to the new meshes.
+  useEffect(() => () => {
+    blotchMaterial.dispose();
+    strokeMaterial.dispose();
+  }, [blotchMaterial, strokeMaterial]);
+
+  // Drive accent gating off the camera's distance to the painting's anchor.
+  // Inside FULL_DISTANCE the painting reads at full intensity and full
+  // colour saturation; between FULL and FADE the colour desaturates toward
+  // bone-white and the strokes thin out; beyond FADE the painting is gone.
   useFrame(() => {
-    // Active segment renders at full intensity; immediate neighbours dim out
-    // so paintings overlap on the field rather than crossfading through black.
-    const dist = Math.abs(mySegmentIndex - currentSegmentIndex);
-    const intensity = dist === 0 ? 1.0 : Math.max(0.0, 0.6 - 0.3 * (dist - 1));
-    material.uniforms.uIntensity.value = intensity;
+    if (!position) return;
+    const v = tmpVec.current;
+    v.set(position[0] || 0, position[1] || 0, position[2] || 0);
+    const dist = camera.position.distanceTo(v);
+
+    const fade  = 1.0 - THREE.MathUtils.smoothstep(dist, COLOR_GONE, FADE_GONE);
+    const bleed = 1.0 - THREE.MathUtils.smoothstep(dist, COLOR_HOT,  COLOR_GONE);
+
+    blotchMaterial.uniforms.uIntensity.value  = fade;
+    blotchMaterial.uniforms.uColorBleed.value = bleed;
+    strokeMaterial.uniforms.uIntensity.value  = fade;
   });
 
   if (!data || layers.length === 0) return null;
@@ -155,7 +281,14 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
   return (
     <group position={position} rotation={rotEuler}>
       {layers.map((L, i) => (
-        <mesh key={i} geometry={L.geometry} material={material} position={[0, 0, L.z]} />
+        <group key={i} position={[0, 0, L.z]}>
+          {L.blotches && (
+            <mesh geometry={L.blotches} material={blotchMaterial} />
+          )}
+          {L.strokes && (
+            <lineSegments geometry={L.strokes} material={strokeMaterial} />
+          )}
+        </group>
       ))}
     </group>
   );
