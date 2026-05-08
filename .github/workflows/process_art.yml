@@ -5,7 +5,9 @@ on:
   push:
     paths:
       - 'assets/raw/**'
-      - 'scripts/**'
+      - 'scripts/grinder.py'
+      - 'scripts/indexer.py'
+      - 'scripts/requirements.txt'
 
 # Cancel previous runs if you push again (prevents queue jams)
 concurrency:
