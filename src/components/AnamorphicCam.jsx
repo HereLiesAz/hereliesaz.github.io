@@ -12,7 +12,8 @@ export default function AnamorphicCam() {
   const segments = useStore(state => state.segments);
   const activeClusters = useStore(state => state.activeClusters);
   const completeTransition = useStore(state => state.completeTransition);
-  
+  const setTransitionProgress = useStore(state => state.setTransitionProgress);
+
   const PAGES_PER_SEGMENT = 4;
 
   useFrame((state, delta) => {
@@ -27,6 +28,10 @@ export default function AnamorphicCam() {
 
     const currentSegment = segments[segmentIndex];
     if (!currentSegment) return;
+
+    // Push live segment progress to the store so the chrome (caption fade,
+    // active-painting hand-off) can read it without listening on r3f frames.
+    setTransitionProgress(r);
 
     // Create a spline for this specific segment if not already done
     // (Optimization: we could pre-calculate these in the store, but here is fine for now)
