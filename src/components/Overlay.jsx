@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useRef } from 'react';
 import useStore from '../store/useStore';
 
 /**
@@ -7,9 +7,12 @@ import useStore from '../store/useStore';
  * Three pieces:
  *   1. Signature, top-left, hand-drawn-feel SVG that draws itself on
  *      first mount via a clip-path reveal. Click to open the menu.
- *   2. Caption, lower-left, white ink, tracked loose, fading with the
- *      painting (bell shape over each segment so it dips to silence at
- *      mid-segment when neither painting is the dominant gestalt).
+ *   2. Caption, lower-left, white ink, tracked loose. Opacity follows
+ *      |cos(πr)| over each segment — a trough whose floor sits at
+ *      mid-segment (where neither painting is the dominant gestalt)
+ *      and whose peaks land at the nulls (where the title is fully
+ *      legible). The title text swaps at r = 0.5 so each peak
+ *      announces the painting it belongs to.
  *   3. Vellum modal, no glass / blur / cards. A dimmed canvas with a
  *      hand-drawn ink frame and white-on-black text inside it.
  */
@@ -73,11 +76,17 @@ const STYLES = `
   text-transform: lowercase;
   letter-spacing: 0.18em;
   text-shadow: 0 0 16px rgba(0, 0, 0, 0.95);
-  transition: opacity 240ms ease;
   pointer-events: none;
+  /* Initial state lives here, not on the JSX style prop, so a React
+     re-render (e.g. showMenu toggling) doesn't stomp the per-frame
+     ref-driven opacity / visibility updates. */
+  opacity: 0;
+  visibility: hidden;
+  /* Manual per-frame updates would otherwise be smoothed by the
+     browser's transition machinery — kill it. */
+  transition: none;
 }
 .ink-caption__title { font-size: 0.95rem; letter-spacing: 0.22em; }
-.ink-caption__meta  { opacity: 0.55; margin-top: 0.4rem; }
 
 /* --- Vellum modal ----------------------------------------------------- */
 .ink-modal-backdrop {
@@ -186,12 +195,12 @@ function VellumFrame() {
 }
 
 const Overlay = () => {
-  // The closet's chrome runs off this state.
-  const activeClusters       = useStore(s => s.activeClusters);
-  const currentSegmentIndex  = useStore(s => s.currentSegmentIndex);
-  const transitionProgress   = useStore(s => s.transitionProgress);
-  const showMenu             = useStore(s => s.showMenu);
-  const toggleMenu           = useStore(s => s.toggleMenu);
+  // Only the low-frequency state goes through React. transitionProgress
+  // ticks every frame; reading it here would re-render the entire
+  // Overlay tree at 60–120 Hz. The caption wires itself directly to the
+  // store via a transient subscription below.
+  const showMenu   = useStore(s => s.showMenu);
+  const toggleMenu = useStore(s => s.toggleMenu);
 
   // Inject styles once.
   useEffect(() => {
@@ -202,31 +211,44 @@ const Overlay = () => {
     return () => { document.head.removeChild(sheet); };
   }, []);
 
-  // Pick the painting nearest the camera within the active segment.
-  const { activeId, captionOpacity } = useMemo(() => {
-    const start = activeClusters[currentSegmentIndex];
-    const end   = activeClusters[currentSegmentIndex + 1];
-    const id = (transitionProgress < 0.5 ? start?.id : end?.id) || start?.id || end?.id || null;
-    // |cos(πr)| → 1 at the nulls, 0 at the mid-segment dip — fades the
-    // caption out while no painting dominates, fades it back in as the
-    // next gestalt locks.
-    const opacity = Math.abs(Math.cos(transitionProgress * Math.PI));
-    return { activeId: id, captionOpacity: opacity };
-  }, [activeClusters, currentSegmentIndex, transitionProgress]);
+  // Caption refs. We bypass React reconciliation for the per-frame
+  // opacity / title updates and write straight to the DOM.
+  const captionRef = useRef(null);
+  const titleRef   = useRef(null);
+  const lastIdRef  = useRef(null);
+
+  useEffect(() => {
+    const apply = (state) => {
+      const start = state.activeClusters[state.currentSegmentIndex];
+      const end   = state.activeClusters[state.currentSegmentIndex + 1];
+      const id = (state.transitionProgress < 0.5 ? start?.id : end?.id)
+              || start?.id || end?.id || null;
+      // |cos(πr)| → 1 at the nulls, 0 at the mid-segment trough.
+      const opacity = id ? Math.abs(Math.cos(state.transitionProgress * Math.PI)) : 0;
+      if (captionRef.current) {
+        captionRef.current.style.opacity = String(opacity);
+        captionRef.current.style.visibility = id ? 'visible' : 'hidden';
+      }
+      if (titleRef.current && id !== lastIdRef.current) {
+        titleRef.current.textContent = id || '';
+        lastIdRef.current = id;
+      }
+    };
+    apply(useStore.getState());
+    return useStore.subscribe(apply);
+  }, []);
 
   return (
     <div className="ink-overlay">
       <button type="button" className="ink-signature" onClick={toggleMenu} aria-label="open menu">
-        <svg width="160" height="32" viewBox="0 0 160 32">
-          <text x="0" y="22" className="ink-signature__stroke">HereLiesAz</text>
+        <svg width="160" height="40" viewBox="0 0 160 40">
+          <text x="0" y="28" className="ink-signature__stroke">HereLiesAz</text>
         </svg>
       </button>
 
-      {activeId && (
-        <div className="ink-caption" style={{ opacity: captionOpacity }}>
-          <div className="ink-caption__title">{activeId}</div>
-        </div>
-      )}
+      <div ref={captionRef} className="ink-caption">
+        <div ref={titleRef} className="ink-caption__title" />
+      </div>
 
       {showMenu && (
         <div className="ink-modal-backdrop" onClick={toggleMenu}>
