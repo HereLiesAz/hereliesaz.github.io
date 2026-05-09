@@ -29,6 +29,20 @@ function fetchTheater(id) {
   return p;
 }
 
+// Stamp library (AESTHETIC §8.3): { stamp_NN: { points: [[x,y]...] } }.
+// Every painting that needs hatching references the same library, so the
+// fetch happens exactly once per session and all components await the
+// same Promise.
+let strokeLibraryPromise = null;
+function fetchStrokeLibrary() {
+  if (strokeLibraryPromise) return strokeLibraryPromise;
+  strokeLibraryPromise = fetch('/data/theater/stroke_library.json')
+    .then(res => (res.ok ? res.json() : null))
+    .then(json => (json && json.stamps) || {})
+    .catch(() => ({}));
+  return strokeLibraryPromise;
+}
+
 // Distance envelope (in scene units) that gates accent colour and intensity.
 // Tuned roughly to the existing inter-painting Z spacing (~21 units).
 //   dist <= COLOR_HOT       full painting accent colour
@@ -38,15 +52,43 @@ const COLOR_HOT  = 4.0;
 const COLOR_GONE = 6.0;
 const FADE_GONE  = 22.0;
 
+// Per-shape silhouette wobble (AESTHETIC §8.2 — soft, irregular blotches,
+// not perfect circles). aShapeId is an integer in [0, BLOTCH_SHAPE_COUNT);
+// the VS hashes it into deterministic harmonic amplitudes and phases that
+// vary the radial threshold the FS smoothsteps against. Same id everywhere
+// → same silhouette, so the spec's "blotches may repeat" recurrence is
+// preserved.
 const blotchVS = /* glsl */ `
-attribute vec2 aPos;
+attribute vec2  aPos;
 attribute float aScale;
-attribute vec3 aColor;
+attribute vec3  aColor;
+attribute float aShapeId;
+
 varying vec2 vUv;
 varying vec3 vColor;
+varying vec4 vWobAmp;    // amp.xyz + base radius
+varying vec4 vWobPhase;  // phase.xyz + rotation phase
+
+float h(float n) { return fract(sin(n) * 43758.5453); }
+
 void main() {
   vUv = uv;
   vColor = aColor;
+
+  float s = aShapeId * 0.137 + 1.0;
+  vWobAmp = vec4(
+    0.06 + 0.07 * h(s),
+    0.04 + 0.06 * h(s + 1.7),
+    0.03 + 0.05 * h(s + 3.1),
+    0.92 + 0.08 * h(s + 5.3)
+  );
+  vWobPhase = vec4(
+    6.2831853 * h(s + 0.7),
+    6.2831853 * h(s + 2.1),
+    6.2831853 * h(s + 4.5),
+    6.2831853 * h(s + 6.9)
+  );
+
   vec3 transformed = position;
   transformed.xy *= aScale * 2.0;
   transformed.xy += aPos;
@@ -55,18 +97,28 @@ void main() {
 }
 `;
 
-// Soft radial falloff. Sampled blotch colour is mixed toward bone-white as
-// the camera pulls away from the painting's null (AESTHETIC §2 / §5).
+// Soft, wobbly radial silhouette. The base radius vWobAmp.w plus three
+// harmonics of the angular coordinate produces a different blob shape per
+// id. Then the same accent-gating pipeline as before mixes the painting-
+// sampled colour toward bone-white as the camera pulls away (§2 / §5).
 const blotchFS = /* glsl */ `
 precision highp float;
 varying vec2 vUv;
 varying vec3 vColor;
+varying vec4 vWobAmp;
+varying vec4 vWobPhase;
 uniform float uIntensity;
 uniform float uColorBleed;
 uniform vec3  uBoneWhite;
 void main() {
-  float d = distance(vUv, vec2(0.5));
-  float a = smoothstep(0.5, 0.0, d);
+  vec2  c = (vUv - vec2(0.5)) * 2.0;
+  float r = length(c);
+  float ang = atan(c.y, c.x) + vWobPhase.w;
+  float wob = sin(ang * 2.0 + vWobPhase.x) * vWobAmp.x
+            + sin(ang * 3.0 + vWobPhase.y) * vWobAmp.y
+            + sin(ang * 5.0 + vWobPhase.z) * vWobAmp.z;
+  float edge = vWobAmp.w + wob;
+  float a = smoothstep(edge, edge * 0.45, r);
   a = pow(a, 1.4);
   vec3 hue = mix(uBoneWhite, vColor, uColorBleed);
   gl_FragColor = vec4(hue, a * uIntensity);
@@ -91,6 +143,13 @@ void main() {
 }
 `;
 
+// Parse "blob_07" → 7. Falls back to 0 for missing/legacy shape ids.
+function parseShapeId(s) {
+  if (typeof s !== 'string') return 0;
+  const m = s.match(/_(\d+)$/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 function buildBlotchGeometry(blotches, planeWidth, planeHeight) {
   const geo = new THREE.InstancedBufferGeometry();
   const base = new THREE.PlaneGeometry(1, 1);
@@ -100,10 +159,11 @@ function buildBlotchGeometry(blotches, planeWidth, planeHeight) {
   geo.attributes.uv = base.attributes.uv;
 
   const n = blotches.length;
-  const aPos   = new Float32Array(n * 2);
-  const aScale = new Float32Array(n);
-  const aColor = new Float32Array(n * 3);
-  const tmp    = new THREE.Color();
+  const aPos     = new Float32Array(n * 2);
+  const aScale   = new Float32Array(n);
+  const aColor   = new Float32Array(n * 3);
+  const aShapeId = new Float32Array(n);
+  const tmp      = new THREE.Color();
 
   for (let i = 0; i < n; i++) {
     const b = blotches[i];
@@ -114,11 +174,13 @@ function buildBlotchGeometry(blotches, planeWidth, planeHeight) {
     aColor[i * 3]     = tmp.r;
     aColor[i * 3 + 1] = tmp.g;
     aColor[i * 3 + 2] = tmp.b;
+    aShapeId[i]       = parseShapeId(b.shape);
   }
 
-  geo.setAttribute('aPos',   new THREE.InstancedBufferAttribute(aPos,   2));
-  geo.setAttribute('aScale', new THREE.InstancedBufferAttribute(aScale, 1));
-  geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3));
+  geo.setAttribute('aPos',     new THREE.InstancedBufferAttribute(aPos,     2));
+  geo.setAttribute('aScale',   new THREE.InstancedBufferAttribute(aScale,   1));
+  geo.setAttribute('aColor',   new THREE.InstancedBufferAttribute(aColor,   3));
+  geo.setAttribute('aShapeId', new THREE.InstancedBufferAttribute(aShapeId, 1));
 
   geo.instanceCount = n;
   geo.computeBoundingSphere();
@@ -128,20 +190,43 @@ function buildBlotchGeometry(blotches, planeWidth, planeHeight) {
   return geo;
 }
 
-function buildStrokeGeometry(strokes, planeWidth, planeHeight) {
+// A stroke entry is either an inline polyline { points: [[x,y]...] } or a
+// library reference { path: "stamp_NN", x, y, scale, rot }. Both expand to
+// a list of [x, y] pairs in painting-normalized [-1, 1] coordinates.
+function expandStroke(stroke, library) {
+  if (Array.isArray(stroke.points)) return stroke.points;
+  if (!library) return null;
+  const tmpl = library[stroke.path];
+  if (!tmpl || !Array.isArray(tmpl.points)) return null;
+  const cosR = Math.cos(stroke.rot || 0);
+  const sinR = Math.sin(stroke.rot || 0);
+  const sx   = stroke.scale || 1;
+  const ox   = stroke.x || 0;
+  const oy   = stroke.y || 0;
+  return tmpl.points.map(([px, py]) => [
+    ox + sx * (cosR * px - sinR * py),
+    oy + sx * (sinR * px + cosR * py),
+  ]);
+}
+
+function buildStrokeGeometry(strokes, library, planeWidth, planeHeight) {
   if (!strokes || strokes.length === 0) return null;
-  // Each polyline of N points → (N-1) line segments → 2*(N-1) vertices.
+  // Resolve every stroke (inline or library-stamp) to a polyline first so
+  // we know the segment budget before allocating the position buffer.
+  const expanded = [];
+  for (const s of strokes) {
+    const pts = expandStroke(s, library);
+    if (pts && pts.length >= 2) expanded.push(pts);
+  }
   let segCount = 0;
-  for (const s of strokes) segCount += Math.max(0, (s.points?.length || 0) - 1);
+  for (const pts of expanded) segCount += pts.length - 1;
   if (segCount === 0) return null;
 
   const positions = new Float32Array(segCount * 2 * 3);
   let v = 0;
   const halfW = planeWidth * 0.5;
   const halfH = planeHeight * 0.5;
-  for (const s of strokes) {
-    const pts = s.points;
-    if (!pts || pts.length < 2) continue;
+  for (const pts of expanded) {
     for (let i = 0; i < pts.length - 1; i++) {
       const [ax, ay] = pts[i];
       const [bx, by] = pts[i + 1];
@@ -164,6 +249,7 @@ function buildStrokeGeometry(strokes, planeWidth, planeHeight) {
 
 export default function TheaterPainting({ id, position, rotation, mySegmentIndex }) {
   const [data, setData] = useState(null);
+  const [library, setLibrary] = useState(null);
   const { camera } = useThree();
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
@@ -178,6 +264,14 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     });
     return () => { cancelled = true; };
   }, [id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchStrokeLibrary().then(lib => {
+      if (!cancelled) setLibrary(lib);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const rotEuler = useMemo(() => {
     const r = rotation || [0, 0, 0];
@@ -215,6 +309,10 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
 
   const layers = useMemo(() => {
     if (!data) return [];
+    // Wait for the stamp library before building stroke geometry — without
+    // it we'd silently drop every library-stamp reference. The library is
+    // tiny (12 stamps), shared by all paintings, and fetched once.
+    if (!library) return [];
     const w = data.src?.width  || 1;
     const h = data.src?.height || 1;
     const aspect = w / h;
@@ -223,9 +321,9 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     return (data.layers || []).map(layer => ({
       z: (layer.z || 0) * LAYER_Z_GAIN,
       blotches: buildBlotchGeometry(layer.blotches || [], planeWidth, planeHeight),
-      strokes:  buildStrokeGeometry(layer.strokes  || [], planeWidth, planeHeight),
+      strokes:  buildStrokeGeometry(layer.strokes  || [], library, planeWidth, planeHeight),
     }));
-  }, [data]);
+  }, [data, library]);
 
   // Sync metadata for the active painting (same contract as legacy ShardCloud).
   useEffect(() => {
