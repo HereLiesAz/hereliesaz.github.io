@@ -29,12 +29,24 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+
+def stable_hash(*parts) -> int:
+    """Deterministic 32-bit hash, stable across processes.
+
+    Python's built-in hash() is salted per process (PYTHONHASHSEED), so
+    repeated bakes would churn shape ids and stamp choices. We need an
+    output that depends only on the inputs.
+    """
+    msg = "|".join(repr(p) for p in parts).encode("utf-8")
+    return int(hashlib.md5(msg).hexdigest()[:8], 16)
 
 
 # ---- tuning knobs -----------------------------------------------------------
@@ -138,9 +150,9 @@ def find_blotches(mask: np.ndarray, min_area_px: int, max_count: int) -> list[di
         scale = float(np.sqrt(area) / diag)
         # Deterministic library shape id from position — keeps the same
         # blotch reading the same way across re-bakes, but spreads shapes
-        # so a painting doesn't read as one repeated silhouette.
-        shape_id = abs(hash(("blob", round(nx, 3), round(ny, 3), round(scale, 3))))
-        shape_idx = shape_id % BLOTCH_SHAPE_COUNT
+        # so a painting doesn't read as one repeated silhouette. Uses
+        # stable_hash because Python's built-in hash() is process-salted.
+        shape_idx = stable_hash("blob", round(nx, 3), round(ny, 3), round(scale, 3)) % BLOTCH_SHAPE_COUNT
         components.append({
             "shape": f"blob_{shape_idx:02d}",
             "x":     round(nx,    4),
@@ -166,8 +178,7 @@ def hatch_blotches(blotches: list[dict], rng: np.random.Generator) -> list[dict]
         if b["scale"] < HATCH_BLOTCH_MIN_SCALE:
             continue
         for k in range(HATCH_PER_BLOTCH):
-            seed = abs(hash(("hatch", b["x"], b["y"], k)))
-            stamp_idx = seed % STAMP_COUNT
+            stamp_idx = stable_hash("hatch", b["x"], b["y"], k) % STAMP_COUNT
             # Slight offset within the blotch so multiple stamps don't overlap.
             jitter_r = b["scale"] * 0.35
             theta    = float(rng.uniform(0, 2 * np.pi))
@@ -287,7 +298,8 @@ def bake_image(path: Path, k: int, max_side: int) -> dict:
         zs = np.array([Z_FRONT])
 
     # Deterministic jitter per painting so re-bakes don't churn the output.
-    rng = np.random.default_rng(abs(hash(path.stem)) & 0xFFFFFFFF)
+    # stable_hash because Python's hash() is salted per-process.
+    rng = np.random.default_rng(stable_hash("painting", path.stem))
 
     layers = []
     for ci in range(k):
