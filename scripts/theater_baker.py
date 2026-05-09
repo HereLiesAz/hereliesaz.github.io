@@ -56,6 +56,16 @@ STROKE_MIN_VERTS       = 4
 STROKE_MAX_VERTS       = 32
 STROKE_JITTER_FRAC     = 0.0035  # ÷ image diagonal, paper-feel wobble
 
+# Library references (AESTHETIC §8.2, §8.3) — recurring shapes the renderer
+# resolves against an asset bank instead of carrying inline geometry. Both
+# libraries are *small* and *finite*; the spec wants the same shape to recur
+# across paintings.
+BLOTCH_SHAPE_COUNT     = 12      # blob_00 .. blob_11 (renderer maps id → SDF wobble)
+STAMP_COUNT            = 12      # stamp_00 .. stamp_11 (see public/data/theater/stroke_library.json)
+HATCH_BLOTCH_MIN_SCALE = 0.04    # blotches below this are too small to hatch
+HATCH_PER_BLOTCH       = 2       # stamps stamped per qualifying blotch
+HATCH_SCALE_FRAC       = 0.85    # stamp scale ÷ blotch scale
+
 Z_FRONT                = 0.0
 Z_BACK                 = -240.0  # darkest layer sits this far behind front
 FULCRUM                = {"z": 0, "fov": 35}
@@ -126,8 +136,13 @@ def find_blotches(mask: np.ndarray, min_area_px: int, max_count: int) -> list[di
         nx = (2.0 * cx / w) - 1.0
         ny = 1.0 - (2.0 * cy / h)
         scale = float(np.sqrt(area) / diag)
+        # Deterministic library shape id from position — keeps the same
+        # blotch reading the same way across re-bakes, but spreads shapes
+        # so a painting doesn't read as one repeated silhouette.
+        shape_id = abs(hash(("blob", round(nx, 3), round(ny, 3), round(scale, 3))))
+        shape_idx = shape_id % BLOTCH_SHAPE_COUNT
         components.append({
-            "shape": "blob_default",
+            "shape": f"blob_{shape_idx:02d}",
             "x":     round(nx,    4),
             "y":     round(ny,    4),
             "scale": round(scale, 4),
@@ -140,6 +155,31 @@ def find_blotches(mask: np.ndarray, min_area_px: int, max_count: int) -> list[di
     for c in components:
         del c["_area"]
     return components
+
+
+def hatch_blotches(blotches: list[dict], rng: np.random.Generator) -> list[dict]:
+    """For each large enough blotch, stamp HATCH_PER_BLOTCH library strokes
+    on top — short scribble marks the renderer expands from the stamp
+    library at draw time. Spec §3 hatch + §8.3 recurring stamps."""
+    out = []
+    for b in blotches:
+        if b["scale"] < HATCH_BLOTCH_MIN_SCALE:
+            continue
+        for k in range(HATCH_PER_BLOTCH):
+            seed = abs(hash(("hatch", b["x"], b["y"], k)))
+            stamp_idx = seed % STAMP_COUNT
+            # Slight offset within the blotch so multiple stamps don't overlap.
+            jitter_r = b["scale"] * 0.35
+            theta    = float(rng.uniform(0, 2 * np.pi))
+            out.append({
+                "path":  f"stamp_{stamp_idx:02d}",
+                "x":     round(b["x"] + jitter_r * float(np.cos(theta)), 4),
+                "y":     round(b["y"] + jitter_r * float(np.sin(theta)), 4),
+                "scale": round(b["scale"] * HATCH_SCALE_FRAC, 4),
+                "rot":   round(float(rng.uniform(0, 2 * np.pi)), 4),
+                "weight": 0.4,
+            })
+    return out
 
 
 # ---- stroke extraction ------------------------------------------------------
@@ -258,7 +298,10 @@ def bake_image(path: Path, k: int, max_side: int) -> dict:
         color_hex = _hex(centers[ci])
         for b in blotches:
             b["color"] = color_hex
-        strokes = find_strokes(mask, diag, rng)
+        # Strokes for this layer are: contour traces (inline polylines) +
+        # library hatch stamps stamped on top of large blotches. Renderer
+        # handles both forms in the same array.
+        strokes = find_strokes(mask, diag, rng) + hatch_blotches(blotches, rng)
         layers.append({
             "z":        round(float(zs[ci]), 2),
             "weight":   round(float(cluster_weight[ci]), 4),
@@ -344,8 +387,17 @@ def main(argv: list[str]) -> int:
 
 
 def write_manifest(out_dir: Path) -> None:
-    """Emit _manifest.json listing every painting id with theater data on disk."""
-    ids = sorted(p.stem.removesuffix(".theater") for p in out_dir.glob("*.theater.json"))
+    """Emit _manifest.json listing every painting id with theater data on disk.
+
+    Skips aggregate files that share the *.theater.json suffix
+    (graph.theater.json from the pareidolia indexer) and underscore-prefixed
+    siblings — only per-painting bakes belong in the manifest.
+    """
+    ids = []
+    for p in sorted(out_dir.glob("*.theater.json")):
+        if p.name == "graph.theater.json" or p.name.startswith("_"):
+            continue
+        ids.append(p.stem.removesuffix(".theater"))
     (out_dir / "_manifest.json").write_text(json.dumps(ids))
     print(f"[m] {len(ids)} ids -> {out_dir / '_manifest.json'}")
 
