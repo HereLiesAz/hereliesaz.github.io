@@ -23,7 +23,8 @@
       "Bash(netstat -tln)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:3000/)",
       "Bash(/tmp/pw-venv/bin/python tools/visual_check.py)",
-      "Bash(/tmp/pw-venv/bin/python /tmp/dom_probe.py)"
+      "Bash(/tmp/pw-venv/bin/python /tmp/dom_probe.py)",
+      "Bash(git fetch *)"
     ]
   }
 }

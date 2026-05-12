@@ -118,3 +118,5 @@ sam_vit_b_01ec64.pth
 # --- ONCOLOGY: Remove Build Artifacts ---
 public/data/*.json
 !public/data/.keep
+*.example
+*.local
