@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import {
+  LineSegments2,
+  LineSegmentsGeometry,
+  LineMaterial,
+} from 'three-stdlib';
 import { useStore } from '../store/useStore';
 
 // Maps theater.json layer.z (range -240..0 by current baker convention) into
@@ -125,23 +130,12 @@ void main() {
 }
 `;
 
-const strokeVS = /* glsl */ `
-void main() {
-  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * mvPosition;
-}
-`;
-
-// White ink. AESTHETIC §3 — strokes are how form precipitates onto the
-// black field. Alpha is gated by uIntensity (camera proximity).
-const strokeFS = /* glsl */ `
-precision highp float;
-uniform float uIntensity;
-uniform vec3  uBoneWhite;
-void main() {
-  gl_FragColor = vec4(uBoneWhite, uIntensity * 0.9);
-}
-`;
+// Stroke thickness in pixels. AESTHETIC §3 wants strokes to read as actual
+// pen marks; WebGL's default GL_LINES is driver-clamped to 1px which on a
+// 1080p+ framebuffer reads as a hairline silhouette and not as ink. We
+// render strokes through three-stdlib's LineSegments2 / LineMaterial which
+// implements screen-space thick lines via instanced segment quads.
+const STROKE_PX = 1.5;
 
 // Parse "blob_07" → 7. Falls back to 0 for missing/legacy shape ids.
 function parseShapeId(s) {
