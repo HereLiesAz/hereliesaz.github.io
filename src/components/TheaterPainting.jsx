@@ -144,6 +144,13 @@ function parseShapeId(s) {
   return m ? parseInt(m[1], 10) : 0;
 }
 
+// b.scale is sqrt(area)/diag in painting space — useful as a relative size
+// hint but, multiplied straight into world units, produces blobs whose
+// radius covers ~20% of the painting (a 0.2-scale blotch on a 10-unit
+// plane is 2 world units wide). Visually those are huge fluffy ovals that
+// poke past the plane edges. Half it to land near "paint dab" size.
+const BLOTCH_SIZE_SCALE = 0.5;
+
 function buildBlotchGeometry(blotches, planeWidth, planeHeight) {
   const geo = new THREE.InstancedBufferGeometry();
   const base = new THREE.PlaneGeometry(1, 1);
@@ -159,11 +166,21 @@ function buildBlotchGeometry(blotches, planeWidth, planeHeight) {
   const aShapeId = new Float32Array(n);
   const tmp      = new THREE.Color();
 
+  const halfW = planeWidth  * 0.5;
+  const halfH = planeHeight * 0.5;
+
   for (let i = 0; i < n; i++) {
     const b = blotches[i];
-    aPos[i * 2]     = b.x * planeWidth  * 0.5;
-    aPos[i * 2 + 1] = b.y * planeHeight * 0.5;
-    aScale[i]       = b.scale * Math.min(planeWidth, planeHeight);
+    const radius = b.scale * Math.min(planeWidth, planeHeight) * BLOTCH_SIZE_SCALE;
+    aScale[i] = radius;
+    // Clamp aPos so the blotch's extent (centre ± radius) never reaches
+    // past the painting plane — otherwise corner blotches read as the
+    // sharp wedge of the PlaneGeometry quad clipped to the camera
+    // frustum.
+    const maxX = Math.max(0, halfW - radius);
+    const maxY = Math.max(0, halfH - radius);
+    aPos[i * 2]     = Math.max(-maxX, Math.min(maxX, b.x * halfW));
+    aPos[i * 2 + 1] = Math.max(-maxY, Math.min(maxY, b.y * halfH));
     tmp.set(b.color);
     aColor[i * 3]     = tmp.r;
     aColor[i * 3 + 1] = tmp.g;
@@ -216,7 +233,7 @@ function buildStrokeGeometry(strokes, library, planeWidth, planeHeight) {
   for (const pts of expanded) segCount += pts.length - 1;
   if (segCount === 0) return null;
 
-  const positions = new Float32Array(segCount * 2 * 3);
+  const positions = new Array(segCount * 2 * 3);
   let v = 0;
   const halfW = planeWidth * 0.5;
   const halfH = planeHeight * 0.5;
@@ -232,8 +249,8 @@ function buildStrokeGeometry(strokes, library, planeWidth, planeHeight) {
       positions[v++] = 0;
     }
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const geo = new LineSegmentsGeometry();
+  geo.setPositions(positions);
   geo.computeBoundingSphere();
   if (geo.boundingSphere) {
     geo.boundingSphere.radius = Math.max(planeWidth, planeHeight);
@@ -244,7 +261,7 @@ function buildStrokeGeometry(strokes, library, planeWidth, planeHeight) {
 export default function TheaterPainting({ id, position, rotation, mySegmentIndex }) {
   const [data, setData] = useState(null);
   const [library, setLibrary] = useState(null);
-  const { camera } = useThree();
+  const { camera, size } = useThree();
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const setCurrentShardCount = useStore(s => s.setCurrentShardCount);
@@ -289,17 +306,28 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     },
   }), []);
 
-  const strokeMaterial = useMemo(() => new THREE.ShaderMaterial({
-    vertexShader:   strokeVS,
-    fragmentShader: strokeFS,
-    transparent:    true,
-    depthWrite:     false,
-    blending:       THREE.AdditiveBlending,
-    uniforms: {
-      uIntensity: { value: 0.0 },
-      uBoneWhite: { value: BONE_WHITE.clone() },
-    },
-  }), []);
+  // three-stdlib's LineMaterial is a ShaderMaterial whose vertex shader
+  // expands line segments into screen-space billboards of a given pixel
+  // width — exactly what the spec asks for (real ink, not GL_LINES). The
+  // `opacity` uniform comes from UniformsLib.common; we drive it from
+  // the same fade envelope as the blotch material.
+  const strokeMaterial = useMemo(() => {
+    const mat = new LineMaterial({
+      color:        BONE_WHITE.getHex(),
+      linewidth:    STROKE_PX,
+      transparent:  true,
+      depthWrite:   false,
+    });
+    mat.blending = THREE.AdditiveBlending;
+    mat.resolution.set(size.width || 1, size.height || 1);
+    return mat;
+  }, []);
+
+  // Keep the line shader's resolution uniform in sync with the canvas so
+  // thickness stays consistent under window resizes.
+  useEffect(() => {
+    strokeMaterial.resolution.set(size.width, size.height);
+  }, [size.width, size.height, strokeMaterial]);
 
   const layers = useMemo(() => {
     if (!data) return [];
@@ -312,12 +340,19 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     const aspect = w / h;
     const planeWidth  = WORLD_HEIGHT * aspect;
     const planeHeight = WORLD_HEIGHT;
-    return (data.layers || []).map(layer => ({
-      z: (layer.z || 0) * LAYER_Z_GAIN,
-      blotches: buildBlotchGeometry(layer.blotches || [], planeWidth, planeHeight),
-      strokes:  buildStrokeGeometry(layer.strokes  || [], library, planeWidth, planeHeight),
-    }));
-  }, [data, library]);
+    return (data.layers || []).map(layer => {
+      const blotches = buildBlotchGeometry(layer.blotches || [], planeWidth, planeHeight);
+      const strokeGeo = buildStrokeGeometry(layer.strokes || [], library, planeWidth, planeHeight);
+      let strokes = null;
+      if (strokeGeo) {
+        // LineSegments2 expands the segment buffer into screen-space
+        // quads via the shared LineMaterial — see strokeMaterial above.
+        strokes = new LineSegments2(strokeGeo, strokeMaterial);
+        strokes.computeLineDistances();
+      }
+      return { z: (layer.z || 0) * LAYER_Z_GAIN, blotches, strokes };
+    });
+  }, [data, library, strokeMaterial]);
 
   // Sync metadata for the active painting (same contract as legacy ShardCloud).
   useEffect(() => {
@@ -334,11 +369,11 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
   // Dispose the previous layers' geometries when `layers` changes (e.g. the
   // painting JSON arrives or the id swaps). This closes over the *old*
   // layers array, so React calls it just before the new geometries take
-  // their place.
+  // their place. The shared materials are disposed only on unmount.
   useEffect(() => () => {
     layers.forEach(L => {
       if (L.blotches) L.blotches.dispose();
-      if (L.strokes)  L.strokes.dispose();
+      if (L.strokes && L.strokes.geometry) L.strokes.geometry.dispose();
     });
   }, [layers]);
 
@@ -365,7 +400,13 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
 
     blotchMaterial.uniforms.uIntensity.value  = fade;
     blotchMaterial.uniforms.uColorBleed.value = bleed;
-    strokeMaterial.uniforms.uIntensity.value  = fade;
+    // LineMaterial's opacity is the standard Material.opacity uniform from
+    // UniformsLib.common — set both the JS property and the uniform so
+    // dirty-state tracking lines up across three's internals.
+    strokeMaterial.opacity = fade;
+    if (strokeMaterial.uniforms && strokeMaterial.uniforms.opacity) {
+      strokeMaterial.uniforms.opacity.value = fade;
+    }
   });
 
   if (!data || layers.length === 0) return null;
@@ -378,7 +419,7 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
             <mesh geometry={L.blotches} material={blotchMaterial} />
           )}
           {L.strokes && (
-            <lineSegments geometry={L.strokes} material={strokeMaterial} />
+            <primitive object={L.strokes} />
           )}
         </group>
       ))}
