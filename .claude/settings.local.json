@@ -24,7 +24,19 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:3000/)",
       "Bash(/tmp/pw-venv/bin/python tools/visual_check.py)",
       "Bash(/tmp/pw-venv/bin/python /tmp/dom_probe.py)",
-      "Bash(git fetch *)"
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "Bash(/tmp/pw-venv/bin/pip list *)",
+      "Bash(/tmp/pw-venv/bin/pip install *)",
+      "Bash(/tmp/pw-venv/bin/python -c \"from huggingface_hub import InferenceClient; print\\('ok'\\)\")",
+      "Bash(/tmp/pw-venv/bin/python)",
+      "Bash(/tmp/pw-venv/bin/python -c ' *)",
+      "Bash(/tmp/pw-venv/bin/python scripts/theater_baker.py --input public/assets --output public/data/theater --limit 3 --force)",
+      "Bash(pkill -f \"vite\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:3000/)",
+      "Bash(nohup npx *)",
+      "Bash(disown)",
+      "Bash(echo \"started, pid $!\")"
     ]
   }
 }

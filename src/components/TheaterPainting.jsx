@@ -1,288 +1,153 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import {
-  LineSegments2,
-  LineSegmentsGeometry,
-  LineMaterial,
-} from 'three-stdlib';
 import { useStore } from '../store/useStore';
 
-// Maps theater.json layer.z (range -240..0 by current baker convention) into
-// scene units. AESTHETIC §8.1 wants layers close together but distinct.
-const LAYER_Z_GAIN = 1.0 / 240.0;
-const WORLD_HEIGHT = 10.0;
+// World-height of every painting's central shell, and the depth of the
+// shell from front to back. Each painting occupies a slab of 3D space
+// `PAINTING_HEIGHT × aspect × SHELL_DEPTH` and the 30 layers sit on
+// stacked planes inside that slab.
+const PAINTING_HEIGHT = 10.0;
+const SHELL_DEPTH     = 4.5;
 
-// Bone-white from AESTHETIC §2 — the colour painting accents desaturate
-// toward as the camera pulls away from the painting's null.
+// Push the shell ahead of the painting's worldPos so the camera, which
+// arrives at worldPos at each null, sees the painting at a comfortable
+// reading distance instead of plunging into its near face.
+//   front plane at  world z = worldPos.z - SHELL_FRONT
+//   back  plane at  world z = worldPos.z - SHELL_FRONT - SHELL_DEPTH
+// Chosen so a 10-unit-tall painting at 50° FoV roughly fills the frame.
+const SHELL_FRONT     = 11.0;
+
+// Bone-white from AESTHETIC §2 — what the painting hue mixes toward as the
+// camera pulls away from the null.
 const BONE_WHITE = new THREE.Color('#f4f0e6');
 
-// Module-level cache: paintings re-appear over the course of an infinite
-// scroll, and several clusters can be alive at once. Keyed by id, value is
-// the in-flight or settled Promise so concurrent requests share a single
-// fetch.
-const theaterFetchCache = new Map();
+const N_DEPTH = 10;
+const N_COLOR = 10;
+const N_LUM   = 10;
 
-function fetchTheater(id) {
-  if (!id) return Promise.resolve(null);
-  const hit = theaterFetchCache.get(id);
-  if (hit) return hit;
-  const p = fetch(`/data/theater/${encodeURIComponent(id)}.theater.json`)
-    .then(res => (res.ok ? res.json() : null))
-    .catch(() => null);
-  theaterFetchCache.set(id, p);
-  return p;
-}
-
-// Stamp library (AESTHETIC §8.3): { stamp_NN: { points: [[x,y]...] } }.
-// Every painting that needs hatching references the same library, so the
-// fetch happens exactly once per session and all components await the
-// same Promise.
-let strokeLibraryPromise = null;
-function fetchStrokeLibrary() {
-  if (strokeLibraryPromise) return strokeLibraryPromise;
-  strokeLibraryPromise = fetch('/data/theater/stroke_library.json')
-    .then(res => (res.ok ? res.json() : null))
-    .then(json => (json && json.stamps) || {})
-    .catch(() => ({}));
-  return strokeLibraryPromise;
-}
-
-// Distance envelope (in scene units) that gates accent colour and intensity.
-// Tuned roughly to the existing inter-painting Z spacing (~21 units).
-//   dist <= COLOR_HOT       full painting accent colour
-//   COLOR_HOT..COLOR_GONE   colour fades to bone-white (still visible)
-//   COLOR_GONE..FADE_GONE   bone-white painting fades to invisible
+// Distance envelope for accent gating (see useFrame below).
 const COLOR_HOT  = 4.0;
 const COLOR_GONE = 6.0;
 const FADE_GONE  = 22.0;
 
-// Per-shape silhouette wobble (AESTHETIC §8.2 — soft, irregular blotches,
-// not perfect circles). aShapeId is an integer in [0, BLOTCH_SHAPE_COUNT);
-// the VS hashes it into deterministic harmonic amplitudes and phases that
-// vary the radial threshold the FS smoothsteps against. Same id everywhere
-// → same silhouette, so the spec's "blotches may repeat" recurrence is
-// preserved.
-const blotchVS = /* glsl */ `
-attribute vec2  aPos;
-attribute float aScale;
-attribute vec3  aColor;
-attribute float aShapeId;
 
+// ---- module-level fetch caches ----------------------------------------------
+
+const theaterMetaCache = new Map();
+function fetchTheaterMeta(id) {
+  if (!id) return Promise.resolve(null);
+  const hit = theaterMetaCache.get(id);
+  if (hit) return hit;
+  const p = fetch(`/data/theater/${encodeURIComponent(id)}.theater.json`)
+    .then(res => (res.ok ? res.json() : null))
+    .catch(() => null);
+  theaterMetaCache.set(id, p);
+  return p;
+}
+
+
+// ---- shaders ----------------------------------------------------------------
+
+const layerVS = /* glsl */ `
 varying vec2 vUv;
-varying vec3 vColor;
-varying vec4 vWobAmp;    // amp.xyz + base radius
-varying vec4 vWobPhase;  // phase.xyz + rotation phase
-
-float h(float n) { return fract(sin(n) * 43758.5453); }
-
 void main() {
   vUv = uv;
-  vColor = aColor;
-
-  float s = aShapeId * 0.137 + 1.0;
-  vWobAmp = vec4(
-    0.06 + 0.07 * h(s),
-    0.04 + 0.06 * h(s + 1.7),
-    0.03 + 0.05 * h(s + 3.1),
-    0.92 + 0.08 * h(s + 5.3)
-  );
-  vWobPhase = vec4(
-    6.2831853 * h(s + 0.7),
-    6.2831853 * h(s + 2.1),
-    6.2831853 * h(s + 4.5),
-    6.2831853 * h(s + 6.9)
-  );
-
-  vec3 transformed = position;
-  transformed.xy *= aScale * 2.0;
-  transformed.xy += aPos;
-  vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
-// Soft, wobbly radial silhouette. The base radius vWobAmp.w plus three
-// harmonics of the angular coordinate produces a different blob shape per
-// id. Then the same accent-gating pipeline as before mixes the painting-
-// sampled colour toward bone-white as the camera pulls away (§2 / §5).
-const blotchFS = /* glsl */ `
+// Per-pixel: sample the painting and the layer-id mask. If this pixel does
+// not belong to this plane's layer, discard. Each set (depth / colour /
+// luminance) reads its assigned channel of the mask texture. The recovered
+// band index is compared to the plane's uLayerIdx with a half-band
+// tolerance, then alpha is multiplied by the camera-proximity envelope.
+//
+// Mask encoding (see scripts/theater_baker.py): values are 0..225 in steps
+// of 25, so the band index = round(channel * 255 / 25).
+const layerFS = /* glsl */ `
 precision highp float;
-varying vec2 vUv;
-varying vec3 vColor;
-varying vec4 vWobAmp;
-varying vec4 vWobPhase;
+uniform sampler2D uPainting;
+uniform sampler2D uMasks;
+uniform float uLayerIdx;
+uniform float uChannel;     // 0=R (depth), 1=G (colour), 2=B (luminance)
 uniform float uIntensity;
 uniform float uColorBleed;
 uniform vec3  uBoneWhite;
+varying vec2 vUv;
+
+float pickChannel(vec3 m, float c) {
+  return c < 0.5 ? m.r : (c < 1.5 ? m.g : m.b);
+}
+
 void main() {
-  vec2  c = (vUv - vec2(0.5)) * 2.0;
-  float r = length(c);
-  float ang = atan(c.y, c.x) + vWobPhase.w;
-  float wob = sin(ang * 2.0 + vWobPhase.x) * vWobAmp.x
-            + sin(ang * 3.0 + vWobPhase.y) * vWobAmp.y
-            + sin(ang * 5.0 + vWobPhase.z) * vWobAmp.z;
-  float edge = vWobAmp.w + wob;
-  float a = smoothstep(edge, edge * 0.45, r);
-  a = pow(a, 1.4);
-  vec3 hue = mix(uBoneWhite, vColor, uColorBleed);
-  gl_FragColor = vec4(hue, a * uIntensity);
+  vec3 painting = texture2D(uPainting, vUv).rgb;
+  vec3 mask     = texture2D(uMasks,    vUv).rgb;
+
+  float band = floor(pickChannel(mask, uChannel) * 255.0 / 25.0 + 0.5);
+  if (abs(band - uLayerIdx) > 0.5) discard;
+
+  vec3 hue = mix(uBoneWhite, painting, uColorBleed);
+  gl_FragColor = vec4(hue, uIntensity);
 }
 `;
 
-// Stroke thickness in pixels. AESTHETIC §3 wants strokes to read as actual
-// pen marks; WebGL's default GL_LINES is driver-clamped to 1px which on a
-// 1080p+ framebuffer reads as a hairline silhouette and not as ink. We
-// render strokes through three-stdlib's LineSegments2 / LineMaterial which
-// implements screen-space thick lines via instanced segment quads.
-const STROKE_PX = 1.5;
 
-// Parse "blob_07" → 7. Falls back to 0 for missing/legacy shape ids.
-function parseShapeId(s) {
-  if (typeof s !== 'string') return 0;
-  const m = s.match(/_(\d+)$/);
-  return m ? parseInt(m[1], 10) : 0;
-}
+// ---- per-layer plane assembly -----------------------------------------------
 
-// b.scale is sqrt(area)/diag in painting space — useful as a relative size
-// hint but, multiplied straight into world units, produces blobs whose
-// radius covers ~20% of the painting (a 0.2-scale blotch on a 10-unit
-// plane is 2 world units wide). Visually those are huge fluffy ovals that
-// poke past the plane edges. Half it to land near "paint dab" size.
-const BLOTCH_SIZE_SCALE = 0.5;
+function buildLayers(metadata) {
+  const layers = [];
+  const aspect = (metadata.src?.width || 1) / (metadata.src?.height || 1);
+  const planeWidth  = PAINTING_HEIGHT * aspect;
+  const planeHeight = PAINTING_HEIGHT;
 
-function buildBlotchGeometry(blotches, planeWidth, planeHeight) {
-  const geo = new THREE.InstancedBufferGeometry();
-  const base = new THREE.PlaneGeometry(1, 1);
+  // Lay the 30 slabs out along the shell. Set order is fixed: depth at the
+  // back (where the depth-band-0 — "farthest" pixels — really do live in
+  // space), then colour bands across the middle, then luminance at the
+  // front. The whole shell sits SHELL_FRONT units in front of the
+  // painting's worldPos so the camera reads it at a comfortable distance.
+  const zFront = -SHELL_FRONT;
+  const zBack  = -SHELL_FRONT - SHELL_DEPTH;
+  const setOffsets = [
+    { kind: 'depth', channel: 0, count: N_DEPTH, zStart: zBack,                          zEnd: zBack + SHELL_DEPTH * 1/3 },
+    { kind: 'color', channel: 1, count: N_COLOR, zStart: zBack + SHELL_DEPTH * 1/3,      zEnd: zBack + SHELL_DEPTH * 2/3 },
+    { kind: 'lum',   channel: 2, count: N_LUM,   zStart: zBack + SHELL_DEPTH * 2/3,      zEnd: zFront },
+  ];
 
-  geo.index = base.index;
-  geo.attributes.position = base.attributes.position;
-  geo.attributes.uv = base.attributes.uv;
-
-  const n = blotches.length;
-  const aPos     = new Float32Array(n * 2);
-  const aScale   = new Float32Array(n);
-  const aColor   = new Float32Array(n * 3);
-  const aShapeId = new Float32Array(n);
-  const tmp      = new THREE.Color();
-
-  const halfW = planeWidth  * 0.5;
-  const halfH = planeHeight * 0.5;
-
-  for (let i = 0; i < n; i++) {
-    const b = blotches[i];
-    const radius = b.scale * Math.min(planeWidth, planeHeight) * BLOTCH_SIZE_SCALE;
-    aScale[i] = radius;
-    // Clamp aPos so the blotch's extent (centre ± radius) never reaches
-    // past the painting plane — otherwise corner blotches read as the
-    // sharp wedge of the PlaneGeometry quad clipped to the camera
-    // frustum.
-    const maxX = Math.max(0, halfW - radius);
-    const maxY = Math.max(0, halfH - radius);
-    aPos[i * 2]     = Math.max(-maxX, Math.min(maxX, b.x * halfW));
-    aPos[i * 2 + 1] = Math.max(-maxY, Math.min(maxY, b.y * halfH));
-    tmp.set(b.color);
-    aColor[i * 3]     = tmp.r;
-    aColor[i * 3 + 1] = tmp.g;
-    aColor[i * 3 + 2] = tmp.b;
-    aShapeId[i]       = parseShapeId(b.shape);
-  }
-
-  geo.setAttribute('aPos',     new THREE.InstancedBufferAttribute(aPos,     2));
-  geo.setAttribute('aScale',   new THREE.InstancedBufferAttribute(aScale,   1));
-  geo.setAttribute('aColor',   new THREE.InstancedBufferAttribute(aColor,   3));
-  geo.setAttribute('aShapeId', new THREE.InstancedBufferAttribute(aShapeId, 1));
-
-  geo.instanceCount = n;
-  geo.computeBoundingSphere();
-  if (geo.boundingSphere) {
-    geo.boundingSphere.radius = Math.max(planeWidth, planeHeight);
-  }
-  return geo;
-}
-
-// A stroke entry is either an inline polyline { points: [[x,y]...] } or a
-// library reference { path: "stamp_NN", x, y, scale, rot }. Both expand to
-// a list of [x, y] pairs in painting-normalized [-1, 1] coordinates.
-function expandStroke(stroke, library) {
-  if (Array.isArray(stroke.points)) return stroke.points;
-  if (!library) return null;
-  const tmpl = library[stroke.path];
-  if (!tmpl || !Array.isArray(tmpl.points)) return null;
-  const cosR = Math.cos(stroke.rot || 0);
-  const sinR = Math.sin(stroke.rot || 0);
-  const sx   = stroke.scale || 1;
-  const ox   = stroke.x || 0;
-  const oy   = stroke.y || 0;
-  return tmpl.points.map(([px, py]) => [
-    ox + sx * (cosR * px - sinR * py),
-    oy + sx * (sinR * px + cosR * py),
-  ]);
-}
-
-function buildStrokeGeometry(strokes, library, planeWidth, planeHeight) {
-  if (!strokes || strokes.length === 0) return null;
-  // Resolve every stroke (inline or library-stamp) to a polyline first so
-  // we know the segment budget before allocating the position buffer.
-  const expanded = [];
-  for (const s of strokes) {
-    const pts = expandStroke(s, library);
-    if (pts && pts.length >= 2) expanded.push(pts);
-  }
-  let segCount = 0;
-  for (const pts of expanded) segCount += pts.length - 1;
-  if (segCount === 0) return null;
-
-  const positions = new Array(segCount * 2 * 3);
-  let v = 0;
-  const halfW = planeWidth * 0.5;
-  const halfH = planeHeight * 0.5;
-  for (const pts of expanded) {
-    for (let i = 0; i < pts.length - 1; i++) {
-      const [ax, ay] = pts[i];
-      const [bx, by] = pts[i + 1];
-      positions[v++] = ax * halfW;
-      positions[v++] = ay * halfH;
-      positions[v++] = 0;
-      positions[v++] = bx * halfW;
-      positions[v++] = by * halfH;
-      positions[v++] = 0;
+  for (const set of setOffsets) {
+    for (let i = 0; i < set.count; i++) {
+      const tMid = (i + 0.5) / set.count;
+      const z = THREE.MathUtils.lerp(set.zStart, set.zEnd, tMid);
+      layers.push({
+        kind:    set.kind,
+        channel: set.channel,
+        idx:     i,
+        z,
+        planeWidth,
+        planeHeight,
+      });
     }
   }
-  const geo = new LineSegmentsGeometry();
-  geo.setPositions(positions);
-  geo.computeBoundingSphere();
-  if (geo.boundingSphere) {
-    geo.boundingSphere.radius = Math.max(planeWidth, planeHeight);
-  }
-  return geo;
+  return layers;
 }
 
+
+// ---- component --------------------------------------------------------------
+
 export default function TheaterPainting({ id, position, rotation, mySegmentIndex }) {
-  const [data, setData] = useState(null);
-  const [library, setLibrary] = useState(null);
-  const { camera, size } = useThree();
+  const [meta, setMeta] = useState(null);
+  const { camera } = useThree();
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
-  const setCurrentShardCount = useStore(s => s.setCurrentShardCount);
   const tmpVec = useRef(new THREE.Vector3());
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    fetchTheater(id).then(json => {
-      if (!cancelled) setData(json);
-    });
+    fetchTheaterMeta(id).then(json => { if (!cancelled) setMeta(json); });
     return () => { cancelled = true; };
   }, [id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchStrokeLibrary().then(lib => {
-      if (!cancelled) setLibrary(lib);
-    });
-    return () => { cancelled = true; };
-  }, []);
 
   const rotEuler = useMemo(() => {
     const r = rotation || [0, 0, 0];
@@ -293,102 +158,110 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     );
   }, [rotation]);
 
-  const blotchMaterial = useMemo(() => new THREE.ShaderMaterial({
-    vertexShader:   blotchVS,
-    fragmentShader: blotchFS,
+  const layers = useMemo(() => meta ? buildLayers(meta) : [], [meta]);
+
+  // Shared material across all 30 planes of this painting. Per-plane data
+  // (layer index, channel) goes through onBeforeCompile-free attribute
+  // injection: we clone the material per plane below. Keeping it simple
+  // for now — one material, uniforms set per draw via the mesh-level
+  // material clone trick (see plane loop below).
+  const baseMaterial = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   layerVS,
+    fragmentShader: layerFS,
     transparent:    true,
     depthWrite:     false,
-    blending:       THREE.AdditiveBlending,
+    blending:       THREE.NormalBlending,
     uniforms: {
-      uIntensity:  { value: 0.0 },
-      uColorBleed: { value: 0.0 },
+      uPainting:   { value: null },
+      uMasks:      { value: null },
+      uLayerIdx:   { value: 0 },
+      uChannel:    { value: 0 },
+      uIntensity:  { value: 0 },
+      uColorBleed: { value: 0 },
       uBoneWhite:  { value: BONE_WHITE.clone() },
     },
   }), []);
 
-  // three-stdlib's LineMaterial is a ShaderMaterial whose vertex shader
-  // expands line segments into screen-space billboards of a given pixel
-  // width — exactly what the spec asks for (real ink, not GL_LINES). The
-  // `opacity` uniform comes from UniformsLib.common; we drive it from
-  // the same fade envelope as the blotch material.
-  const strokeMaterial = useMemo(() => {
-    const mat = new LineMaterial({
-      color:        BONE_WHITE.getHex(),
-      linewidth:    STROKE_PX,
-      transparent:  true,
-      depthWrite:   false,
-    });
-    mat.blending = THREE.AdditiveBlending;
-    mat.resolution.set(size.width || 1, size.height || 1);
-    return mat;
-  }, []);
+  const planeGeom = useMemo(() => new THREE.PlaneGeometry(1, 1), []);
 
-  // Keep the line shader's resolution uniform in sync with the canvas so
-  // thickness stays consistent under window resizes.
+  // Per-plane materials cloned from the shared one so each plane can carry
+  // its own layer index / channel uniform without affecting the others.
+  // (Texture uniforms still point at the same shared painting/masks
+  // textures, set when those load.)
+  const planeMaterials = useMemo(() => layers.map(layer => {
+    const m = baseMaterial.clone();
+    m.uniforms.uLayerIdx.value = layer.idx;
+    m.uniforms.uChannel.value  = layer.channel;
+    return m;
+  }), [layers, baseMaterial]);
+
+  // Load painting + masks textures once meta is known. Pass them into
+  // every plane's material.
+  const [textures, setTextures] = useState(null);
   useEffect(() => {
-    strokeMaterial.resolution.set(size.width, size.height);
-  }, [size.width, size.height, strokeMaterial]);
-
-  const layers = useMemo(() => {
-    if (!data) return [];
-    // Wait for the stamp library before building stroke geometry — without
-    // it we'd silently drop every library-stamp reference. The library is
-    // tiny (12 stamps), shared by all paintings, and fetched once.
-    if (!library) return [];
-    const w = data.src?.width  || 1;
-    const h = data.src?.height || 1;
-    const aspect = w / h;
-    const planeWidth  = WORLD_HEIGHT * aspect;
-    const planeHeight = WORLD_HEIGHT;
-    return (data.layers || []).map(layer => {
-      const blotches = buildBlotchGeometry(layer.blotches || [], planeWidth, planeHeight);
-      const strokeGeo = buildStrokeGeometry(layer.strokes || [], library, planeWidth, planeHeight);
-      let strokes = null;
-      if (strokeGeo) {
-        // LineSegments2 expands the segment buffer into screen-space
-        // quads via the shared LineMaterial — see strokeMaterial above.
-        strokes = new LineSegments2(strokeGeo, strokeMaterial);
-        strokes.computeLineDistances();
-      }
-      return { z: (layer.z || 0) * LAYER_Z_GAIN, blotches, strokes };
+    if (!id) return;
+    let cancelled = false;
+    const loader = new THREE.TextureLoader();
+    const paintingUrl = `/data/theater/${encodeURIComponent(id)}.painting.webp`;
+    const masksUrl    = `/data/theater/${encodeURIComponent(id)}.masks.png`;
+    Promise.all([
+      new Promise((res, rej) => loader.load(paintingUrl, res, undefined, rej)),
+      new Promise((res, rej) => loader.load(masksUrl,    res, undefined, rej)),
+    ]).then(([painting, masks]) => {
+      if (cancelled) return;
+      painting.colorSpace = THREE.SRGBColorSpace;
+      // Mask is index data, not colour — keep it linear so nearest-neighbour
+      // texel reads survive any colour transforms.
+      masks.colorSpace  = THREE.NoColorSpace;
+      masks.magFilter   = THREE.NearestFilter;
+      masks.minFilter   = THREE.NearestFilter;
+      masks.generateMipmaps = false;
+      setTextures({ painting, masks });
+    }).catch(() => {
+      // Texture missing — keep the planes around but they'll render nothing.
     });
-  }, [data, library, strokeMaterial]);
+    return () => { cancelled = true; };
+  }, [id]);
 
-  // Sync metadata for the active painting (same contract as legacy ShardCloud).
+  useEffect(() => {
+    if (!textures) return;
+    for (const m of planeMaterials) {
+      m.uniforms.uPainting.value = textures.painting;
+      m.uniforms.uMasks.value    = textures.masks;
+    }
+  }, [textures, planeMaterials]);
+
+  // Sync metadata for the active painting.
   useEffect(() => {
     const isActiveSegment =
       mySegmentIndex === currentSegmentIndex ||
       mySegmentIndex === currentSegmentIndex + 1;
-    if (!isActiveSegment || !data) return;
-    setCurrentResolution([data.src?.width || 1000, data.src?.height || 1000]);
-    setCurrentShardCount(
-      (data.layers || []).reduce((acc, L) => acc + (L.blotches?.length || 0), 0),
-    );
-  }, [mySegmentIndex, currentSegmentIndex, data, setCurrentResolution, setCurrentShardCount]);
+    if (!isActiveSegment || !meta) return;
+    setCurrentResolution([meta.src?.width || 1000, meta.src?.height || 1000]);
+  }, [mySegmentIndex, currentSegmentIndex, meta, setCurrentResolution]);
 
-  // Dispose the previous layers' geometries when `layers` changes (e.g. the
-  // painting JSON arrives or the id swaps). This closes over the *old*
-  // layers array, so React calls it just before the new geometries take
-  // their place. The shared materials are disposed only on unmount.
+  // Dispose per-painting resources when the component unmounts or the id
+  // swaps. baseMaterial and planeGeom are tied to the component lifetime;
+  // textures + cloned materials regenerate per id.
   useEffect(() => () => {
-    layers.forEach(L => {
-      if (L.blotches) L.blotches.dispose();
-      if (L.strokes && L.strokes.geometry) L.strokes.geometry.dispose();
-    });
-  }, [layers]);
+    if (textures) {
+      textures.painting.dispose();
+      textures.masks.dispose();
+    }
+  }, [textures]);
 
-  // Materials are stable across the component's lifetime (memoized on []),
-  // so dispose them only on unmount. Disposing them on every `layers`
-  // change would invalidate the materials still bound to the new meshes.
   useEffect(() => () => {
-    blotchMaterial.dispose();
-    strokeMaterial.dispose();
-  }, [blotchMaterial, strokeMaterial]);
+    for (const m of planeMaterials) m.dispose();
+  }, [planeMaterials]);
 
-  // Drive accent gating off the camera's distance to the painting's anchor.
-  // Inside FULL_DISTANCE the painting reads at full intensity and full
-  // colour saturation; between FULL and FADE the colour desaturates toward
-  // bone-white and the strokes thin out; beyond FADE the painting is gone.
+  useEffect(() => () => {
+    baseMaterial.dispose();
+    planeGeom.dispose();
+  }, [baseMaterial, planeGeom]);
+
+  // Camera distance → fade and colour-bleed envelope. Inside COLOR_HOT the
+  // painting is at full saturation; past COLOR_GONE the hue is bone-white
+  // only; past FADE_GONE the painting is invisible.
   useFrame(() => {
     if (!position) return;
     const v = tmpVec.current;
@@ -398,30 +271,24 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     const fade  = 1.0 - THREE.MathUtils.smoothstep(dist, COLOR_GONE, FADE_GONE);
     const bleed = 1.0 - THREE.MathUtils.smoothstep(dist, COLOR_HOT,  COLOR_GONE);
 
-    blotchMaterial.uniforms.uIntensity.value  = fade;
-    blotchMaterial.uniforms.uColorBleed.value = bleed;
-    // LineMaterial's opacity is the standard Material.opacity uniform from
-    // UniformsLib.common — set both the JS property and the uniform so
-    // dirty-state tracking lines up across three's internals.
-    strokeMaterial.opacity = fade;
-    if (strokeMaterial.uniforms && strokeMaterial.uniforms.opacity) {
-      strokeMaterial.uniforms.opacity.value = fade;
+    for (const m of planeMaterials) {
+      m.uniforms.uIntensity.value  = fade;
+      m.uniforms.uColorBleed.value = bleed;
     }
   });
 
-  if (!data || layers.length === 0) return null;
+  if (!meta || layers.length === 0 || planeMaterials.length === 0) return null;
 
   return (
     <group position={position} rotation={rotEuler}>
       {layers.map((L, i) => (
-        <group key={i} position={[0, 0, L.z]}>
-          {L.blotches && (
-            <mesh geometry={L.blotches} material={blotchMaterial} />
-          )}
-          {L.strokes && (
-            <primitive object={L.strokes} />
-          )}
-        </group>
+        <mesh
+          key={i}
+          geometry={planeGeom}
+          material={planeMaterials[i]}
+          position={[0, 0, L.z]}
+          scale={[L.planeWidth, L.planeHeight, 1]}
+        />
       ))}
     </group>
   );
