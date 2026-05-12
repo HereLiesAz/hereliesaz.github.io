@@ -52,10 +52,12 @@ const useStore = create((set, get) => ({
 
     // The segment originates from the LAST cluster in the list
     const current = activeClusters[activeClusters.length - 1];
-    const FOV = 50.0;
-    const WORLD_HEIGHT = 10.0;
-    const D = (WORLD_HEIGHT / 2) / Math.tan(((FOV / 2) * Math.PI) / 180);
-    const SEGMENT_LENGTH = D * 2.0;
+    // Distance between consecutive paintings' nulls. The painting shell
+    // is ~15 units deep at its viewing distance, so SEGMENT_LENGTH must
+    // be quite a bit larger than that for the camera to have real
+    // empty-space transit time between paintings instead of plunging
+    // straight from one near-face into the next.
+    const SEGMENT_LENGTH = 36.0;
 
     const currentZ = current.worldPos[2];
 
@@ -97,10 +99,16 @@ const useStore = create((set, get) => ({
     // Paintings stay axis-aligned so a shared blotch at the same
     // normalized (x, y) lands at the same world point in both A and B —
     // the pareidolia hinge from AESTHETIC §5 only works under that
-    // invariant. Camera parallax comes from a small mid-segment swerve
-    // in xy position (below), not from rotating the paintings.
+    // invariant. Camera parallax comes from the mid-segment xy swerve
+    // (below) — the camera arcs around / past the painting between
+    // nulls, the painting itself does not rotate.
     const rotSway = [0, 0, 0];
-    const swerveDist = 0.4 + Math.random() * 0.8;  // ~0.4–1.2 scene units
+    // Enough mid-segment xy offset to read as a real arc rather than a
+    // straight line, but small enough that the destination painting
+    // (10 units tall, FoV 50°) stays in frame as the camera passes the
+    // midpoint. At ~21 units between nulls, 1–2.5 puts the midpoint
+    // 5–12 % off-axis — visible parallax without losing the painting.
+    const swerveDist = 1.0 + Math.random() * 1.5;
 
     const nextCluster = {
         id: nextId,

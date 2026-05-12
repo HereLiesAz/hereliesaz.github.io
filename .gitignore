@@ -106,8 +106,12 @@ venv/
 env/
 weights/
 
-# Vite build output
+# Vite build output and config-file resolution temp files
 dist/
+vite.config.js.timestamp-*
+
+# Visual-check harness regenerates these every run.
+tools/screenshots/
 
 # Mac OS
 .DS_Store

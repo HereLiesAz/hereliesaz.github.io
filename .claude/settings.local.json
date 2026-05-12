@@ -31,7 +31,12 @@
       "Bash(/tmp/pw-venv/bin/python -c \"from huggingface_hub import InferenceClient; print\\('ok'\\)\")",
       "Bash(/tmp/pw-venv/bin/python)",
       "Bash(/tmp/pw-venv/bin/python -c ' *)",
-      "Bash(/tmp/pw-venv/bin/python scripts/theater_baker.py --input public/assets --output public/data/theater --limit 3 --force)"
+      "Bash(/tmp/pw-venv/bin/python scripts/theater_baker.py --input public/assets --output public/data/theater --limit 3 --force)",
+      "Bash(pkill -f \"vite\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:3000/)",
+      "Bash(nohup npx *)",
+      "Bash(disown)",
+      "Bash(echo \"started, pid $!\")"
     ]
   }
 }

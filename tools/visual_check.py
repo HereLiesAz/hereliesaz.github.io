@@ -48,7 +48,10 @@ def take_shots(url: str, outdir: Path, view: tuple[int, int], dpr: float) -> int
         page.on("pageerror", lambda exc: console_lines.append(f"[pageerror] {exc}"))
 
         try:
-            page.goto(url, wait_until="networkidle", timeout=20_000)
+            # `domcontentloaded` is enough — under vite dev a persistent HMR
+            # websocket keeps the page from ever reaching `networkidle`, so
+            # waiting on that just burns timeout budget.
+            page.goto(url, wait_until="domcontentloaded", timeout=20_000)
         except PlaywrightError as e:
             print(f"[!] could not load {url}: {e}", file=sys.stderr)
             print("[!] is `npx vite` running on port 3000?", file=sys.stderr)
@@ -56,8 +59,8 @@ def take_shots(url: str, outdir: Path, view: tuple[int, int], dpr: float) -> int
 
         # Wait for the signature reveal animation to settle and for the
         # first painting to fetch and resolve into geometry.
-        page.wait_for_selector(".ink-signature", timeout=8_000)
-        time.sleep(2.2)
+        page.wait_for_selector(".ink-signature", timeout=20_000)
+        time.sleep(2.5)
 
         # drei's <ScrollControls> wraps the canvas in a div with computed
         # overflow: "hidden auto" (overflowY = auto, overflowX = hidden) and
@@ -110,7 +113,11 @@ def take_shots(url: str, outdir: Path, view: tuple[int, int], dpr: float) -> int
         # Back to the first null, then open the modal.
         page.evaluate("([el]) => { if (el) el.scrollTop = 0; }", [scroll_handle])
         time.sleep(0.6)
-        page.click(".ink-signature")
+        # Skip Playwright's navigation-wait: clicking the signature only
+        # opens a modal in the same page, but Playwright sometimes hangs on
+        # "waiting for scheduled navigations to finish" because the canvas
+        # keeps the network busy under HMR.
+        page.evaluate("document.querySelector('.ink-signature').click()")
         time.sleep(0.8)
         out = outdir / "06_modal_open.png"
         page.screenshot(path=str(out), full_page=False)

@@ -10,6 +10,14 @@ import { useStore } from '../store/useStore';
 const PAINTING_HEIGHT = 10.0;
 const SHELL_DEPTH     = 4.5;
 
+// Push the shell ahead of the painting's worldPos so the camera, which
+// arrives at worldPos at each null, sees the painting at a comfortable
+// reading distance instead of plunging into its near face.
+//   front plane at  world z = worldPos.z - SHELL_FRONT
+//   back  plane at  world z = worldPos.z - SHELL_FRONT - SHELL_DEPTH
+// Chosen so a 10-unit-tall painting at 50° FoV roughly fills the frame.
+const SHELL_FRONT     = 11.0;
+
 // Bone-white from AESTHETIC §2 — what the painting hue mixes toward as the
 // camera pulls away from the null.
 const BONE_WHITE = new THREE.Color('#f4f0e6');
@@ -97,11 +105,14 @@ function buildLayers(metadata) {
   // Lay the 30 slabs out along the shell. Set order is fixed: depth at the
   // back (where the depth-band-0 — "farthest" pixels — really do live in
   // space), then colour bands across the middle, then luminance at the
-  // front.
+  // front. The whole shell sits SHELL_FRONT units in front of the
+  // painting's worldPos so the camera reads it at a comfortable distance.
+  const zFront = -SHELL_FRONT;
+  const zBack  = -SHELL_FRONT - SHELL_DEPTH;
   const setOffsets = [
-    { kind: 'depth', channel: 0, count: N_DEPTH, zStart: -SHELL_DEPTH,             zEnd: -SHELL_DEPTH * 2/3 },
-    { kind: 'color', channel: 1, count: N_COLOR, zStart: -SHELL_DEPTH * 2/3,       zEnd: -SHELL_DEPTH * 1/3 },
-    { kind: 'lum',   channel: 2, count: N_LUM,   zStart: -SHELL_DEPTH * 1/3,       zEnd: 0 },
+    { kind: 'depth', channel: 0, count: N_DEPTH, zStart: zBack,                          zEnd: zBack + SHELL_DEPTH * 1/3 },
+    { kind: 'color', channel: 1, count: N_COLOR, zStart: zBack + SHELL_DEPTH * 1/3,      zEnd: zBack + SHELL_DEPTH * 2/3 },
+    { kind: 'lum',   channel: 2, count: N_LUM,   zStart: zBack + SHELL_DEPTH * 2/3,      zEnd: zFront },
   ];
 
   for (const set of setOffsets) {
