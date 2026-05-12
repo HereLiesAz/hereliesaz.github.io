@@ -2,14 +2,8 @@ numpy
 opencv-python-headless
 Pillow
 pillow-heif
-scipy
-timm
+
+# Off-device ML — theater_baker.py uses gradio_client to call the
+# Depth-Anything-V2 HF Space. No torch/transformers required locally.
+gradio_client
 huggingface_hub
-transformers
-git+https://github.com/facebookresearch/segment-anything.git
-# ZoeDepth is loaded via torch.hub in the script, so no direct pip install needed here
-# unless the repo structure changes.
-# Torch is installed via command line for CPU optimization in CI,
-# but we list it here for local dev compatibility.
-torch
-torchvision

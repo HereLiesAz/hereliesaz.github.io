@@ -10,41 +10,24 @@ export default function Scene() {
   const setGraph = useStore(state => state.setGraph);
   const setStartNode = useStore(state => state.setStartNode);
 
-  // Load the theater graph — nodes for everything baked, edges weighted
-  // by pareidolia (shared-blotch) similarity. Falls back to legacy
-  // /graph.json + manifest filtering if the theater graph is missing.
+  // The walker reads /data/theater/_manifest.json for the list of baked
+  // paintings and synthesizes a minimal graph (nodes only, no edges) — the
+  // store's stochastic next-node picker falls back to random-other-node
+  // when an id has no outgoing edges, which is exactly what we want until
+  // a pareidolia indexer for the new layered schema lands.
   useEffect(() => {
-    fetch('/data/theater/graph.theater.json')
-      .then(r => (r.ok ? r.json() : null))
-      .then(graph => {
-        if (graph && Array.isArray(graph.nodes) && graph.nodes.length > 0) {
-          setGraph(graph);
-          setStartNode(graph.nodes[0].id);
+    fetch('/data/theater/_manifest.json')
+      .then(r => (r.ok ? r.json() : []))
+      .then(manifest => {
+        if (!Array.isArray(manifest) || manifest.length === 0) {
+          console.warn("[Scene] _manifest.json is empty; bake some paintings via scripts/theater_baker.py.");
           return;
         }
-        // Legacy fallback.
-        return Promise.all([
-          fetch('/graph.json').then(r => (r.ok ? r.json() : null)),
-          fetch('/data/theater/_manifest.json').then(r => (r.ok ? r.json() : [])).catch(() => []),
-        ]).then(([legacy, manifest]) => {
-          if (!legacy) return;
-          const allowed = new Set(Array.isArray(manifest) ? manifest : []);
-          const filtered = allowed.size > 0
-            ? {
-                ...legacy,
-                nodes: (legacy.nodes || []).filter(n => allowed.has(n.id)),
-                edges: (legacy.edges || []).filter(e => allowed.has(e.source) && allowed.has(e.target)),
-              }
-            : legacy;
-          setGraph(filtered);
-          if (filtered.nodes && filtered.nodes.length > 0) {
-            setStartNode(filtered.nodes[0].id);
-          } else {
-            console.warn("[Scene] No paintings available; bake some via scripts/theater_baker.py.");
-          }
-        });
+        const nodes = manifest.map(id => ({ id, image: `${id}.painting.webp`, title: id }));
+        setGraph({ schemaVersion: 4, nodes, edges: [] });
+        setStartNode(nodes[0].id);
       })
-      .catch(err => console.error("Graph Load Error:", err));
+      .catch(err => console.error("Manifest Load Error:", err));
   }, [setGraph, setStartNode]);
 
   const currentSegmentIndex = useStore(state => state.currentSegmentIndex);
