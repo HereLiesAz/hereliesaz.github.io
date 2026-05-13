@@ -5,7 +5,7 @@ import { Loader } from '@react-three/drei';
 
 const App = () => {
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#000' }}>
+    <div style={{ width: '100%', height: '100%', background: '#000' }}>
       
       {/* 3D Scene */}
       <Scene />

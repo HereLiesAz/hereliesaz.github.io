@@ -1,0 +1,10 @@
+name: Disable Dependency Submission
+on:
+  push:
+    branches:
+      - disabled
+jobs:
+  dummy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "disabled"
