@@ -137,7 +137,6 @@ function buildLayers(metadata) {
 
 export default function TheaterPainting({ id, position, rotation, mySegmentIndex }) {
   const [meta, setMeta] = useState(null);
-  const { camera } = useThree();
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const tmpVec = useRef(new THREE.Vector3());
@@ -159,6 +158,36 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
   }, [rotation]);
 
   const layers = useMemo(() => meta ? buildLayers(meta) : [], [meta]);
+
+  // Calculate dynamic scale to fit the painting into the screen
+  const { size, camera } = useThree();
+  const fitScale = useMemo(() => {
+    if (!meta || layers.length === 0) return 1.0;
+
+    // The base plane dimensions are determined in buildLayers.
+    // They represent the world-space size of the painting BEFORE any scaling.
+    const L = layers[0];
+    const paintingWidth = L.planeWidth;
+    const paintingHeight = L.planeHeight;
+
+    // Calculate the visible world bounds at the viewing distance (SHELL_FRONT).
+    // Note: camera.fov is vertical fov in degrees.
+    const distance = SHELL_FRONT;
+    const vFov = THREE.MathUtils.degToRad(camera.fov);
+    const visibleHeight = 2.0 * distance * Math.tan(vFov / 2.0);
+    const visibleWidth = visibleHeight * (size.width / size.height);
+
+    // We want the painting to fit comfortably within the screen, with some padding.
+    // 90% of screen height and 85% of screen width.
+    const maxAllowedWidth = visibleWidth * 0.85;
+    const maxAllowedHeight = visibleHeight * 0.90;
+
+    const widthScale = maxAllowedWidth / paintingWidth;
+    const heightScale = maxAllowedHeight / paintingHeight;
+
+    // Choose the scale that satisfies both constraints
+    return Math.min(widthScale, heightScale);
+  }, [meta, layers, size.width, size.height, camera.fov]);
 
   // Shared material across all 30 planes of this painting. Per-plane data
   // (layer index, channel) goes through onBeforeCompile-free attribute
@@ -287,7 +316,7 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
           geometry={planeGeom}
           material={planeMaterials[i]}
           position={[0, 0, L.z]}
-          scale={[L.planeWidth, L.planeHeight, 1]}
+          scale={[L.planeWidth * fitScale, L.planeHeight * fitScale, 1]}
         />
       ))}
     </group>
