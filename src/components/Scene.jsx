@@ -10,24 +10,53 @@ export default function Scene() {
   const setGraph = useStore(state => state.setGraph);
   const setStartNode = useStore(state => state.setStartNode);
 
-  // The walker reads /data/theater/_manifest.json for the list of baked
-  // paintings and synthesizes a minimal graph (nodes only, no edges) — the
-  // store's stochastic next-node picker falls back to random-other-node
-  // when an id has no outgoing edges, which is exactly what we want until
-  // a pareidolia indexer for the new layered schema lands.
+  // Primary path: the walker reads /data/theater/_manifest.json for the list
+  // of baked paintings and synthesizes a minimal graph (nodes only, no edges).
+  // Fallback: if the theater bake hasn't run yet (manifest missing or empty),
+  // load /graph.json — the legacy pareidolia graph — so the gallery degrades
+  // to flat textured planes instead of going pitch-black. TheaterPainting
+  // renders a single plane from /assets/{image} when no theater.json is
+  // present for a node.
   useEffect(() => {
-    fetch('/data/theater/_manifest.json')
+    let cancelled = false;
+    const loadFromTheater = fetch('/data/theater/_manifest.json')
       .then(r => (r.ok ? r.json() : []))
       .then(manifest => {
-        if (!Array.isArray(manifest) || manifest.length === 0) {
-          console.warn("[Scene] _manifest.json is empty; bake some paintings via scripts/theater_baker.py.");
+        if (!Array.isArray(manifest) || manifest.length === 0) return null;
+        return manifest.map(id => ({ id, image: `${id}.painting.webp`, title: id, theater: true }));
+      })
+      .catch(() => null);
+
+    const loadFromGraph = () => fetch('/graph.json')
+      .then(r => (r.ok ? r.json() : null))
+      .then(g => {
+        if (!g || !Array.isArray(g.nodes) || g.nodes.length === 0) return null;
+        const nodes = g.nodes.map(n => ({ ...n, theater: false }));
+        return { nodes, edges: Array.isArray(g.edges) ? g.edges : [] };
+      })
+      .catch(() => null);
+
+    loadFromTheater
+      .then(nodes => {
+        if (cancelled) return;
+        if (nodes && nodes.length > 0) {
+          setGraph({ schemaVersion: 4, nodes, edges: [] });
+          setStartNode(nodes[0].id);
           return;
         }
-        const nodes = manifest.map(id => ({ id, image: `${id}.painting.webp`, title: id }));
-        setGraph({ schemaVersion: 4, nodes, edges: [] });
-        setStartNode(nodes[0].id);
-      })
-      .catch(err => console.error("Manifest Load Error:", err));
+        console.warn("[Scene] theater manifest missing/empty; falling back to graph.json.");
+        return loadFromGraph().then(g => {
+          if (cancelled) return;
+          if (!g) {
+            console.error("[Scene] No theater bake and no graph.json — gallery cannot render.");
+            return;
+          }
+          setGraph({ schemaVersion: 2, nodes: g.nodes, edges: g.edges });
+          setStartNode(g.nodes[0].id);
+        });
+      });
+
+    return () => { cancelled = true; };
   }, [setGraph, setStartNode]);
 
   const currentSegmentIndex = useStore(state => state.currentSegmentIndex);
@@ -56,6 +85,7 @@ export default function Scene() {
                         <TheaterPainting
                             key={`${cluster.id}-${cluster.index}`}
                             id={cluster.id}
+                            image={cluster.image}
                             position={cluster.worldPos}
                             rotation={cluster.rotSway}
                             mySegmentIndex={cluster.index}

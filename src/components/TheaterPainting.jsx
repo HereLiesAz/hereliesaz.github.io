@@ -135,8 +135,9 @@ function buildLayers(metadata) {
 
 // ---- component --------------------------------------------------------------
 
-export default function TheaterPainting({ id, position, rotation, mySegmentIndex }) {
+export default function TheaterPainting({ id, image, position, rotation, mySegmentIndex }) {
   const [meta, setMeta] = useState(null);
+  const [flatTex, setFlatTex] = useState(null);
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const tmpVec = useRef(new THREE.Vector3());
@@ -144,9 +145,31 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    fetchTheaterMeta(id).then(json => { if (!cancelled) setMeta(json); });
+    fetchTheaterMeta(id).then(json => {
+      if (cancelled) return;
+      setMeta(json);
+      // Flat fallback: when the theater bake hasn't run for this id, render
+      // the original asset image as a single textured plane instead of the
+      // 30-layer shell. Looks like the legacy gallery — no parallax, no
+      // colour-bleed shader — but the page isn't blank.
+      if (!json && image) {
+        const loader = new THREE.TextureLoader();
+        loader.load(
+          `/assets/${encodeURIComponent(image)}`,
+          tex => {
+            if (cancelled) { tex.dispose(); return; }
+            tex.colorSpace = THREE.SRGBColorSpace;
+            const w = tex.image?.width || 1;
+            const h = tex.image?.height || 1;
+            setFlatTex({ texture: tex, aspect: w / h, width: w, height: h });
+          },
+          undefined,
+          () => { /* image missing — render nothing for this id */ },
+        );
+      }
+    });
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, image]);
 
   const rotEuler = useMemo(() => {
     const r = rotation || [0, 0, 0];
@@ -288,6 +311,35 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     planeGeom.dispose();
   }, [baseMaterial, planeGeom]);
 
+  useEffect(() => () => {
+    if (flatTex?.texture) flatTex.texture.dispose();
+  }, [flatTex]);
+
+  // Flat-mode fit: same screen-fit logic as the layered shell, but using the
+  // raw image aspect (no theater.json) since we have no per-painting metadata.
+  const flatFitScale = useMemo(() => {
+    if (!flatTex) return 1.0;
+    const paintingWidth  = PAINTING_HEIGHT * flatTex.aspect;
+    const paintingHeight = PAINTING_HEIGHT;
+    const distance = SHELL_FRONT;
+    const vFov = THREE.MathUtils.degToRad(camera.fov);
+    const visibleHeight = 2.0 * distance * Math.tan(vFov / 2.0);
+    const visibleWidth = visibleHeight * (size.width / size.height);
+    const widthScale  = (visibleWidth  * 0.85) / paintingWidth;
+    const heightScale = (visibleHeight * 0.90) / paintingHeight;
+    return Math.min(widthScale, heightScale);
+  }, [flatTex, size.width, size.height, camera.fov]);
+
+  // Push flat-mode resolution to the store so the overlay & shard count
+  // stay coherent even without a theater bake.
+  useEffect(() => {
+    const isActiveSegment =
+      mySegmentIndex === currentSegmentIndex ||
+      mySegmentIndex === currentSegmentIndex + 1;
+    if (!isActiveSegment || meta || !flatTex) return;
+    setCurrentResolution([flatTex.width, flatTex.height]);
+  }, [mySegmentIndex, currentSegmentIndex, meta, flatTex, setCurrentResolution]);
+
   // Camera distance → fade and colour-bleed envelope. Inside COLOR_HOT the
   // painting is at full saturation; past COLOR_GONE the hue is bone-white
   // only; past FADE_GONE the painting is invisible.
@@ -305,6 +357,23 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
       m.uniforms.uColorBleed.value = bleed;
     }
   });
+
+  // Flat fallback render — single textured plane at the shell-front depth.
+  if (!meta && flatTex) {
+    const fw = PAINTING_HEIGHT * flatTex.aspect * flatFitScale;
+    const fh = PAINTING_HEIGHT * flatFitScale;
+    return (
+      <group position={position} rotation={rotEuler}>
+        <mesh
+          geometry={planeGeom}
+          position={[0, 0, -SHELL_FRONT]}
+          scale={[fw, fh, 1]}
+        >
+          <meshBasicMaterial map={flatTex.texture} toneMapped={false} />
+        </mesh>
+      </group>
+    );
+  }
 
   if (!meta || layers.length === 0 || planeMaterials.length === 0) return null;
 
