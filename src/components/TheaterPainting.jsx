@@ -135,8 +135,9 @@ function buildLayers(metadata) {
 
 // ---- component --------------------------------------------------------------
 
-export default function TheaterPainting({ id, position, rotation, mySegmentIndex }) {
+export default function TheaterPainting({ id, image, position, rotation, mySegmentIndex }) {
   const [meta, setMeta] = useState(null);
+  const [flatTex, setFlatTex] = useState(null);
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const tmpVec = useRef(new THREE.Vector3());
@@ -144,9 +145,31 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    fetchTheaterMeta(id).then(json => { if (!cancelled) setMeta(json); });
+    fetchTheaterMeta(id).then(json => {
+      if (cancelled) return;
+      setMeta(json);
+      // Flat fallback: when the theater bake hasn't run for this id, render
+      // the original asset image as a single textured plane instead of the
+      // 30-layer shell. Looks like the legacy gallery — no parallax, no
+      // colour-bleed shader — but the page isn't blank.
+      if (!json && image) {
+        const loader = new THREE.TextureLoader();
+        loader.load(
+          image,
+          tex => {
+            if (cancelled) { tex.dispose(); return; }
+            tex.colorSpace = THREE.SRGBColorSpace;
+            const w = tex.image?.width || 1;
+            const h = tex.image?.height || 1;
+            setFlatTex({ texture: tex, aspect: w / h, width: w, height: h });
+          },
+          undefined,
+          () => { /* image missing — render nothing for this id */ },
+        );
+      }
+    });
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, image]);
 
   const rotEuler = useMemo(() => {
     const r = rotation || [0, 0, 0];
@@ -159,35 +182,30 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
 
   const layers = useMemo(() => meta ? buildLayers(meta) : [], [meta]);
 
-  // Calculate dynamic scale to fit the painting into the screen
+  // Calculate dynamic scale to fit the painting into the screen at SHELL_FRONT.
+  // Same math regardless of whether the layered shell or the flat fallback is
+  // rendering — only the source of the aspect ratio differs (theater.json vs.
+  // the raw asset image dimensions).
   const { size, camera } = useThree();
   const fitScale = useMemo(() => {
-    if (!meta || layers.length === 0) return 1.0;
+    let paintingWidth, paintingHeight;
+    if (meta && layers.length > 0) {
+      paintingWidth  = layers[0].planeWidth;
+      paintingHeight = layers[0].planeHeight;
+    } else if (flatTex) {
+      paintingWidth  = PAINTING_HEIGHT * flatTex.aspect;
+      paintingHeight = PAINTING_HEIGHT;
+    } else {
+      return 1.0;
+    }
 
-    // The base plane dimensions are determined in buildLayers.
-    // They represent the world-space size of the painting BEFORE any scaling.
-    const L = layers[0];
-    const paintingWidth = L.planeWidth;
-    const paintingHeight = L.planeHeight;
-
-    // Calculate the visible world bounds at the viewing distance (SHELL_FRONT).
-    // Note: camera.fov is vertical fov in degrees.
-    const distance = SHELL_FRONT;
     const vFov = THREE.MathUtils.degToRad(camera.fov);
-    const visibleHeight = 2.0 * distance * Math.tan(vFov / 2.0);
-    const visibleWidth = visibleHeight * (size.width / size.height);
-
-    // We want the painting to fit comfortably within the screen, with some padding.
-    // 90% of screen height and 85% of screen width.
-    const maxAllowedWidth = visibleWidth * 0.85;
-    const maxAllowedHeight = visibleHeight * 0.90;
-
-    const widthScale = maxAllowedWidth / paintingWidth;
-    const heightScale = maxAllowedHeight / paintingHeight;
-
-    // Choose the scale that satisfies both constraints
+    const visibleHeight = 2.0 * SHELL_FRONT * Math.tan(vFov / 2.0);
+    const visibleWidth  = visibleHeight * (size.width / size.height);
+    const widthScale  = (visibleWidth  * 0.85) / paintingWidth;
+    const heightScale = (visibleHeight * 0.90) / paintingHeight;
     return Math.min(widthScale, heightScale);
-  }, [meta, layers, size.width, size.height, camera.fov]);
+  }, [meta, layers, flatTex, size.width, size.height, camera.fov]);
 
   // Shared material across all 30 planes of this painting. Per-plane data
   // (layer index, channel) goes through onBeforeCompile-free attribute
@@ -260,14 +278,20 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     }
   }, [textures, planeMaterials]);
 
-  // Sync metadata for the active painting.
+  // Push the active painting's source resolution to the store so the overlay
+  // & shard count stay coherent. Works for both modes: prefer the theater
+  // metadata's src dims, fall back to the flat texture's natural dims.
   useEffect(() => {
     const isActiveSegment =
       mySegmentIndex === currentSegmentIndex ||
       mySegmentIndex === currentSegmentIndex + 1;
-    if (!isActiveSegment || !meta) return;
-    setCurrentResolution([meta.src?.width || 1000, meta.src?.height || 1000]);
-  }, [mySegmentIndex, currentSegmentIndex, meta, setCurrentResolution]);
+    if (!isActiveSegment) return;
+    if (meta) {
+      setCurrentResolution([meta.src?.width || 1000, meta.src?.height || 1000]);
+    } else if (flatTex) {
+      setCurrentResolution([flatTex.width, flatTex.height]);
+    }
+  }, [mySegmentIndex, currentSegmentIndex, meta, flatTex, setCurrentResolution]);
 
   // Dispose per-painting resources when the component unmounts or the id
   // swaps. baseMaterial and planeGeom are tied to the component lifetime;
@@ -288,9 +312,26 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
     planeGeom.dispose();
   }, [baseMaterial, planeGeom]);
 
+  useEffect(() => () => {
+    if (flatTex?.texture) flatTex.texture.dispose();
+  }, [flatTex]);
+
+  // Shared material for the flat fallback. Created once and updated per-frame
+  // so it picks up the same distance fade as the layered shell.
+  const flatMaterial = useMemo(
+    () => new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false }),
+    [],
+  );
+  useEffect(() => () => flatMaterial.dispose(), [flatMaterial]);
+  useEffect(() => {
+    if (flatTex) flatMaterial.map = flatTex.texture;
+    flatMaterial.needsUpdate = true;
+  }, [flatTex, flatMaterial]);
+
   // Camera distance → fade and colour-bleed envelope. Inside COLOR_HOT the
   // painting is at full saturation; past COLOR_GONE the hue is bone-white
-  // only; past FADE_GONE the painting is invisible.
+  // only; past FADE_GONE the painting is invisible. Flat-fallback material
+  // gets the same fade as opacity so it dissolves rather than popping out.
   useFrame(() => {
     if (!position) return;
     const v = tmpVec.current;
@@ -304,7 +345,24 @@ export default function TheaterPainting({ id, position, rotation, mySegmentIndex
       m.uniforms.uIntensity.value  = fade;
       m.uniforms.uColorBleed.value = bleed;
     }
+    flatMaterial.opacity = fade;
   });
+
+  // Flat fallback render — single textured plane at the shell-front depth.
+  if (!meta && flatTex) {
+    const fw = PAINTING_HEIGHT * flatTex.aspect * fitScale;
+    const fh = PAINTING_HEIGHT * fitScale;
+    return (
+      <group position={position} rotation={rotEuler}>
+        <mesh
+          geometry={planeGeom}
+          material={flatMaterial}
+          position={[0, 0, -SHELL_FRONT]}
+          scale={[fw, fh, 1]}
+        />
+      </group>
+    );
+  }
 
   if (!meta || layers.length === 0 || planeMaterials.length === 0) return null;
 

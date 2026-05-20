@@ -32,12 +32,14 @@ const useStore = create((set, get) => ({
 
   setStartNode: (id) => {
     console.log("[Store] Starting at:", id);
-    const firstCluster = { id, worldPos: [0, 0, 0] };
-    set({ 
-        activeClusters: [firstCluster], 
+    const { nodes } = get();
+    const node = nodes.find(n => n.id === id);
+    const firstCluster = { id, worldPos: [0, 0, 0], image: node?.image };
+    set({
+        activeClusters: [firstCluster],
         currentNodeId: id,
         segments: [],
-        currentSegmentIndex: 0 
+        currentSegmentIndex: 0
     });
     get().buildNextSegment();
   },
@@ -110,11 +112,13 @@ const useStore = create((set, get) => ({
     // 5–12 % off-axis — visible parallax without losing the painting.
     const swerveDist = 1.0 + Math.random() * 1.5;
 
+    const nextNode = nodes.find(n => n.id === nextId);
     const nextCluster = {
         id: nextId,
         worldPos: nextPos,
         anchorId: undefined,
         rotSway,
+        image: nextNode?.image,
     };
     
     // 3. Camera Spline

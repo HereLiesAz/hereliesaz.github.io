@@ -50,12 +50,12 @@ class ArtGrinder:
 
     def _load_depth_model(self):
         try:
-            return torch.hub.load("isl-org/ZoeDepth", "ZoeD_N", pretrained=True).to(self.device).eval()
+            return torch.hub.load("isl-org/ZoeDepth", "ZoeD_N", pretrained=True, trust_repo=True).to(self.device).eval()
         except Exception:
-            return torch.hub.load("intel-isl/MiDaS", "DPT_Large").to(self.device).eval()
+            return torch.hub.load("intel-isl/MiDaS", "DPT_Large", trust_repo=True).to(self.device).eval()
 
     def _load_depth_transform(self):
-        transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+        transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
         return transforms.dpt_transform if self.device == 'cuda' else transforms.small_transform
 
     def get_depth_map(self, img_rgb):

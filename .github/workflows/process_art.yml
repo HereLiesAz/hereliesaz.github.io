@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'assets/raw/**'
+      - 'public/assets/**'
       - 'scripts/grinder.py'
       - 'scripts/indexer.py'
+      - 'scripts/theater_baker.py'
       - 'scripts/requirements.txt'
 
 # Cancel previous runs if you push again (prevents queue jams)
@@ -55,7 +56,7 @@ jobs:
       - name: Run Grinder (Turbo Mode)
         run: |
           # Added --fast flag for 16x speedup
-          python scripts/grinder.py --input assets/raw --out temp_data --shard_index ${{ matrix.shard }} --total_shards 56 --fast
+          python scripts/grinder.py --input public/assets --out temp_data --shard_index ${{ matrix.shard }} --total_shards 56 --fast
 
       - name: Upload Shard
         uses: actions/upload-artifact@v4
@@ -85,6 +86,18 @@ jobs:
       - name: Index
         run: python scripts/indexer.py
 
+      - name: Bake Theater Layers
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::warning::HF_TOKEN secret is not set — skipping theater bake. Add HF_TOKEN under repo Settings → Secrets → Actions to enable it."
+            exit 0
+          fi
+          python scripts/theater_baker.py \
+            --input  public/assets/ \
+            --output public/data/theater/
+
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
         with:
@@ -92,4 +105,4 @@ jobs:
           publish_dir: ./public/data
           publish_branch: art-data
           keep_files: true
-          commit_message: "Turbo Grind: ${{ github.sha }}"
+          commit_message: "Turbo Grind + Theater Bake: ${{ github.sha }}"
