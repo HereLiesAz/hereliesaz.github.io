@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'assets/raw/**'
+      - 'public/assets/**'
       - 'scripts/grinder.py'
       - 'scripts/indexer.py'
+      - 'scripts/theater_baker.py'
       - 'scripts/requirements.txt'
 
 # Cancel previous runs if you push again (prevents queue jams)
@@ -55,7 +56,7 @@ jobs:
       - name: Run Grinder (Turbo Mode)
         run: |
           # Added --fast flag for 16x speedup
-          python scripts/grinder.py --input assets/raw --out temp_data --shard_index ${{ matrix.shard }} --total_shards 56 --fast
+          python scripts/grinder.py --input public/assets --out temp_data --shard_index ${{ matrix.shard }} --total_shards 56 --fast
 
       - name: Upload Shard
         uses: actions/upload-artifact@v4
