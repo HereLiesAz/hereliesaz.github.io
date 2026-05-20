@@ -155,7 +155,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       if (!json && image) {
         const loader = new THREE.TextureLoader();
         loader.load(
-          `/assets/${encodeURIComponent(image)}`,
+          image,
           tex => {
             if (cancelled) { tex.dispose(); return; }
             tex.colorSpace = THREE.SRGBColorSpace;
