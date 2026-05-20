@@ -90,7 +90,8 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           if [ -z "$HF_TOKEN" ]; then
-            echo "::warning::HF_TOKEN secret is not set; theater bake will skip the depth Space and likely fail. Add HF_TOKEN under repo Settings → Secrets → Actions."
+            echo "::warning::HF_TOKEN secret is not set — skipping theater bake. Add HF_TOKEN under repo Settings → Secrets → Actions to enable it."
+            exit 0
           fi
           python scripts/theater_baker.py \
             --input  public/assets/ \
