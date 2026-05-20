@@ -23,7 +23,7 @@ export default function Scene() {
       .then(r => (r.ok ? r.json() : []))
       .then(manifest => {
         if (!Array.isArray(manifest) || manifest.length === 0) return null;
-        return manifest.map(id => ({ id, image: `${id}.painting.webp`, title: id, theater: true }));
+        return manifest.map(id => ({ id, image: "/data/theater/" + encodeURIComponent(id) + ".painting.webp", title: id, theater: true }));
       })
       .catch(() => null);
 
