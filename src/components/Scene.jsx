@@ -23,7 +23,7 @@ export default function Scene() {
       .then(r => (r.ok ? r.json() : []))
       .then(manifest => {
         if (!Array.isArray(manifest) || manifest.length === 0) return null;
-        return manifest.map(id => ({ id, image: `${id}.painting.webp`, title: id, theater: true }));
+        return manifest.map(id => ({ id, image: "/data/theater/" + encodeURIComponent(id) + ".painting.webp", title: id, theater: true }));
       })
       .catch(() => null);
 
@@ -31,7 +31,7 @@ export default function Scene() {
       .then(r => (r.ok ? r.json() : null))
       .then(g => {
         if (!g || !Array.isArray(g.nodes) || g.nodes.length === 0) return null;
-        const nodes = g.nodes.map(n => ({ ...n, theater: false }));
+        const nodes = g.nodes.map(n => ({ ...n, image: "/assets/" + encodeURIComponent(n.image), theater: false }));
         return { nodes, edges: Array.isArray(g.edges) ? g.edges : [] };
       })
       .catch(() => null);
