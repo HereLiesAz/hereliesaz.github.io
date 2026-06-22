@@ -149,16 +149,51 @@ def get_depth_client():
     return _depth_client
 
 
+def synth_depth(rgb: np.ndarray) -> np.ndarray:
+    """Cheap stand-in for the monocular depth model: combine a vertical
+    gradient (top → far, bottom → near, the wallpaper-of-Western-painting
+    convention) with local saturation (saturated patches read as foreground
+    against an underpainting). Used when the HF Space is unreachable or
+    rate-limited so the rear shell still has *some* spatial variation in its
+    layer bands instead of degenerating into a copy of luminance."""
+    h, w = rgb.shape[:2]
+    grad = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None].repeat(w, axis=1)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    sat = hsv[:, :, 1].astype(np.float32) / 255.0
+    depth = 0.55 * grad + 0.45 * sat
+    mn, mx = float(depth.min()), float(depth.max())
+    if mx - mn < 1e-6:
+        return np.zeros_like(depth)
+    return (depth - mn) / (mx - mn)
+
+
+_depth_disabled = False
+
 def estimate_depth(rgb: np.ndarray) -> np.ndarray:
     """Run the off-device depth model on `rgb` (HxWx3 uint8). Returns an
-    HxW float32 depth map normalised to [0, 1] (higher = closer)."""
+    HxW float32 depth map normalised to [0, 1] (higher = closer). Falls
+    back to synth_depth() if the Space is unreachable or out of quota — a
+    bake without HF_TOKEN should still complete, just with synthetic depth
+    bands instead of monocular-depth ones. Once the Space has failed once
+    we stop retrying for the rest of the run (quota exhaustion doesn't
+    repair itself within a few seconds)."""
+    global _depth_disabled
+    if _depth_disabled:
+        return synth_depth(rgb)
+
     from gradio_client import handle_file
     # The Space expects a file path; round-trip via /tmp.
     pil = Image.fromarray(rgb)
     tmp = Path("/tmp/_theater_depth_in.jpg")
     pil.save(tmp, "JPEG", quality=88)
 
-    client = get_depth_client()
+    try:
+        client = get_depth_client()
+    except Exception as e:
+        print(f"[~] depth Space init failed ({e!r}); using synthetic depth for remainder", file=sys.stderr)
+        _depth_disabled = True
+        return synth_depth(rgb)
+
     # Retry once on transient HF/Space errors (queue, cold-start).
     last_exc = None
     for attempt in range(2):
@@ -169,7 +204,9 @@ def estimate_depth(rgb: np.ndarray) -> np.ndarray:
             last_exc = e
             time.sleep(2.0)
     else:
-        raise RuntimeError(f"depth Space failed twice: {last_exc!r}")
+        print(f"[~] depth Space failed ({last_exc!r}); using synthetic depth for remainder", file=sys.stderr)
+        _depth_disabled = True
+        return synth_depth(rgb)
 
     # Result is (slider_pair_list, 8bit_depth_png_path, 16bit_depth_png_path).
     depth_16_path = result[2]
