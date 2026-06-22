@@ -124,5 +124,15 @@ sam_vit_b_01ec64.pth
 # --- ONCOLOGY: Remove Build Artifacts ---
 public/data/*.json
 !public/data/.keep
+
+# Theater bake outputs live on the `art-data` branch (deploy.yml checks
+# out art-data into public/data at build time). Keeping them out of
+# source branches avoids bloating main with ~300 MB of baked binaries
+# that get re-published on every CI run anyway.
+public/data/theater/*.painting.webp
+public/data/theater/*.masks.png
+public/data/theater/*.theater.json
+public/data/theater/_manifest.json
+
 *.example
 *.local
