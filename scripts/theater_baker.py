@@ -157,7 +157,7 @@ def synth_depth(rgb: np.ndarray) -> np.ndarray:
     rate-limited so the rear shell still has *some* spatial variation in its
     layer bands instead of degenerating into a copy of luminance."""
     h, w = rgb.shape[:2]
-    grad = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None].repeat(w, axis=1)
+    grad = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
     hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
     sat = hsv[:, :, 1].astype(np.float32) / 255.0
     depth = 0.55 * grad + 0.45 * sat
