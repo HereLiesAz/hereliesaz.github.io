@@ -7,12 +7,11 @@ name: Deploy over SFTP
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   SFTP_SERVER      hostname, e.g. sftp.example.com
 #   SFTP_USERNAME    your SSH user
-#   SFTP_SSH_KEY     private key contents, INCLUDING the
-#                    -----BEGIN OPENSSH PRIVATE KEY----- header and
-#                    -----END OPENSSH PRIVATE KEY----- footer. See the
-#                    "SSH key setup" section of the PR body for how to
-#                    generate the pair and register the public half on
-#                    the host.
+#   SSH_RSA          private key contents, INCLUDING the
+#                    -----BEGIN OPENSSH PRIVATE KEY----- (or -----BEGIN RSA
+#                    PRIVATE KEY-----) header and matching footer. The
+#                    matching public key must be appended to
+#                    ~/.ssh/authorized_keys for SFTP_USERNAME on the host.
 #
 # Optional repository variables (Settings → Secrets and variables → Actions → Variables):
 #   SFTP_PORT         defaults to 22
@@ -86,7 +85,7 @@ jobs:
         with:
           server: ${{ secrets.SFTP_SERVER }}
           username: ${{ secrets.SFTP_USERNAME }}
-          ssh_private_key: ${{ secrets.SFTP_SSH_KEY }}
+          ssh_private_key: ${{ secrets.SSH_RSA }}
           port: ${{ vars.SFTP_PORT || 22 }}
           local_path: './main/dist/*'
           remote_path: ${{ vars.SFTP_REMOTE_PATH || '/public_html/' }}
