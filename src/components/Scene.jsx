@@ -11,19 +11,40 @@ export default function Scene() {
   const setStartNode = useStore(state => state.setStartNode);
 
   // Primary path: the walker reads /data/theater/_manifest.json for the list
-  // of baked paintings and synthesizes a minimal graph (nodes only, no edges).
-  // Fallback: if the theater bake hasn't run yet (manifest missing or empty),
-  // load /graph.json — the legacy pareidolia graph — so the gallery degrades
-  // to flat textured planes instead of going pitch-black. TheaterPainting
-  // renders a single plane from /assets/{image} when no theater.json is
-  // present for a node.
+  // of baked paintings, plus /data/theater/graph.theater.json — the
+  // pareidolia hinge graph (schemaVersion 5) whose edges carry the shared
+  // patch (s_uv/t_uv) each transition pivots on and whose nodes carry the
+  // painting dimensions the walker needs to align those patches in world
+  // space. Missing graph → nodes only, no edges (random walk, centered
+  // approach). Fallback: if the theater bake hasn't run at all, load
+  // /graph.json — the legacy graph — so the gallery degrades to flat
+  // textured planes instead of going pitch-black.
   useEffect(() => {
     let cancelled = false;
-    const loadFromTheater = fetch('/data/theater/_manifest.json')
-      .then(r => (r.ok ? r.json() : []))
-      .then(manifest => {
+    const loadFromTheater = Promise.all([
+      fetch('/data/theater/_manifest.json')
+        .then(r => (r.ok ? r.json() : []))
+        .catch(() => []),
+      fetch('/data/theater/graph.theater.json')
+        .then(r => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ])
+      .then(([manifest, hingeGraph]) => {
         if (!Array.isArray(manifest) || manifest.length === 0) return null;
-        return manifest.map(id => ({ id, image: "/data/theater/" + encodeURIComponent(id) + ".painting.webp", title: id, theater: true }));
+        const dims = new Map(
+          (hingeGraph?.nodes || []).map(n => [n.id, n]));
+        const nodes = manifest.map(id => ({
+          id,
+          image: "/data/theater/" + encodeURIComponent(id) + ".painting.webp",
+          title: id,
+          theater: true,
+          width: dims.get(id)?.width,
+          height: dims.get(id)?.height,
+        }));
+        const ids = new Set(manifest);
+        const edges = (hingeGraph?.edges || []).filter(
+          e => ids.has(e.source) && ids.has(e.target));
+        return { nodes, edges };
       })
       .catch(() => null);
 
@@ -37,11 +58,11 @@ export default function Scene() {
       .catch(() => null);
 
     loadFromTheater
-      .then(nodes => {
+      .then(theater => {
         if (cancelled) return;
-        if (nodes && nodes.length > 0) {
-          setGraph({ schemaVersion: 4, nodes, edges: [] });
-          setStartNode(nodes[0].id);
+        if (theater && theater.nodes.length > 0) {
+          setGraph({ schemaVersion: 5, nodes: theater.nodes, edges: theater.edges });
+          setStartNode(theater.nodes[0].id);
           return;
         }
         console.warn("[Scene] theater manifest missing/empty; falling back to graph.json.");
@@ -74,7 +95,7 @@ export default function Scene() {
       <pointLight position={[10, 10, 10]} intensity={1} />
       
       {/* 100 pages = 25 artworks at 4 pages/each */}
-      <ScrollControls pages={100} damping={0.2}>
+      <ScrollControls pages={100} damping={0.12}>
         <AnamorphicCam />
         <Suspense fallback={null}>
             <group>

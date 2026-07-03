@@ -10,30 +10,25 @@ const PAGES_PER_SEGMENT = 4;
 const tmpLook = new THREE.Vector3();
 
 /**
- * The camera always points at the painting it's heading toward — i.e. the
- * *endpoint* of the current segment (the next painting on the walk), not
- * at a midpoint along the swervy spline. This keeps the destination
- * centred while the lateral swerve arcs the camera around it, instead of
- * letting the look-direction wander off-axis with the spline curvature.
- *
- * Near the very end of a segment we blend toward the segment-after's
- * endpoint so the gaze doesn't snap at a boundary crossing.
+ * The bubbles rule (from the reference video): however the camera moves,
+ * it stays pointed at ONE central point — the segment's `focus`, the
+ * pareidolia hinge the camera orbits on its nested spheres. Late in the
+ * segment the gaze hands off: preferably straight to the NEXT segment's
+ * focus (so consecutive orbits share a continuous line of sight),
+ * falling back to `endLook` (the destination painting's shell front,
+ * dead ahead at the null) while the next segment hasn't been built yet.
  */
 function lookTarget(segments, segmentIndex, r) {
   const cur = segments[segmentIndex];
-  const here = cur.path[cur.path.length - 1];           // painting B's null
   const next = segments[segmentIndex + 1];
-  if (next && r > 0.9) {
-    const after = next.path[next.path.length - 1];      // painting C's null
-    const t = (r - 0.9) / 0.1;
-    tmpLook.set(
-      THREE.MathUtils.lerp(here.x, after.x, t),
-      THREE.MathUtils.lerp(here.y, after.y, t),
-      THREE.MathUtils.lerp(here.z, after.z, t),
-    );
-    return tmpLook;
-  }
-  tmpLook.copy(here);
+  const from = cur.focus || cur.path[cur.path.length - 1];
+  const to = next?.focus || cur.endLook || cur.path[cur.path.length - 1];
+  const t = THREE.MathUtils.smoothstep(r, 0.6, 0.95);
+  tmpLook.set(
+    THREE.MathUtils.lerp(from.x, to.x, t),
+    THREE.MathUtils.lerp(from.y, to.y, t),
+    THREE.MathUtils.lerp(from.z, to.z, t),
+  );
   return tmpLook;
 }
 
@@ -60,15 +55,18 @@ export default function AnamorphicCam() {
 
     const curve = new THREE.CatmullRomCurve3(currentSegment.path);
 
-    // Position on the segment spline; orientation by looking at a point a
-    // little further along the same spline. This is a "follow the path"
-    // camera — at each painting's null the tangent points down -Z so the
-    // painting reads head-on; between nulls the camera naturally banks
-    // through the mid-segment swerve.
+    // Position on the segment's orbit; gaze locked on the segment focus
+    // (see lookTarget). A touch of bank through the middle of the orbit
+    // keeps the sweep from feeling like it's on rails.
     camera.position.copy(curve.getPointAt(r));
     camera.lookAt(lookTarget(segments, segmentIndex, r));
+    if (currentSegment.bank) {
+      camera.rotateZ(currentSegment.bank * Math.sin(Math.PI * r));
+    }
 
-    if (r > 0.8 && segments.length < segmentIndex + 2) {
+    // Build ahead early — the gaze handoff at r>0.6 wants the next
+    // segment's focus to already exist.
+    if (r > 0.5 && segments.length < segmentIndex + 2) {
       useStore.getState().buildNextSegment();
     }
 

@@ -1,22 +1,43 @@
 #!/usr/bin/env python3
 """
-pareidolia_index.py — Build the pareidolia graph from theater bakes.
+pareidolia_index.py — transition-fulcrum matcher over painting + depth.
 
-For each ordered pair of paintings (A, B) processed by theater_baker.py,
-look for blotches in A that have a "twin" in B at a comparable
-(layer, x, y, scale). Each twin is a candidate pareidolia hinge — the
-mark that holds in place while the camera moves between the two
-paintings' nulls (AESTHETIC §5).
+"Pareidolia" here is shorthand, not face detection: a hinge is a patch
+that can read as part of BOTH the previous and the next painting's
+subject at the same time. During a transition the camera dives into
+painting A's hinge patch and pulls out to find the same region already
+serving as part of painting B — the viewer never sees a cut.
 
-Inputs:   public/data/theater/<id>.theater.json
+For each ordered pair of baked paintings the matcher searches for the
+best shared patch:
+
+  1. Both paintings are downscaled and converted to LAB; their depth
+     maps ride along as a second matching channel.
+  2. Square patches are sampled from A on a grid at several scales.
+     Flat, featureless patches are skipped (they'd match anything and
+     hinge on nothing).
+  3. Each candidate is template-matched against B (normalised
+     cross-correlation) in LAB and in depth; the combined score is
+     0.7 * colour + 0.3 * depth.
+  4. The best (patch, location) pair per (A, B) becomes an edge.
+
+Inputs:   public/data/theater/{id}.painting.webp
+          public/data/theater/{id}.depth.png
           public/data/theater/_manifest.json
-Outputs:  public/data/theater/graph.theater.json
-            { schemaVersion: 3,
-              nodes: [{id, image, title, totalCount, aspect}],
-              edges: [{source, target, weight, shared: [{a, b, layer, x, y, scale}]}]
-            }
+Output:   public/data/theater/graph.theater.json
+  { "schemaVersion": 5,
+    "nodes": [{"id", "width", "height"}...],
+    "edges": [{"source", "target", "weight",
+               "s_uv": [u, v], "t_uv": [u, v], "scale": f}...] }
 
-The renderer / store consume this graph instead of the legacy graph.json.
+`s_uv`/`t_uv` are the patch centres in normalised image coordinates
+(u right, v down, 0..1); `scale` is the patch edge as a fraction of the
+painting's min dimension. The frontend places painting B so its t_uv
+point coincides in world space with A's s_uv point, and routes the
+camera through it.
+
+Usage:
+  python3 scripts/pareidolia_index.py --data public/data/theater/
 """
 
 from __future__ import annotations
@@ -26,193 +47,106 @@ import json
 import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
+from PIL import Image
+
+WORK_LONG_EDGE = 256                  # matching resolution
+PATCH_SCALES   = (0.22, 0.32, 0.45)   # patch edge / min(painting dims)
+GRID_STEPS     = 7                    # candidate grid per axis
+MIN_STD_LAB    = 6.0                  # skip featureless patches (LAB std floor)
+COLOR_WEIGHT   = 0.7
+DEPTH_WEIGHT   = 0.3
 
 
-# Tuning knobs --------------------------------------------------------------
-
-# Maximum allowable distance between two blotches in feature space
-# (layer-weighted). 0 = perfect twin; values above MATCH_RADIUS are not a
-# match. The features are: layer index, x, y, scale.
-MATCH_RADIUS    = 0.16
-LAYER_PENALTY   = 0.5     # cost added per layer-index difference (paper-theater plane mismatch)
-SCALE_WEIGHT    = 0.7     # how much scale difference contributes vs. xy
-MIN_SHARED      = 3       # discard edges with fewer matched twins than this
-TOP_K_OUT_EDGES = 6       # cap outgoing edges per source so the walker has options
-
-# Path defaults -------------------------------------------------------------
-
-DEFAULT_INPUT  = Path("public/data/theater")
-DEFAULT_OUTPUT = Path("public/data/theater/graph.theater.json")
-
-
-# --------------------------------------------------------------------------
-
-def load_painting(path: Path) -> dict:
-    return json.loads(path.read_text())
+def load_painting(data_dir: Path, pid: str) -> dict:
+    rgb = np.array(Image.open(data_dir / f"{pid}.painting.webp").convert("RGB"))
+    depth = np.array(Image.open(data_dir / f"{pid}.depth.png")).astype(np.float32)
+    if depth.ndim == 3:
+        depth = depth[..., 0]
+    h, w = rgb.shape[:2]
+    scale = WORK_LONG_EDGE / max(h, w)
+    size = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
+    rgb_s = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
+    depth_s = cv2.resize(depth, size, interpolation=cv2.INTER_AREA)
+    mn, mx = float(depth_s.min()), float(depth_s.max())
+    depth_s = (depth_s - mn) / (mx - mn) if mx - mn > 1e-6 else np.zeros_like(depth_s)
+    lab = cv2.cvtColor(rgb_s, cv2.COLOR_RGB2LAB).astype(np.float32)
+    return {"id": pid, "w": w, "h": h, "lab": lab,
+            "depth": (depth_s * 255.0).astype(np.float32)}
 
 
-def blotch_features(painting: dict) -> np.ndarray:
-    """
-    Pack blotches into an Nx5 feature array:
-      [layer_idx, x, y, scale, original_index]
-    where original_index is the painting-local linearised blotch id.
-    """
-    rows = []
-    counter = 0
-    for li, layer in enumerate(painting.get("layers", [])):
-        for b in layer.get("blotches", []):
-            rows.append((li, b.get("x", 0.0), b.get("y", 0.0), b.get("scale", 0.0), counter))
-            counter += 1
-    if not rows:
-        return np.zeros((0, 5), dtype=np.float32)
-    return np.asarray(rows, dtype=np.float32)
+def best_hinge(a: dict, b: dict) -> dict | None:
+    """Best shared patch from painting a into painting b."""
+    ah, aw = a["lab"].shape[:2]
+    bh, bw = b["lab"].shape[:2]
+    best = None
 
-
-def pair_distances(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """
-    Pairwise feature distance — A-rows × B-rows. Higher means more dissimilar.
-    cost = LAYER_PENALTY * |layer_a - layer_b|
-         + sqrt((x_a - x_b)^2 + (y_a - y_b)^2)
-         + SCALE_WEIGHT * |scale_a - scale_b|
-    """
-    if len(a) == 0 or len(b) == 0:
-        return np.empty((len(a), len(b)), dtype=np.float32)
-    layer_d = np.abs(a[:, 0:1] - b[:, 0:1].T) * LAYER_PENALTY
-    xy_d = np.hypot(a[:, 1:2] - b[:, 1:2].T, a[:, 2:3] - b[:, 2:3].T)
-    scale_d = np.abs(a[:, 3:4] - b[:, 3:4].T) * SCALE_WEIGHT
-    return layer_d + xy_d + scale_d
-
-
-def find_twins(a: np.ndarray, b: np.ndarray) -> list[tuple[int, int, float]]:
-    """
-    Greedy mutual-best matching. For each row in A, take its closest match
-    in B that hasn't already been claimed and is within MATCH_RADIUS.
-    Returns list of (a_index_local, b_index_local, distance).
-    """
-    if len(a) == 0 or len(b) == 0:
-        return []
-    cost = pair_distances(a, b)
-    # Iterate A rows in order of increasing best-cost so the strongest
-    # twins are claimed first.
-    a_order = np.argsort(cost.min(axis=1))
-    used_b = set()
-    twins = []
-    for ai in a_order:
-        candidates = np.argsort(cost[ai])
-        for bi in candidates:
-            if bi in used_b:
-                continue
-            c = float(cost[ai, bi])
-            if c > MATCH_RADIUS:
-                break
-            used_b.add(int(bi))
-            twins.append((int(ai), int(bi), c))
-            break
-    return twins
-
-
-def edge_for_pair(a_id: str, a_feat: np.ndarray, b_id: str, b_feat: np.ndarray) -> dict | None:
-    twins = find_twins(a_feat, b_feat)
-    if len(twins) < MIN_SHARED:
-        return None
-    # Edge weight rewards both quantity and quality of matches.
-    weight = 0.0
-    shared = []
-    for ai_local, bi_local, c in twins:
-        a_row = a_feat[ai_local]
-        weight += max(0.0, 1.0 - c / MATCH_RADIUS)
-        shared.append({
-            "a":     int(a_row[4]),     # painting-local blotch index in A
-            "b":     int(b_feat[bi_local, 4]),
-            "layer": int(a_row[0]),
-            "x":     round(float(a_row[1]), 4),
-            "y":     round(float(a_row[2]), 4),
-            "scale": round(float(a_row[3]), 4),
-        })
-    shared.sort(key=lambda s: -s["scale"])
-    return {
-        "source": a_id,
-        "target": b_id,
-        "weight": round(weight, 3),
-        "shared": shared,
-    }
-
-
-def build_graph(theater_dir: Path) -> dict:
-    manifest_path = theater_dir / "_manifest.json"
-    if not manifest_path.exists():
-        print(f"[!] no manifest at {manifest_path}", file=sys.stderr)
-        sys.exit(2)
-    ids = json.loads(manifest_path.read_text())
-
-    nodes = []
-    feats = {}
-    paintings = {}
-    for pid in ids:
-        path = theater_dir / f"{pid}.theater.json"
-        if not path.exists():
-            print(f"[!] missing theater file: {path}", file=sys.stderr)
+    for frac in PATCH_SCALES:
+        ps = int(round(frac * min(ah, aw)))
+        if ps < 12 or ps >= bh or ps >= bw:
             continue
-        p = load_painting(path)
-        paintings[pid] = p
-        feats[pid] = blotch_features(p)
-        src = p.get("src", {}) or {}
-        w = src.get("width", 1) or 1
-        h = src.get("height", 1) or 1
-        nodes.append({
-            "id":         pid,
-            "image":      src.get("image", f"{pid}.jpg"),
-            "title":      pid,
-            "blotches":   sum(len(L.get("blotches", [])) for L in p.get("layers", [])),
-            "strokes":    sum(len(L.get("strokes",  [])) for L in p.get("layers", [])),
-            "aspect":     round(float(w) / float(h), 4),
-        })
+        xs = np.linspace(0, aw - ps, GRID_STEPS).astype(int)
+        ys = np.linspace(0, ah - ps, GRID_STEPS).astype(int)
+        for y in ys:
+            for x in xs:
+                patch_lab = a["lab"][y:y + ps, x:x + ps]
+                if float(patch_lab.std()) < MIN_STD_LAB:
+                    continue
+                patch_d = a["depth"][y:y + ps, x:x + ps]
 
-    print(f"[*] {len(nodes)} paintings; computing edges...")
-
-    # All ordered pairs. With a small library this is cheap; for larger
-    # corpora a kd-tree would be the next step.
-    edges_by_source: dict[str, list[dict]] = {pid: [] for pid in ids}
-    for i, a_id in enumerate(ids):
-        for j, b_id in enumerate(ids):
-            if a_id == b_id:
-                continue
-            edge = edge_for_pair(a_id, feats[a_id], b_id, feats[b_id])
-            if edge is None:
-                continue
-            edges_by_source[a_id].append(edge)
-        # Cap to top-K outgoing per source.
-        edges_by_source[a_id].sort(key=lambda e: -e["weight"])
-        edges_by_source[a_id] = edges_by_source[a_id][:TOP_K_OUT_EDGES]
-
-    edges = [e for lst in edges_by_source.values() for e in lst]
-    print(f"[*] {len(edges)} edges (avg {len(edges)/max(1,len(nodes)):.1f} per painting)")
-
-    return {
-        "schemaVersion": 3,
-        "nodes": nodes,
-        "edges": edges,
-    }
+                res_c = cv2.matchTemplate(b["lab"], patch_lab, cv2.TM_CCOEFF_NORMED)
+                res_d = cv2.matchTemplate(b["depth"], patch_d, cv2.TM_CCOEFF_NORMED)
+                res = COLOR_WEIGHT * res_c + DEPTH_WEIGHT * res_d
+                _, score, _, loc = cv2.minMaxLoc(res)
+                if best is None or score > best["weight"]:
+                    best = {
+                        "weight": round(float(score), 4),
+                        "s_uv": [round((x + ps / 2) / aw, 4),
+                                 round((y + ps / 2) / ah, 4)],
+                        "t_uv": [round((loc[0] + ps / 2) / bw, 4),
+                                 round((loc[1] + ps / 2) / bh, 4)],
+                        "scale": round(frac, 4),
+                    }
+    return best
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--input",  type=Path, default=DEFAULT_INPUT,
-                    help=f"theater data dir (default {DEFAULT_INPUT})")
-    ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
-                    help=f"output graph path (default {DEFAULT_OUTPUT})")
+    ap.add_argument("--data", type=Path, default=Path("public/data/theater"))
     args = ap.parse_args(argv)
 
-    if not args.input.is_dir():
-        print(f"[!] no theater dir at {args.input}", file=sys.stderr)
+    manifest_path = args.data / "_manifest.json"
+    if not manifest_path.exists():
+        print(f"[!] no manifest at {manifest_path}", file=sys.stderr)
         return 2
+    ids = json.loads(manifest_path.read_text())
+    if len(ids) < 2:
+        print("[!] need at least 2 baked paintings to build hinges", file=sys.stderr)
+        return 1
 
-    graph = build_graph(args.input.resolve())
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(graph, separators=(",", ":")))
-    print(f"[+] wrote {args.output}")
+    paintings = {pid: load_painting(args.data, pid) for pid in ids}
+
+    nodes = [{"id": p["id"], "width": p["w"], "height": p["h"]}
+             for p in paintings.values()]
+    edges = []
+    for sid in ids:
+        for tid in ids:
+            if sid == tid:
+                continue
+            hinge = best_hinge(paintings[sid], paintings[tid])
+            if hinge is None:
+                continue
+            edges.append({"source": sid, "target": tid, **hinge})
+            print(f"[+] {sid[:24]} -> {tid[:24]}  w={hinge['weight']:.3f} "
+                  f"s={hinge['s_uv']} t={hinge['t_uv']} scale={hinge['scale']}")
+
+    out = args.data / "graph.theater.json"
+    out.write_text(json.dumps(
+        {"schemaVersion": 5, "nodes": nodes, "edges": edges},
+        separators=(",", ":")))
+    print(f"[m] {len(edges)} edges -> {out}")
     return 0
 
 

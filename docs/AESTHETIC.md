@@ -149,23 +149,39 @@ things that compose:
 Each painting decomposes into a **small, fixed number of flat planes**
 (~3–7), like the cardboard cutouts in a Victorian toy theater or a
 pop-up book. Each plane carries a portion of the painting and sits at
-its own discrete Z-depth in the 3D scene. There is no per-pixel depth
-field — depth is *staged*, not *measured*.
+its own discrete Z-depth in the 3D scene. Depth is *measured*, then
+*staged*: the preprocessor estimates a real per-pixel depth map for the
+painting — treating the painting as if it were a photograph — and then
+quantizes it into the few discrete stops the flats sit at. The
+continuous field never reaches the renderer; what shows on screen is
+still cardboard at ~3–7 depths.
+
+The measurement chain matters. Monocular depth models are photo-trained
+and flatten stylised paint, so the baker first converts the cropped
+painting into a **photorealistic rendering of the same scene**
+(composition-preserving img2img), estimates depth on *that*, and applies
+the resulting map back to the original painting's pixels. The synthetic
+gradient fallback exists only so a bake never hard-fails; it is not an
+acceptable delivered result.
 
 For murals, the same primitive carries the world the mural lives in:
 the wall plane, the sidewalk in front, the building across the street.
 The camera moving through the layers is moving through the place.
 
-A layer is a flat paper plane with:
+The per-painting data model is deliberately minimal — **the painting and
+its depth map**, nothing else:
 
-- a Z-depth (one of the ~3–7 stops for that painting),
-- an alpha mask (where the layer carries content vs. lets the layer
-  behind it through),
-- a content body (see §8.2),
-- optional drawn ink strokes overlaid on top of the body.
+- `{id}.painting.webp` — the cropped painting,
+- `{id}.depth.png` — its depth map, aligned pixel-for-pixel,
+- `{id}.theater.json` — src dims, depth provenance, and the staged band
+  edges (k-means on the depth histogram, so stops snap to objects).
 
-Depth ordering is decided by the preprocessor (heuristics plus optional
-manual override per painting), not by a continuous depth model.
+The renderer builds the theater at runtime: a full-painting **backdrop**
+plane at the rear (a toy theater's printed scenery) plus one **cutout
+flat** per depth band in front, each flat discarding pixels outside its
+band. The backdrop always fills what the cutouts don't cover, so
+parallax never exposes holes; head-on at the null the flats reassemble
+into the original painting exactly.
 
 ### 8.2 Color-matching blotches (the body of each layer)
 

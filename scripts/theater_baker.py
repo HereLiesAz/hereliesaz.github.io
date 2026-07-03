@@ -1,42 +1,57 @@
 #!/usr/bin/env python3
 """
-theater_baker.py — three-axis multilayer baker.
+theater_baker.py — painting + depth-map baker (schema 2).
 
-For each input image:
+The paper-theater data model is exactly two textures per painting plus a
+small metadata file. The renderer builds the diorama at runtime from the
+depth texture: a full-painting backdrop plane plus a handful of cutout
+flats, each showing only the pixels inside its depth band.
 
-  1. Crop to the painted region (saturation-based contour for mural photos,
-     pass-through for studio scans).
-  2. Resize to a working long-edge.
-  3. Call the Depth-Anything-V2 HF Space for a depth map (off-device).
-  4. Slice into THREE sets of 10 layers each, dynamic per painting:
-       - depth bands     (quantiles of the depth map)
-       - color clusters  (k-means K=10 in RGB)
-       - luminance bands (quantiles of BT.709 luminance)
-  5. Pack the layer assignments into a single RGB mask image (R=depth idx,
-     G=colour idx, B=luminance idx, all 0..9 stored ×25 for legibility).
+Per input image the bake runs four cacheable stages — each stage is
+skipped when its output already exists (use --force to redo), so the
+expensive off-device calls run once and iteration on slicing/rendering
+is fully offline:
 
-Output per painting under {output}/:
-  {id}.painting.webp   - the cropped painting RGB the renderer textures with
-  {id}.masks.png       - 3-channel layer-id encoding (R, G, B each 0..225)
-  {id}.theater.json    - palette swatches, depth/luminance band edges, accents
+  A. crop      Crop to the painted region and resize to the working
+               long-edge.                     -> {id}.painting.webp
+  B. photo     Convert the painting into a photorealistic rendering of
+               the same scene (img2img, composition preserved). Depth
+               models are photo-trained and flatten stylised paintings;
+               depth estimated from the photo is far better than depth
+               estimated from the painting.   -> {id}.photo.png
+  C. depth     Monocular depth (Depth-Anything-V2) on the PHOTO, applied
+               back to the original painting (the photo shares the
+               painting's composition, so the map aligns 1:1).
+                                              -> {id}.depth.png (16-bit)
+  D. meta      k-means the depth histogram into ~6 bands whose edges
+               snap to objects rather than quantiles.
+                                              -> {id}.theater.json
+
+Depth provenance is recorded in theater.json as depth.source:
+  "photo+depth-anything-v2"  the full chain (the intended result)
+  "depth-anything-v2"        depth run on the painting directly
+  "synthetic"                gradient+saturation stand-in (emergency
+                             only — re-bake with network access)
 
 Plus once per run:
-  _manifest.json       - list of painted ids ready for the renderer
+  _manifest.json     list of ids with painting + depth + json present
 
 Env:
   HF_TOKEN  - Hugging Face access token; loaded from .env.local at the
-              project root if present.
+              project root if present. Needed for stage B (img2img) and
+              recommended for stage C (depth Space quota).
 
 Usage:
-  /tmp/pw-venv/bin/python scripts/theater_baker.py \\
+  python3 scripts/theater_baker.py \\
       --input  public/assets/ \\
       --output public/data/theater/ \\
-      [--limit N] [--force] [--max-side 768]
+      [--ids id1,id2,...] [--force] [--max-side 768] [--limit N]
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
@@ -48,21 +63,31 @@ import numpy as np
 from PIL import Image, ImageFile
 
 # Some of the source photos are slightly truncated; opening them tolerantly
-# avoids derailing a corpus bake over one bad byte.
+# avoids derailing a bake over one bad byte.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 # ---- tuning knobs -----------------------------------------------------------
 
 DEFAULT_MAX_SIDE = 768                     # depth Space caps at ~768 long edge
-N_DEPTH          = 10
-N_COLOR          = 10
-N_LUM            = 10
+N_BANDS          = 6                       # AESTHETIC §8.1: ~3-7 flats
+MIN_BAND_COVER   = 0.02                    # merge bands under 2% of pixels
+MIN_BAND_SEP     = 0.08                    # merge bands closer than this in depth
 ACCENT_SAT_FLOOR = 0.18                    # painting reads as desaturated below this
 ACCENT_COUNT     = 2
+N_ACCENT_CLUSTERS = 10
 
 DEPTH_SPACE_ID   = "depth-anything/Depth-Anything-V2"
 DEPTH_API_NAME   = "/on_submit"
+
+PHOTOREAL_MODEL  = "black-forest-labs/FLUX.1-Kontext-dev"
+PHOTOREAL_SPACE  = "mcp-tools/FLUX.1-Kontext-Dev"
+PHOTOREAL_API    = "/infer"
+PHOTOREAL_PROMPT = (
+    "Convert this painting into a realistic photograph of the exact same "
+    "scene. Keep the composition, framing, and placement of every element "
+    "identical; only make surfaces, lighting, and materials photorealistic."
+)
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
@@ -135,7 +160,91 @@ def crop_to_art(rgb: np.ndarray) -> np.ndarray:
     return rgb[y:y + hh, x:x + ww]
 
 
-# ---- depth ------------------------------------------------------------------
+# ---- stage B: photorealize ----------------------------------------------------
+
+def align_to(photo: np.ndarray, rgb: np.ndarray) -> np.ndarray:
+    """Register `photo` onto `rgb` (the painting). img2img keeps the scene
+    but often reframes by a few percent; a Euclidean/affine ECC pass snaps
+    the photo back so its depth map applies to the painting pixel-for-pixel.
+    Falls back to a plain resize when ECC cannot converge (drastic
+    restyle) — the composition is still broadly shared."""
+    h, w = rgb.shape[:2]
+    photo = cv2.resize(photo, (w, h), interpolation=cv2.INTER_AREA)
+    g1 = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    g2 = cv2.cvtColor(photo, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    warp = np.eye(2, 3, dtype=np.float32)
+    try:
+        cv2.findTransformECC(
+            g1, g2, warp, cv2.MOTION_AFFINE,
+            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, 200, 1e-6),
+            None, 5,
+        )
+        photo = cv2.warpAffine(
+            photo, warp, (w, h),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+    except cv2.error:
+        print("[~] ECC alignment did not converge; using resized photo as-is",
+              file=sys.stderr)
+    return photo
+
+
+def photorealize(rgb: np.ndarray, cache_path: Path) -> np.ndarray | None:
+    """Return a photorealistic rendering of the painting, registered to it.
+
+    Cached at cache_path; the network is only touched on a cache miss.
+    Tries the HF Inference API when HF_TOKEN is set, then the public
+    FLUX.1-Kontext Space anonymously. Returns None when both fail — the
+    caller then falls back to estimating depth on the painting itself.
+    """
+    if cache_path.exists():
+        photo = np.array(Image.open(cache_path).convert("RGB"))
+        if photo.shape[:2] != rgb.shape[:2]:
+            photo = cv2.resize(photo, (rgb.shape[1], rgb.shape[0]),
+                               interpolation=cv2.INTER_AREA)
+        return photo
+
+    photo = None
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        try:
+            from huggingface_hub import InferenceClient
+            client = InferenceClient(token=token)
+            buf = io.BytesIO()
+            Image.fromarray(rgb).save(buf, "PNG")
+            out = client.image_to_image(
+                buf.getvalue(), prompt=PHOTOREAL_PROMPT, model=PHOTOREAL_MODEL,
+            )
+            photo = np.array(out.convert("RGB"))
+        except Exception as e:
+            print(f"[~] photorealize via Inference API failed "
+                  f"({type(e).__name__}: {e}); trying the public Space", file=sys.stderr)
+
+    if photo is None:
+        try:
+            from gradio_client import Client, handle_file
+            tmp = Path("/tmp/_theater_photo_in.png")
+            Image.fromarray(rgb).save(tmp, "PNG")
+            client = Client(PHOTOREAL_SPACE, token=token or None, verbose=False)
+            result = client.predict(
+                input_image=handle_file(str(tmp)),
+                prompt=PHOTOREAL_PROMPT,
+                api_name=PHOTOREAL_API,
+            )
+            out_path = result[0] if isinstance(result, (list, tuple)) else result
+            photo = np.array(Image.open(out_path).convert("RGB"))
+        except Exception as e:
+            print(f"[~] photorealize failed ({type(e).__name__}: {e}); "
+                  "estimating depth on the painting directly", file=sys.stderr)
+            return None
+
+    photo = align_to(photo, rgb)
+    Image.fromarray(photo).save(cache_path, "PNG", optimize=True)
+    return photo
+
+
+# ---- stage C: depth -----------------------------------------------------------
 
 _depth_client = None
 
@@ -153,9 +262,8 @@ def synth_depth(rgb: np.ndarray) -> np.ndarray:
     """Cheap stand-in for the monocular depth model: combine a vertical
     gradient (top → far, bottom → near, the wallpaper-of-Western-painting
     convention) with local saturation (saturated patches read as foreground
-    against an underpainting). Used when the HF Space is unreachable or
-    rate-limited so the rear shell still has *some* spatial variation in its
-    layer bands instead of degenerating into a copy of luminance."""
+    against an underpainting). Emergency fallback only — the delivered bake
+    must use a real depth map."""
     h, w = rgb.shape[:2]
     grad = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
     hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
@@ -169,17 +277,15 @@ def synth_depth(rgb: np.ndarray) -> np.ndarray:
 
 _depth_disabled = False
 
-def estimate_depth(rgb: np.ndarray) -> np.ndarray:
+def estimate_depth(rgb: np.ndarray) -> np.ndarray | None:
     """Run the off-device depth model on `rgb` (HxWx3 uint8). Returns an
-    HxW float32 depth map normalised to [0, 1] (higher = closer). Falls
-    back to synth_depth() if the Space is unreachable or out of quota — a
-    bake without HF_TOKEN should still complete, just with synthetic depth
-    bands instead of monocular-depth ones. Once the Space has failed once
-    we stop retrying for the rest of the run (quota exhaustion doesn't
+    HxW float32 depth map normalised to [0, 1] (higher = closer), or None
+    if the Space is unreachable / out of quota. Once the Space has failed
+    once we stop retrying for the rest of the run (quota exhaustion doesn't
     repair itself within a few seconds)."""
     global _depth_disabled
     if _depth_disabled:
-        return synth_depth(rgb)
+        return None
 
     from gradio_client import handle_file
     # The Space expects a file path; round-trip via /tmp.
@@ -190,9 +296,9 @@ def estimate_depth(rgb: np.ndarray) -> np.ndarray:
     try:
         client = get_depth_client()
     except Exception as e:
-        print(f"[~] depth Space init failed ({e!r}); using synthetic depth for remainder", file=sys.stderr)
+        print(f"[~] depth Space init failed ({e!r})", file=sys.stderr)
         _depth_disabled = True
-        return synth_depth(rgb)
+        return None
 
     # Retry once on transient HF/Space errors (queue, cold-start).
     last_exc = None
@@ -204,9 +310,9 @@ def estimate_depth(rgb: np.ndarray) -> np.ndarray:
             last_exc = e
             time.sleep(2.0)
     else:
-        print(f"[~] depth Space failed ({last_exc!r}); using synthetic depth for remainder", file=sys.stderr)
+        print(f"[~] depth Space failed ({last_exc!r})", file=sys.stderr)
         _depth_disabled = True
-        return synth_depth(rgb)
+        return None
 
     # Result is (slider_pair_list, 8bit_depth_png_path, 16bit_depth_png_path).
     depth_16_path = result[2]
@@ -221,20 +327,86 @@ def estimate_depth(rgb: np.ndarray) -> np.ndarray:
     return (arr - mn) / (mx - mn)
 
 
-# ---- layer extraction -------------------------------------------------------
+def load_depth_png(path: Path, shape: tuple[int, int]) -> np.ndarray:
+    """Read a cached {id}.depth.png (8- or 16-bit grayscale) back to a
+    float32 [0,1] map aligned to `shape` (h, w)."""
+    arr = np.array(Image.open(path)).astype(np.float32)
+    if arr.ndim == 3:
+        arr = arr[..., 0]
+    if arr.shape != shape:
+        arr = cv2.resize(arr, (shape[1], shape[0]), interpolation=cv2.INTER_LINEAR)
+    mn, mx = float(arr.min()), float(arr.max())
+    if mx - mn < 1e-6:
+        return np.zeros_like(arr)
+    return (arr - mn) / (mx - mn)
 
-def quantile_bands(values: np.ndarray, n: int) -> tuple[np.ndarray, list[float]]:
-    """Assign each pixel of `values` (any shape) to one of `n` bands by
-    quantile, returning (band_index HxW uint8, band-edge list of len n+1)."""
-    flat = values.ravel()
-    edges = np.quantile(flat, np.linspace(0, 1, n + 1))
-    # Make edges strictly increasing for digitize.
-    for i in range(1, len(edges)):
-        if edges[i] <= edges[i - 1]:
-            edges[i] = edges[i - 1] + 1e-6
-    idx = np.digitize(values, edges[1:-1], right=False).astype(np.uint8)
-    return idx, [round(float(e), 6) for e in edges]
 
+def save_depth_png(depth: np.ndarray, path: Path) -> None:
+    d16 = np.clip(depth * 65535.0 + 0.5, 0, 65535).astype(np.uint16)
+    Image.fromarray(d16).save(path, "PNG", optimize=True)
+
+
+# ---- stage D: depth bands -----------------------------------------------------
+
+def depth_bands_kmeans(depth: np.ndarray, k: int = N_BANDS,
+                       min_cover: float = MIN_BAND_COVER) -> tuple[list[float], list[float]]:
+    """Cluster the depth histogram into up to `k` bands whose boundaries
+    snap to plateaus (objects) instead of equal-population quantiles.
+    Returns (edges, centers): edges has len(centers)+1 with 0.0 / 1.0 at
+    the ends; bands covering under `min_cover` of pixels are merged into
+    their nearest neighbour."""
+    flat = depth.reshape(-1, 1).astype(np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-4)
+    _, labels, centers = cv2.kmeans(
+        flat, k, None, criteria, attempts=4, flags=cv2.KMEANS_PP_CENTERS,
+    )
+    centers = centers.ravel().astype(np.float64)
+    order = np.argsort(centers)
+    centers = centers[order]
+    counts = np.bincount(labels.ravel(), minlength=k).astype(np.float64)[order]
+    cover = counts / max(1.0, counts.sum())
+
+    # Merge (a) undersized bands into whichever neighbour is closer in
+    # depth, and (b) neighbouring bands whose centers are so close that
+    # k-means merely split one plateau in two. Coverage pools on merge so
+    # a chain of slivers can accrete into a real band.
+    cs = [float(c) for c in centers]
+    cv_ = [float(c) for c in cover]
+
+    def merge(i: int, j: int) -> None:
+        wsum = cv_[i] + cv_[j]
+        cs[j] = (cs[i] * cv_[i] + cs[j] * cv_[j]) / max(wsum, 1e-9)
+        cv_[j] = wsum
+        del cs[i], cv_[i]
+
+    changed = True
+    while changed and len(cs) > 1:
+        changed = False
+        gaps = [b - a for a, b in zip(cs, cs[1:])]
+        i = int(np.argmin(gaps))
+        if gaps[i] < MIN_BAND_SEP:
+            merge(i, i + 1)
+            changed = True
+            continue
+        i = int(np.argmin(cv_))
+        if cv_[i] < min_cover:
+            if i == 0:
+                j = 1
+            elif i == len(cs) - 1:
+                j = i - 1
+            else:
+                j = i - 1 if (cs[i] - cs[i - 1]) <= (cs[i + 1] - cs[i]) else i + 1
+            merge(i, j)
+            changed = True
+
+    edges = [0.0]
+    for a, b in zip(cs, cs[1:]):
+        edges.append(round((a + b) / 2.0, 6))
+    edges.append(1.0)
+    return edges, [round(c, 6) for c in cs]
+
+
+# ---- accents ------------------------------------------------------------------
 
 def color_clusters(rgb: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
     """k-means clustering on RGB. Returns (labels HxW uint8, centers Kx3 uint8)
@@ -254,11 +426,6 @@ def color_clusters(rgb: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
     return remap[labels].astype(np.uint8), centers[order]
 
 
-def luminance(rgb: np.ndarray) -> np.ndarray:
-    r, g, b = rgb[..., 0].astype(np.float32), rgb[..., 1].astype(np.float32), rgb[..., 2].astype(np.float32)
-    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
-
-
 def pick_accents(centers: np.ndarray) -> dict | None:
     hsv = cv2.cvtColor(centers.reshape(1, -1, 3), cv2.COLOR_RGB2HSV).reshape(-1, 3)
     sat = hsv[:, 1].astype(np.float32) / 255.0
@@ -274,47 +441,70 @@ def _hex(rgb: np.ndarray) -> str:
     return "#{:02x}{:02x}{:02x}".format(int(rgb[0]), int(rgb[1]), int(rgb[2]))
 
 
-# ---- per-image bake ---------------------------------------------------------
+# ---- per-image bake -----------------------------------------------------------
 
-def bake_image(path: Path, out_dir: Path, max_side: int) -> dict:
-    pil = Image.open(path).convert("RGB")
-    rgb = np.array(pil)
-    rgb = crop_to_art(rgb)
-
-    h, w = rgb.shape[:2]
-    scale = min(1.0, max_side / max(h, w))
-    if scale < 1.0:
-        rgb = cv2.resize(rgb, (int(round(w * scale)), int(round(h * scale))),
-                         interpolation=cv2.INTER_AREA)
-        h, w = rgb.shape[:2]
-
-    depth = estimate_depth(rgb)                           # 0..1, higher = closer
-    depth_idx, depth_edges = quantile_bands(depth, N_DEPTH)
-    lum_idx, lum_edges     = quantile_bands(luminance(rgb), N_LUM)
-    color_idx, color_centers = color_clusters(rgb, N_COLOR)
-
-    # Pack the three index channels into one RGB mask image. Stored ×25 so
-    # the bands stay visible if anyone opens the PNG to debug; the renderer
-    # divides by 25 to recover the raw 0..9 index.
-    masks = np.stack([depth_idx, color_idx, lum_idx], axis=-1) * 25
-    masks_img = Image.fromarray(masks.astype(np.uint8), mode="RGB")
-
+def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) -> dict:
     pid = path.stem
     out_painting = out_dir / f"{pid}.painting.webp"
-    out_masks    = out_dir / f"{pid}.masks.png"
+    out_photo    = out_dir / f"{pid}.photo.png"
+    out_depth    = out_dir / f"{pid}.depth.png"
     out_json     = out_dir / f"{pid}.theater.json"
 
-    Image.fromarray(rgb).save(out_painting, "WEBP", quality=88, method=6)
-    masks_img.save(out_masks, "PNG", optimize=True)
+    # -- stage A: crop / resize -------------------------------------------------
+    # The existing painting.webp is the canonical cropped painting: reuse it
+    # so a re-bake of later stages stays pixel-aligned with what's deployed.
+    if out_painting.exists() and not force:
+        rgb = np.array(Image.open(out_painting).convert("RGB"))
+    else:
+        rgb = np.array(Image.open(path).convert("RGB"))
+        rgb = crop_to_art(rgb)
+        h, w = rgb.shape[:2]
+        scale = min(1.0, max_side / max(h, w))
+        if scale < 1.0:
+            rgb = cv2.resize(rgb, (int(round(w * scale)), int(round(h * scale))),
+                             interpolation=cv2.INTER_AREA)
+        Image.fromarray(rgb).save(out_painting, "WEBP", quality=88, method=6)
+    h, w = rgb.shape[:2]
 
+    # -- stages B+C: photorealize, then depth ------------------------------------
+    if out_depth.exists() and not force:
+        depth = load_depth_png(out_depth, (h, w))
+        # Provenance of a cached map isn't recoverable from pixels; trust the
+        # existing json if it has it, else assume the photo chain (cached maps
+        # are only ever written by the branches below).
+        source = "photo+depth-anything-v2"
+        if out_json.exists():
+            try:
+                source = json.loads(out_json.read_text())["depth"]["source"]
+            except Exception:
+                pass
+    else:
+        photo = photorealize(rgb, out_photo)
+        if photo is not None:
+            depth = estimate_depth(photo)
+            source = "photo+depth-anything-v2"
+        else:
+            depth = estimate_depth(rgb)
+            source = "depth-anything-v2"
+        if depth is None:
+            depth = synth_depth(rgb)
+            source = "synthetic"
+        save_depth_png(depth, out_depth)
+
+    # -- stage D: bands + metadata ------------------------------------------------
+    edges, centers = depth_bands_kmeans(depth)
+
+    _, color_centers = color_clusters(rgb, N_ACCENT_CLUSTERS)
     accents = pick_accents(color_centers)
+
     meta = {
+        "schema": 2,
         "id":     pid,
         "src":    {"image": path.name, "width": w, "height": h},
-        "layers": {
-            "depth":     {"count": N_DEPTH, "edges": depth_edges},
-            "color":     {"count": N_COLOR, "swatches": [_hex(c) for c in color_centers]},
-            "luminance": {"count": N_LUM, "edges": lum_edges},
+        "depth":  {
+            "source": source,
+            "file":   out_depth.name,
+            "bands":  {"count": len(centers), "edges": edges, "centers": centers},
         },
     }
     if accents is not None:
@@ -333,14 +523,20 @@ def iter_images(root: Path):
 
 def write_manifest(out_dir: Path) -> None:
     """An id is bakeable only if all three companion files are present —
-    painting webp, masks png, and theater json. This keeps the manifest
-    from listing half-baked or legacy entries."""
+    painting webp, depth png, and schema-2 theater json. This keeps the
+    manifest from listing half-baked or legacy (schema-1) entries."""
     ids = []
     for p in sorted(out_dir.glob("*.theater.json")):
         if p.name.startswith("_") or p.name == "graph.theater.json":
             continue
         pid = p.stem.removesuffix(".theater")
-        if (out_dir / f"{pid}.painting.webp").exists() and (out_dir / f"{pid}.masks.png").exists():
+        try:
+            schema = json.loads(p.read_text()).get("schema")
+        except Exception:
+            continue
+        if schema != 2:
+            continue
+        if (out_dir / f"{pid}.painting.webp").exists() and (out_dir / f"{pid}.depth.png").exists():
             ids.append(pid)
     (out_dir / "_manifest.json").write_text(json.dumps(ids))
     print(f"[m] {len(ids)} ids -> {out_dir / '_manifest.json'}")
@@ -349,8 +545,8 @@ def write_manifest(out_dir: Path) -> None:
 def main(argv: list[str]) -> int:
     load_dotenv(Path(".env.local"))
     if not os.environ.get("HF_TOKEN"):
-        print("[!] HF_TOKEN not set (looked at .env.local). The depth Space is "
-              "public so it'll still work, but auth is recommended.",
+        print("[!] HF_TOKEN not set (looked at .env.local). Photorealize needs "
+              "it; the depth Space is public so depth may still work.",
               file=sys.stderr)
 
     ap = argparse.ArgumentParser(description=__doc__,
@@ -359,8 +555,11 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--max-side", type=int, default=DEFAULT_MAX_SIDE)
     ap.add_argument("--limit",  type=int, default=None)
+    ap.add_argument("--ids",    type=str, default=None,
+                    help="comma-separated image stems to bake (others skipped); "
+                         "stale outputs for these ids are refreshed")
     ap.add_argument("--force",  action="store_true",
-                    help="rebake images that already have output json")
+                    help="regenerate every stage, including cached photo/depth")
     args = ap.parse_args(argv)
 
     args.input  = args.input.resolve()
@@ -372,26 +571,39 @@ def main(argv: list[str]) -> int:
         return 2
 
     images = list(iter_images(args.input))
+    if args.ids:
+        wanted = {s.strip() for s in args.ids.split(",") if s.strip()}
+        images = [p for p in images if p.stem in wanted]
+        missing = wanted - {p.stem for p in images}
+        if missing:
+            print(f"[!] ids not found in {args.input}: {sorted(missing)}", file=sys.stderr)
     if args.limit is not None:
         images = images[: args.limit]
     if not images:
-        print(f"[!] no images in {args.input}", file=sys.stderr)
+        print(f"[!] no images to bake in {args.input}", file=sys.stderr)
         return 1
 
     baked = skipped = failed = 0
     for path in images:
         out_json = args.output / f"{path.stem}.theater.json"
-        if out_json.exists() and not args.force:
+        is_v2 = False
+        if out_json.exists():
+            try:
+                is_v2 = json.loads(out_json.read_text()).get("schema") == 2
+            except Exception:
+                is_v2 = False
+        if is_v2 and not args.force and args.ids is None:
             skipped += 1
             continue
         try:
-            data = bake_image(path, args.output, args.max_side)
+            data = bake_image(path, args.output, args.max_side, force=args.force)
         except Exception as e:
             print(f"[x] {path.name}: {type(e).__name__}: {e}", file=sys.stderr)
             failed += 1
             continue
         baked += 1
-        print(f"[+] {path.name} -> {data['id']} ({N_DEPTH}+{N_COLOR}+{N_LUM} layers)")
+        bands = data["depth"]["bands"]["count"]
+        print(f"[+] {path.name} -> {data['id']} ({bands} bands, depth={data['depth']['source']})")
 
     write_manifest(args.output)
     print(f"\nbaked={baked} skipped={skipped} failed={failed} total={len(images)}")
