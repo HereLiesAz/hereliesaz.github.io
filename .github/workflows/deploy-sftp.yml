@@ -92,6 +92,7 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.SFTP_USERNAME }}
           ssh_private_key: ${{ secrets.SSH_RSA }}
+          ssh_passphrase: ${{ secrets.SSH_PASSPHRASE }}
           port: ${{ vars.SFTP_PORT || 22 }}
           local_path: './main/dist/*'
           remote_path: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
