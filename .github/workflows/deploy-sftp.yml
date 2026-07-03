@@ -90,7 +90,8 @@ jobs:
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_RSA }}
           HOST: ${{ secrets.FTP_SERVER }}
-          USERNAME: ${{ secrets.SFTP_USERNAME }}
+          USERNAME: ${{ secrets.FTP_USERNAME }}
+          PASSWORD: ${{ secrets.FTP_PASSWORD }}
           PORT: 22
         run: |
           mkdir -p ~/.ssh
