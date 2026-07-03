@@ -57,12 +57,17 @@ export default function Scene() {
       })
       .catch(() => null);
 
+    // Pick a random starting painting so every visit begins somewhere
+    // different — the corpus is small enough that a deterministic
+    // nodes[0] made repeat visits feel like a fixed lobby.
+    const pickStart = (nodes) => nodes[Math.floor(Math.random() * nodes.length)].id;
+
     loadFromTheater
       .then(theater => {
         if (cancelled) return;
         if (theater && theater.nodes.length > 0) {
           setGraph({ schemaVersion: 5, nodes: theater.nodes, edges: theater.edges });
-          setStartNode(theater.nodes[0].id);
+          setStartNode(pickStart(theater.nodes));
           return;
         }
         console.warn("[Scene] theater manifest missing/empty; falling back to graph.json.");
@@ -73,7 +78,7 @@ export default function Scene() {
             return;
           }
           setGraph({ schemaVersion: 2, nodes: g.nodes, edges: g.edges });
-          setStartNode(g.nodes[0].id);
+          setStartNode(pickStart(g.nodes));
         });
       });
 
