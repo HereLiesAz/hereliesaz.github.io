@@ -136,6 +136,10 @@ public/data/theater/*.depth.png
 public/data/theater/*.photo.png
 public/data/theater/graph.theater.json
 public/data/theater/_manifest.json
+# And the directory itself when it's a local-dev symlink pointing at an
+# art-data worktree — used for building/serving locally with the deployed
+# corpus in place. Never a real committed entry on source branches.
+/public/data/theater
 
 *.example
 *.local

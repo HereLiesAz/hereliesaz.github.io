@@ -166,8 +166,12 @@ const useStore = create((set, get) => ({
             nextPos[0], nextPos[1],
             nextPos[2] - SHELL_FRONT - SHELL_DEPTH * 0.5);
 
-    // Where the gaze settles at the segment's end: the next painting's
-    // shell front, dead ahead — the head-on reassembly view at the null.
+    // Where the gaze rests at each end of the segment — the CURRENT
+    // painting's shell front (dead ahead from A's null) and the NEXT
+    // painting's shell front (dead ahead from B's null). Head-on
+    // reassembly at both nulls; only the middle of the transit routes
+    // through the off-center hinge patch.
+    const startLook = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ - SHELL_FRONT);
     const endLook = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2] - SHELL_FRONT);
 
     const dir0 = startPoint.clone().sub(focus).normalize();
@@ -199,6 +203,7 @@ const useStore = create((set, get) => ({
         startId: current.id,
         endId: nextId,
         focus,
+        startLook,
         endLook,
         bank: (Math.random() * 2 - 1) * 0.12,
     };

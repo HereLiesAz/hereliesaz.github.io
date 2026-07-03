@@ -19,11 +19,13 @@ const SHELL_DEPTH     = 6.0;
 const SHELL_FRONT     = 11.0;
 
 // Distance envelope: full colour inside FADE_FULL, gone past FADE_GONE.
-// Paintings are 36 units apart, so the next diorama fades up through the
-// current one's cutout gaps while the camera is still inside this shell —
-// that interleaving is the transition.
-const FADE_FULL = 18.0;
-const FADE_GONE = 34.0;
+// Paintings are SEGMENT_LENGTH=36 units apart. At the middle of a
+// transit the camera sits ~18 units from each null; if FADE_FULL is
+// also 18 the current painting hits zero exactly as the next hasn't
+// yet risen, so the frame goes fully black. Widened past half-segment
+// so BOTH dioramas are visible mid-transit and their flats interleave.
+const FADE_FULL = 24.0;
+const FADE_GONE = 44.0;
 
 // When the camera's world z crosses a flat's z, the flat dissolves to
 // black over this many units instead of clipping across the near plane.
