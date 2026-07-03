@@ -92,7 +92,6 @@ jobs:
           host: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.SFTP_USERNAME }}
           key: ${{ secrets.SSH_RSA }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
           port: ${{ vars.SFTP_PORT || 22 }}
           source: "main/dist/*"
           target: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
