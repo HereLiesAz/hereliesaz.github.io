@@ -112,8 +112,8 @@ export default function Scene() {
                             key={`${cluster.id}-${cluster.index}`}
                             id={cluster.id}
                             image={cluster.image}
-                            position={cluster.worldPos}
-                            rotation={cluster.rotSway}
+                            position={cluster.position || cluster.worldPos || [0, 0, 0]}
+                            rotation={cluster.rotation || cluster.rotSway || [0, 0, 0]}
                             mySegmentIndex={cluster.index}
                         />
                     ))
