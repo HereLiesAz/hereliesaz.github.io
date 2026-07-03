@@ -6,11 +6,13 @@ before touching anything.
 
 > **Status update:** PR #37 (all code below) was MERGED to main by the
 > user on 2026-07-03. The branch was restarted from the merged main for
-> follow-up work; any further push needs a NEW pull request. Remaining
-> work when this note was written: finish the 3 dark-painting bake
-> (quota-retry loop), run `pareidolia_index.py`, commit the refreshed
-> `_manifest.json` (the merged one is stale — it lists the three removed
-> ids), screenshot pass, show the user.
+> follow-up work; any further push needs a NEW pull request. The stale
+> tracked `_manifest.json` was untracked and gitignored along with the
+> other schema-2 bake outputs — the baker regenerates it locally and
+> deploys read the `art-data` branch, so no bake artifact is committed
+> on source branches. Remaining work when this note was written: finish
+> the 3 dark-painting bake (quota-retry loop), run
+> `pareidolia_index.py`, screenshot pass, show the user.
 
 ## The brief (user directives, in order given)
 
