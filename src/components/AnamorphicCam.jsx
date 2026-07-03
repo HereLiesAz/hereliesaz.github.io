@@ -25,18 +25,6 @@ const tmpLook = new THREE.Vector3();
  * Both nulls therefore frame their painting dead centre; only the
  * middle of the transit routes the gaze through the off-centre hinge.
  */
-const tmpA = new THREE.Vector3();
-const tmpB = new THREE.Vector3();
-
-function lerpTo(out, from, to, t) {
-  out.set(
-    THREE.MathUtils.lerp(from.x, to.x, t),
-    THREE.MathUtils.lerp(from.y, to.y, t),
-    THREE.MathUtils.lerp(from.z, to.z, t),
-  );
-  return out;
-}
-
 function lookTarget(segments, segmentIndex, r) {
   const cur = segments[segmentIndex];
   const endFallback = cur.path[cur.path.length - 1];
@@ -47,10 +35,10 @@ function lookTarget(segments, segmentIndex, r) {
   if (r <= 0.15) return tmpLook.copy(startLook);
   if (r >= 0.85) return tmpLook.copy(endLook);
   if (r < 0.35) {
-    return lerpTo(tmpLook, startLook, focus, THREE.MathUtils.smoothstep(r, 0.15, 0.35));
+    return tmpLook.lerpVectors(startLook, focus, THREE.MathUtils.smoothstep(r, 0.15, 0.35));
   }
   if (r > 0.65) {
-    return lerpTo(tmpLook, focus, endLook, THREE.MathUtils.smoothstep(r, 0.65, 0.85));
+    return tmpLook.lerpVectors(focus, endLook, THREE.MathUtils.smoothstep(r, 0.65, 0.85));
   }
   return tmpLook.copy(focus);
 }
