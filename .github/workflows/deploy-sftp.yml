@@ -9,12 +9,15 @@ name: Deploy over SFTP
 #                    continuity with earlier FTP setups; SFTP still works
 #                    against it — the protocol lives in the deploy step
 #                    below, not in the secret name.
-#   FTP_USERNAME     your SSH user
+#   SFTP_USERNAME    your SSH login user (distinct from FTP_USERNAME —
+#                    that's for the plain-FTP account; SSH may use a
+#                    different name, often the email the SSH key was
+#                    generated for on managed hosts).
 #   SSH_RSA          private key contents, INCLUDING the
 #                    -----BEGIN OPENSSH PRIVATE KEY----- (or -----BEGIN RSA
 #                    PRIVATE KEY-----) header and matching footer. The
 #                    matching public key must be appended to
-#                    ~/.ssh/authorized_keys for FTP_USERNAME on the host.
+#                    ~/.ssh/authorized_keys for SFTP_USERNAME on the host.
 #
 # Optional repository variables (Settings → Secrets and variables → Actions → Variables):
 #   SFTP_PORT         defaults to 22
@@ -87,7 +90,7 @@ jobs:
         uses: wlixcc/SFTP-Deploy-Action@v1.2.6
         with:
           server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
+          username: ${{ secrets.SFTP_USERNAME }}
           ssh_private_key: ${{ secrets.SSH_RSA }}
           port: ${{ vars.SFTP_PORT || 22 }}
           local_path: './main/dist/*'
