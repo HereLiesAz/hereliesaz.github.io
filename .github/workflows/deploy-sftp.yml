@@ -85,8 +85,8 @@ jobs:
       - name: Build
         working-directory: main
         run: npm run build
-
-      - name: Deploy via Native SCP
+        
+      - name: Deploy via Native SFTP
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_RSA }}
           HOST: ${{ secrets.FTP_SERVER }}
@@ -97,4 +97,9 @@ jobs:
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p $PORT -H $HOST >> ~/.ssh/known_hosts
-          scp -P $PORT -r ./main/dist/* $USERNAME@$HOST:/public_html/
+          sftp -P $PORT -b - $USERNAME@$HOST <<EOF
+          cd /public_html/
+          lcd ./main/dist
+          put -r .
+          bye
+          EOF
