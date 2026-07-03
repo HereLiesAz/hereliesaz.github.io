@@ -94,13 +94,12 @@ jobs:
           PASSWORD: ${{ secrets.FTP_PASSWORD }}
           PORT: 22
         run: |
+          sudo apt-get install -y sshpass
           mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p $PORT -H $HOST >> ~/.ssh/known_hosts
-          sftp -P $PORT -b - $USERNAME@$HOST <<EOF
+          sshpass -p "$PASSWORD" sftp -o StrictHostKeyChecking=no -P $PORT -b - $USERNAME@$HOST <<EOF
           cd /public_html/
           lcd ./main/dist
-          put -r .
+          put -r *
           bye
           EOF
