@@ -243,6 +243,10 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     fragmentShader: flatFS,
     transparent:    false,
     depthWrite:     true,
+    // Paper is visible from backstage too — the camera's orbit passes
+    // behind the shell mid-transition, and single-sided flats would
+    // vanish into a black beat there.
+    side:           THREE.DoubleSide,
     uniforms: {
       uPainting: { value: null },
       uDepth:    { value: null },
@@ -330,7 +334,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   // Shared material for the flat fallback. Created once and updated per-frame
   // so it picks up the same distance fade as the layered shell.
   const fallbackMaterial = useMemo(
-    () => new THREE.MeshBasicMaterial({ toneMapped: false }),
+    () => new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.DoubleSide }),
     [],
   );
   useEffect(() => () => fallbackMaterial.dispose(), [fallbackMaterial]);
