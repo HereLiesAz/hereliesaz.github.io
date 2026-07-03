@@ -243,6 +243,10 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     fragmentShader: flatFS,
     transparent:    false,
     depthWrite:     true,
+    // Paper is visible from backstage too — the camera's orbit passes
+    // behind the shell mid-transition, and single-sided flats would
+    // vanish into a black beat there.
+    side:           THREE.DoubleSide,
     uniforms: {
       uPainting: { value: null },
       uDepth:    { value: null },
