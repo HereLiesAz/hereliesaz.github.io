@@ -9,17 +9,37 @@ const PAGES_PER_SEGMENT = 4;
 const tmpLook = new THREE.Vector3();
 
 /**
- * Look target is the segment's focus — always world origin under the
- * hinge-aligned model. Both paintings' hinge patches sit at origin;
- * pointing the camera at origin keeps the shared patch fixed at screen
- * centre for the whole transit while the paintings rotate and dissolve
- * around it. No blends needed — origin IS the head-on target from both
- * paintings' viewing nulls because those nulls lie on the painting's
- * normal through the hinge.
+ * Three-phase look target: at each null the camera looks at the
+ * painting's plane centre so the painting COALESCES dead centre. Only
+ * mid-transit does the gaze route through the shared hinge (world
+ * origin), so the shared patch is momentarily at screen centre with
+ * both paintings dissolved around it. Outside those bands, smooth
+ * blends carry the frame from one composition to the next.
+ *
+ *   r ≤ 0.15                 startLook   (painting A centre — coalesces)
+ *   r ∈ (0.15, 0.35)         blend to focus
+ *   r ∈ (0.35, 0.65)         focus       (hinge — chaos moment)
+ *   r ∈ (0.65, 0.85)         blend to endLook
+ *   r ≥ 0.85                 endLook     (painting B centre — coalesces)
  */
-function lookTarget(segments, segmentIndex) {
+function lookTarget(segments, segmentIndex, r) {
   const cur = segments[segmentIndex];
-  return tmpLook.copy(cur.focus || cur.path[cur.path.length - 1]);
+  const endFallback = cur.path[cur.path.length - 1];
+  const startLook = cur.startLook || cur.path[0];
+  const focus = cur.focus || endFallback;
+  const endLook = cur.endLook || endFallback;
+
+  if (r <= 0.15) return tmpLook.copy(startLook);
+  if (r >= 0.85) return tmpLook.copy(endLook);
+  if (r < 0.35) {
+    return tmpLook.lerpVectors(startLook, focus,
+      THREE.MathUtils.smoothstep(r, 0.15, 0.35));
+  }
+  if (r > 0.65) {
+    return tmpLook.lerpVectors(focus, endLook,
+      THREE.MathUtils.smoothstep(r, 0.65, 0.85));
+  }
+  return tmpLook.copy(focus);
 }
 
 export default function AnamorphicCam() {
@@ -49,7 +69,7 @@ export default function AnamorphicCam() {
 
     const curve = new THREE.CatmullRomCurve3(currentSegment.path);
     camera.position.copy(curve.getPointAt(r));
-    camera.lookAt(lookTarget(segments, segmentIndex));
+    camera.lookAt(lookTarget(segments, segmentIndex, r));
 
     // Build ahead early — the gaze handoff at r>0.6 wants the next
     // segment's focus to already exist. Only fires when the user is

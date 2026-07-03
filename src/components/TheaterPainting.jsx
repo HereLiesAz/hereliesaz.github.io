@@ -180,51 +180,97 @@ function buildFlats(meta) {
   const depthCenters = meta?.depth?.bands?.centers || [];
   const depthEdges   = meta?.depth?.bands?.edges   || [];
 
-  // Depth flats: spread across the front-half of the shell, then mirrored
-  // to the back. Skip the rearmost band — it's already carried by the
-  // backdrop and a duplicate at z = 0 would z-fight.
   const nDepth = depthCenters.length;
+  // Front-half depth flat z-positions, in band order.
+  const depthZs = [];
   for (let i = 1; i < nDepth; i++) {
-    const t = depthCenters[i]; // 0..1
-    // Map band center depth (0 = far / 1 = near) onto [+eps, +SHELL_HALF_DEPTH].
-    const zFront = SHELL_HALF_DEPTH * ((i) / Math.max(1, nDepth - 1));
-    for (const sign of [+1, -1]) {
-      const z = sign * zFront;
-      flats.push({
-        kind: 'depth',
-        mode: 1,
-        z,
-        scale: persp(z),
-        planeWidth, planeHeight,
-        bandMin: depthEdges[i],
-        bandMax: depthEdges[i + 1],
-        colorIdx: -1,
-      });
-    }
+    depthZs.push(SHELL_HALF_DEPTH * (i / Math.max(1, nDepth - 1)));
+  }
+  // Back-half positions: a deterministic permutation of the front zs so
+  // the mirror reads as "same layers, jumbled", not a boring reflection.
+  // Seeded by the painting id — same painting always scrambles the same
+  // way, so the mid-transit chaos is stable across reloads.
+  const depthPerm = shufflePerId(depthZs.map((_, i) => i), meta?.id + ':d');
+
+  for (let i = 0; i < depthZs.length; i++) {
+    const bandIdx = i + 1;  // depthCenters index
+    // Front (assembles cleanly at the null)
+    flats.push({
+      kind: 'depth',
+      mode: 1,
+      z: depthZs[i],
+      scale: persp(depthZs[i]),
+      planeWidth, planeHeight,
+      bandMin: depthEdges[bandIdx],
+      bandMax: depthEdges[bandIdx + 1],
+      colorIdx: -1,
+    });
+    // Back mirror at scrambled z — same band content, jumbled position.
+    const zBack = -depthZs[depthPerm[i]];
+    flats.push({
+      kind: 'depth-mirror',
+      mode: 1,
+      z: zBack,
+      scale: persp(zBack),
+      planeWidth, planeHeight,
+      bandMin: depthEdges[bandIdx],
+      bandMax: depthEdges[bandIdx + 1],
+      colorIdx: -1,
+    });
   }
 
   const colorCenters = meta?.color?.centers || [];
   const nColor = colorCenters.length;
-  // Color flats: interleave with depth on a different offset so a given z
-  // isn't shared with a depth flat (they'd z-fight when both survive).
-  // Front half again, mirrored to back.
+  const colorZs = [];
   for (let i = 0; i < nColor; i++) {
-    const zFront = SHELL_HALF_DEPTH * ((i + 0.5) / nColor) * 0.85 + 0.15;
-    for (const sign of [+1, -1]) {
-      const z = sign * zFront;
-      flats.push({
-        kind: 'color',
-        mode: 2,
-        z,
-        scale: persp(z),
-        planeWidth, planeHeight,
-        bandMin: 0, bandMax: 1,
-        colorIdx: i,
-      });
-    }
+    colorZs.push(SHELL_HALF_DEPTH * ((i + 0.5) / nColor) * 0.85 + 0.15);
+  }
+  const colorPerm = shufflePerId(colorZs.map((_, i) => i), meta?.id + ':c');
+
+  for (let i = 0; i < nColor; i++) {
+    flats.push({
+      kind: 'color',
+      mode: 2,
+      z: colorZs[i],
+      scale: persp(colorZs[i]),
+      planeWidth, planeHeight,
+      bandMin: 0, bandMax: 1,
+      colorIdx: i,
+    });
+    const zBack = -colorZs[colorPerm[i]];
+    flats.push({
+      kind: 'color-mirror',
+      mode: 2,
+      z: zBack,
+      scale: persp(zBack),
+      planeWidth, planeHeight,
+      bandMin: 0, bandMax: 1,
+      colorIdx: i,
+    });
   }
 
   return flats;
+}
+
+// Deterministic seeded Fisher-Yates shuffle. Seed is a string; the same
+// seed produces the same permutation across reloads.
+function shufflePerId(arr, seed) {
+  let h = 2166136261 >>> 0;
+  const s = String(seed || 'anon');
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    // xorshift step per swap so the RNG advances.
+    h ^= h << 13; h >>>= 0;
+    h ^= h >>> 17;
+    h ^= h << 5;  h >>>= 0;
+    const j = h % (i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 

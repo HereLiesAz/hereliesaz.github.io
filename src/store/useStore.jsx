@@ -255,14 +255,39 @@ const useStore = create((set, get) => ({
       hingeUvOut: null,
     };
 
-    // Camera path: sphere of radius NULL_DISTANCE around origin. Start
-    // at A's viewing null, end at B's viewing null. Both viewing nulls
-    // are the "front" of each painting projected out along its local +Z.
-    const startPoint = new THREE.Vector3(0, 0, NULL_DISTANCE)
-      .applyQuaternion(qA);
-    const endPoint   = new THREE.Vector3(0, 0, NULL_DISTANCE)
-      .applyQuaternion(qB);
-    const focus      = new THREE.Vector3(0, 0, 0);
+    // Camera path.
+    //
+    // At r=0 the camera reads painting A head-on: on A's normal, offset
+    // from A's plane centre by NULL_DISTANCE. A's plane centre in world
+    // = current.position (the group offset). A's normal in world =
+    // qA · (0,0,1).
+    //
+    // At r=1 the camera reads painting B head-on: same logic on B.
+    //
+    // Mid-transit the path dives toward world origin (the hinge) so both
+    // paintings' shared patch is at screen centre and both dissolve
+    // around it — the moment of maximum chaos, all the flats jumbled and
+    // interleaved before either painting recoheres.
+    const aPosVec = new THREE.Vector3(
+      current.position[0], current.position[1], current.position[2]);
+    const aNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(qA);
+    const startPoint = aPosVec.clone().addScaledVector(aNormal, NULL_DISTANCE);
+
+    const bPosVec = new THREE.Vector3(bPos[0], bPos[1], bPos[2]);
+    const bNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(qB);
+    const endPoint = bPosVec.clone().addScaledVector(bNormal, NULL_DISTANCE);
+
+    // The hinge focus — where both paintings' shared patches actually
+    // sit in world space, always the origin under this placement.
+    const focus = new THREE.Vector3(0, 0, 0);
+
+    // A's plane centre in world (used as look target at r=0). B's plane
+    // centre (used at r=1). These are the painting positions — the group
+    // offset was chosen so each painting's HINGE lands at origin, so the
+    // painting's PLANE CENTRE is at −hingeLocal rotated into world, i.e.
+    // cluster.position.
+    const startLook = aPosVec.clone();
+    const endLook   = bPosVec.clone();
 
     const path = orbitPath(startPoint, endPoint, 5);
 
@@ -271,8 +296,8 @@ const useStore = create((set, get) => ({
       startId: current.id,
       endId: tid,
       focus,
-      startLook: focus.clone(),
-      endLook: focus.clone(),
+      startLook,
+      endLook,
     };
 
     set({
