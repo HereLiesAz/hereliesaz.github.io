@@ -117,11 +117,29 @@ jobs:
           # auth even if the runner tries key exchange first — some
           # ProFTPD mod_sftp setups get confused by the SSH client
           # offering keys the server doesn't accept.
+          # Verbose (-vv) surfaces the server's auth banner and disconnect
+          # reason. On this host we've seen "Permission denied (password)"
+          # with correct credentials, which is often either fail2ban
+          # blocking the runner IP or the SFTP account being distinct
+          # from the FTP account.
           sshpass -f /tmp/pwfile sftp \
+            -vv \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o PubkeyAuthentication=no \
             -o PreferredAuthentications=password,keyboard-interactive \
             -o NumberOfPasswordPrompts=1 \
             -b /tmp/sftpcmds \
-            "$USER_TRIMMED@$HOST"
+            "$USER_TRIMMED@$HOST" 2>&1 || rc=$?
+          echo "[sftp exit code: ${rc:-0}]"
+
+          # Sanity probe: can this runner IP even reach the host on port
+          # 21 for plain FTP? If we see 220 banner but still get "Login
+          # incorrect", the host has separate FTP + SFTP auth stacks. If
+          # we get "connection refused" or "timed out", the IP is
+          # blocked / port not open.
+          echo "[probe] plain FTP reachability on port 21:"
+          timeout 8 bash -c 'exec 3<>/dev/tcp/'"$HOST"'/21 && head -c 200 <&3 && echo && exec 3<&-' \
+            || echo "[probe] plain FTP port 21 not reachable (or timed out)"
+
+          exit "${rc:-0}"
