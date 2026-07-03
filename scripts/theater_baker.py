@@ -2,6 +2,9 @@
 """
 theater_baker.py — painting + depth-map baker (schema 2).
 
+CI note: .github/workflows/process_art.yml invokes this with an explicit
+--ids allowlist; widening that list is a cost decision, not a code change.
+
 The paper-theater data model is exactly two textures per painting plus a
 small metadata file. The renderer builds the diorama at runtime from the
 depth texture: a full-painting backdrop plane plus a handful of cutout
