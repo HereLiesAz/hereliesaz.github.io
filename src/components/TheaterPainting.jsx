@@ -5,31 +5,33 @@ import { useStore } from '../store/useStore';
 
 // World-height of every painting's central shell, and the depth of the
 // shell from front to back. Each painting occupies a slab of 3D space
-// `PAINTING_HEIGHT × aspect × SHELL_DEPTH` and the 30 layers sit on
-// stacked planes inside that slab.
+// `PAINTING_HEIGHT × aspect × SHELL_DEPTH`: a full-painting backdrop at
+// the rear plus a handful of cutout flats in front — a paper theater.
 const PAINTING_HEIGHT = 10.0;
-const SHELL_DEPTH     = 4.5;
+const SHELL_DEPTH     = 6.0;
 
 // Push the shell ahead of the painting's worldPos so the camera, which
 // arrives at worldPos at each null, sees the painting at a comfortable
 // reading distance instead of plunging into its near face.
-//   front plane at  world z = worldPos.z - SHELL_FRONT
-//   back  plane at  world z = worldPos.z - SHELL_FRONT - SHELL_DEPTH
+//   front flat at  world z = worldPos.z - SHELL_FRONT
+//   backdrop  at   world z = worldPos.z - SHELL_FRONT - SHELL_DEPTH
 // Chosen so a 10-unit-tall painting at 50° FoV roughly fills the frame.
 const SHELL_FRONT     = 11.0;
 
-// Bone-white from AESTHETIC §2 — what the painting hue mixes toward as the
-// camera pulls away from the null.
-const BONE_WHITE = new THREE.Color('#f4f0e6');
+// Distance envelope: full colour inside FADE_FULL, gone past FADE_GONE.
+// Paintings are 36 units apart, so the next diorama fades up through the
+// current one's cutout gaps while the camera is still inside this shell —
+// that interleaving is the transition.
+const FADE_FULL = 18.0;
+const FADE_GONE = 34.0;
 
-const N_DEPTH = 10;
-const N_COLOR = 10;
-const N_LUM   = 10;
+// When the camera's world z crosses a flat's z, the flat dissolves to
+// black over this many units instead of clipping across the near plane.
+const CROSS_FADE = 1.2;
 
-// Distance envelope for accent gating (see useFrame below).
-const COLOR_HOT  = 4.0;
-const COLOR_GONE = 6.0;
-const FADE_GONE  = 22.0;
+// The backdrop is slightly oversized so lateral parallax never exposes
+// its frame edge behind the cutout flats.
+const BACKDROP_OVERSCAN = 1.08;
 
 
 // ---- module-level fetch caches ----------------------------------------------
@@ -49,7 +51,7 @@ function fetchTheaterMeta(id) {
 
 // ---- shaders ----------------------------------------------------------------
 
-const layerVS = /* glsl */ `
+const flatVS = /* glsl */ `
 varying vec2 vUv;
 void main() {
   vUv = uv;
@@ -58,78 +60,100 @@ void main() {
 }
 `;
 
-// Per-pixel: sample the painting and the layer-id mask. If this pixel does
-// not belong to this plane's layer, discard. Each set (depth / colour /
-// luminance) reads its assigned channel of the mask texture. The recovered
-// band index is compared to the plane's uLayerIdx with a half-band
-// tolerance, then alpha is multiplied by the camera-proximity envelope.
-//
-// Mask encoding (see scripts/theater_baker.py): values are 0..225 in steps
-// of 25, so the band index = round(channel * 255 / 25).
-const layerFS = /* glsl */ `
+// A cutout flat: sample the painting and the depth map. Pixels whose depth
+// falls outside this flat's band are discarded — the flat is the cut-paper
+// silhouette of one depth stratum. The band threshold is jittered with a
+// small hash noise so the cut edge tears organically instead of aliasing
+// along iso-depth contours. uFade lerps toward black (the void), never
+// toward transparency — flats are opaque cardboard, and real depth-writes
+// keep occlusion honest.
+const flatFS = /* glsl */ `
 precision highp float;
 uniform sampler2D uPainting;
-uniform sampler2D uMasks;
-uniform float uLayerIdx;
-uniform float uChannel;     // 0=R (depth), 1=G (colour), 2=B (luminance)
-uniform float uIntensity;
-uniform float uColorBleed;
-uniform vec3  uBoneWhite;
+uniform sampler2D uDepth;
+uniform float uBandMin;    // band edges in [0,1] depth
+uniform float uBandMax;
+uniform float uBackdrop;   // 1.0 = full-bleed backdrop, no discard
+uniform float uFade;       // 0 = black/void, 1 = full colour
 varying vec2 vUv;
 
-float pickChannel(vec3 m, float c) {
-  return c < 0.5 ? m.r : (c < 1.5 ? m.g : m.b);
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+// Bilinear value noise — smooth enough that the band threshold wanders in
+// organic lobes (paper tears) rather than per-texel speckle.
+float vnoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(hash(i),                 hash(i + vec2(1.0, 0.0)), u.x),
+    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+    u.y);
 }
 
 void main() {
+  if (uBackdrop < 0.5) {
+    float d = texture2D(uDepth, vUv).r;
+    // Torn-paper edge: wander the band threshold with coarse lobes plus a
+    // little fibre-scale fuzz.
+    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05
+               + (hash(vUv * 1024.0) - 0.5) * 0.012;
+    float dj = d + tear;
+    if (dj < uBandMin || dj >= uBandMax) discard;
+  }
   vec3 painting = texture2D(uPainting, vUv).rgb;
-  vec3 mask     = texture2D(uMasks,    vUv).rgb;
-
-  float band = floor(pickChannel(mask, uChannel) * 255.0 / 25.0 + 0.5);
-  if (abs(band - uLayerIdx) > 0.5) discard;
-
-  vec3 hue = mix(uBoneWhite, painting, uColorBleed);
-  gl_FragColor = vec4(hue, uIntensity);
+  gl_FragColor = vec4(painting * uFade, 1.0);
 }
 `;
 
 
-// ---- per-layer plane assembly -----------------------------------------------
+// ---- flat assembly ------------------------------------------------------------
 
-function buildLayers(metadata) {
-  const layers = [];
+// Build the paper theater from schema-2 metadata: one backdrop (the whole
+// painting, rearmost) + one cutout flat per depth band. Band center depth
+// t (0 = rearmost, 1 = frontmost) maps to
+//   z(t)     = -(SHELL_FRONT + SHELL_DEPTH * (1 - t))
+//   persp(t) =  (SHELL_FRONT + SHELL_DEPTH * (1 - t)) / SHELL_FRONT
+// The perspective compensation makes every flat subtend exactly the same
+// view from the null — head-on the flats reassemble into the original
+// painting over the backdrop; any camera offset parts them into coherent
+// physical parallax.
+function buildFlats(metadata) {
+  const bands = metadata?.depth?.bands;
+  if (!bands || !Array.isArray(bands.edges) || !Array.isArray(bands.centers)) return [];
   const aspect = (metadata.src?.width || 1) / (metadata.src?.height || 1);
   const planeWidth  = PAINTING_HEIGHT * aspect;
   const planeHeight = PAINTING_HEIGHT;
 
-  // Lay the 30 slabs out along the shell. Set order is fixed: depth at the
-  // back (where the depth-band-0 — "farthest" pixels — really do live in
-  // space), then colour bands across the middle, then luminance at the
-  // front. The whole shell sits SHELL_FRONT units in front of the
-  // painting's worldPos so the camera reads it at a comfortable distance.
-  const zFront = -SHELL_FRONT;
-  const zBack  = -SHELL_FRONT - SHELL_DEPTH;
-  const setOffsets = [
-    { kind: 'depth', channel: 0, count: N_DEPTH, zStart: zBack,                          zEnd: zBack + SHELL_DEPTH * 1/3 },
-    { kind: 'color', channel: 1, count: N_COLOR, zStart: zBack + SHELL_DEPTH * 1/3,      zEnd: zBack + SHELL_DEPTH * 2/3 },
-    { kind: 'lum',   channel: 2, count: N_LUM,   zStart: zBack + SHELL_DEPTH * 2/3,      zEnd: zFront },
-  ];
+  const depthAt = (t) => SHELL_FRONT + SHELL_DEPTH * (1 - t);
 
-  for (const set of setOffsets) {
-    for (let i = 0; i < set.count; i++) {
-      const tMid = (i + 0.5) / set.count;
-      const z = THREE.MathUtils.lerp(set.zStart, set.zEnd, tMid);
-      layers.push({
-        kind:    set.kind,
-        channel: set.channel,
-        idx:     i,
-        z,
-        planeWidth,
-        planeHeight,
-      });
-    }
+  const flats = [{
+    kind: 'backdrop',
+    bandMin: 0, bandMax: 1,
+    z: -depthAt(0),
+    persp: depthAt(0) / SHELL_FRONT,
+    overscan: BACKDROP_OVERSCAN,
+    planeWidth, planeHeight,
+  }];
+
+  for (let i = 0; i < bands.centers.length; i++) {
+    // The rearmost band is already carried by the backdrop; a cutout copy
+    // of it at the same depth would only z-fight.
+    if (i === 0) continue;
+    const t = bands.centers[i];
+    flats.push({
+      kind: 'flat',
+      bandMin: bands.edges[i],
+      bandMax: bands.edges[i + 1],
+      z: -depthAt(t),
+      persp: depthAt(t) / SHELL_FRONT,
+      overscan: 1.0,
+      planeWidth, planeHeight,
+    });
   }
-  return layers;
+  return flats;
 }
 
 
@@ -147,12 +171,15 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     let cancelled = false;
     fetchTheaterMeta(id).then(json => {
       if (cancelled) return;
-      setMeta(json);
+      // Only schema-2 metadata drives the layered shell; anything else
+      // (legacy v1 json, missing bake) drops to the flat fallback below.
+      const usable = json && json.schema === 2 && json.depth?.bands ? json : null;
+      setMeta(usable);
       // Flat fallback: when the theater bake hasn't run for this id, render
       // the original asset image as a single textured plane instead of the
-      // 30-layer shell. Looks like the legacy gallery — no parallax, no
-      // colour-bleed shader — but the page isn't blank.
-      if (!json && image) {
+      // layered shell. Looks like the legacy gallery — no parallax — but
+      // the page isn't blank.
+      if (!usable && image) {
         const loader = new THREE.TextureLoader();
         loader.load(
           image,
@@ -180,7 +207,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     );
   }, [rotation]);
 
-  const layers = useMemo(() => meta ? buildLayers(meta) : [], [meta]);
+  const flats = useMemo(() => meta ? buildFlats(meta) : [], [meta]);
 
   // Calculate dynamic scale to fit the painting into the screen at SHELL_FRONT.
   // Same math regardless of whether the layered shell or the flat fallback is
@@ -189,9 +216,9 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   const { size, camera } = useThree();
   const fitScale = useMemo(() => {
     let paintingWidth, paintingHeight;
-    if (meta && layers.length > 0) {
-      paintingWidth  = layers[0].planeWidth;
-      paintingHeight = layers[0].planeHeight;
+    if (meta && flats.length > 0) {
+      paintingWidth  = flats[0].planeWidth;
+      paintingHeight = flats[0].planeHeight;
     } else if (flatTex) {
       paintingWidth  = PAINTING_HEIGHT * flatTex.aspect;
       paintingHeight = PAINTING_HEIGHT;
@@ -205,82 +232,67 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     const widthScale  = (visibleWidth  * 0.85) / paintingWidth;
     const heightScale = (visibleHeight * 0.90) / paintingHeight;
     return Math.min(widthScale, heightScale);
-  }, [meta, layers, flatTex, size.width, size.height, camera.fov]);
-
-  // Shared material across all 30 planes of this painting. Per-plane data
-  // (layer index, channel) goes through onBeforeCompile-free attribute
-  // injection: we clone the material per plane below. Keeping it simple
-  // for now — one material, uniforms set per draw via the mesh-level
-  // material clone trick (see plane loop below).
-  const baseMaterial = useMemo(() => new THREE.ShaderMaterial({
-    vertexShader:   layerVS,
-    fragmentShader: layerFS,
-    transparent:    true,
-    depthWrite:     false,
-    blending:       THREE.NormalBlending,
-    uniforms: {
-      uPainting:   { value: null },
-      uMasks:      { value: null },
-      uLayerIdx:   { value: 0 },
-      uChannel:    { value: 0 },
-      uIntensity:  { value: 0 },
-      uColorBleed: { value: 0 },
-      uBoneWhite:  { value: BONE_WHITE.clone() },
-    },
-  }), []);
+  }, [meta, flats, flatTex, size.width, size.height, camera.fov]);
 
   const planeGeom = useMemo(() => new THREE.PlaneGeometry(1, 1), []);
 
-  // Per-plane materials cloned from the shared one so each plane can carry
-  // its own layer index / channel uniform without affecting the others.
-  // (Texture uniforms still point at the same shared painting/masks
-  // textures, set when those load.)
-  const planeMaterials = useMemo(() => layers.map(layer => {
-    const m = baseMaterial.clone();
-    m.uniforms.uLayerIdx.value = layer.idx;
-    m.uniforms.uChannel.value  = layer.channel;
-    return m;
-  }), [layers, baseMaterial]);
+  // One material per flat: opaque, depth-writing paper. Texture uniforms
+  // point at the shared painting/depth textures once those load.
+  const flatMaterials = useMemo(() => flats.map(flat => new THREE.ShaderMaterial({
+    vertexShader:   flatVS,
+    fragmentShader: flatFS,
+    transparent:    false,
+    depthWrite:     true,
+    uniforms: {
+      uPainting: { value: null },
+      uDepth:    { value: null },
+      uBandMin:  { value: flat.bandMin },
+      uBandMax:  { value: flat.bandMax },
+      uBackdrop: { value: flat.kind === 'backdrop' ? 1 : 0 },
+      uFade:     { value: 0 },
+    },
+  })), [flats]);
 
-  // Load painting + masks textures once meta is known. Pass them into
-  // every plane's material.
+  // Load painting + depth textures once meta is known. Pass them into
+  // every flat's material.
   const [textures, setTextures] = useState(null);
   useEffect(() => {
-    if (!id) return;
+    if (!id || !meta) return;
     let cancelled = false;
     const loader = new THREE.TextureLoader();
     const paintingUrl = `/data/theater/${encodeURIComponent(id)}.painting.webp`;
-    const masksUrl    = `/data/theater/${encodeURIComponent(id)}.masks.png`;
+    const depthUrl    = `/data/theater/${encodeURIComponent(meta.depth.file || `${id}.depth.png`)}`;
     Promise.all([
       new Promise((res, rej) => loader.load(paintingUrl, res, undefined, rej)),
-      new Promise((res, rej) => loader.load(masksUrl,    res, undefined, rej)),
-    ]).then(([painting, masks]) => {
+      new Promise((res, rej) => loader.load(depthUrl,    res, undefined, rej)),
+    ]).then(([painting, depth]) => {
       if (cancelled) return;
       painting.colorSpace = THREE.SRGBColorSpace;
-      // Mask is index data, not colour — keep it linear so nearest-neighbour
-      // texel reads survive any colour transforms.
-      masks.colorSpace  = THREE.NoColorSpace;
-      masks.magFilter   = THREE.NearestFilter;
-      masks.minFilter   = THREE.NearestFilter;
-      masks.generateMipmaps = false;
-      setTextures({ painting, masks });
+      painting.anisotropy = 4;
+      // Depth is data, not colour — keep it linear. (Browsers decode the
+      // 16-bit PNG to 8 bits per channel; 256 depth levels is far more
+      // than the ~6 bands need.)
+      depth.colorSpace = THREE.NoColorSpace;
+      depth.generateMipmaps = false;
+      depth.minFilter = THREE.LinearFilter;
+      setTextures({ painting, depth });
     }).catch(() => {
-      // Texture missing — keep the planes around but they'll render nothing.
+      // Texture missing — keep the flats around but they'll render nothing.
     });
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, meta]);
 
   useEffect(() => {
     if (!textures) return;
-    for (const m of planeMaterials) {
+    for (const m of flatMaterials) {
       m.uniforms.uPainting.value = textures.painting;
-      m.uniforms.uMasks.value    = textures.masks;
+      m.uniforms.uDepth.value    = textures.depth;
     }
-  }, [textures, planeMaterials]);
+  }, [textures, flatMaterials]);
 
   // Push the active painting's source resolution to the store so the overlay
-  // & shard count stay coherent. Works for both modes: prefer the theater
-  // metadata's src dims, fall back to the flat texture's natural dims.
+  // stays coherent. Works for both modes: prefer the theater metadata's src
+  // dims, fall back to the flat texture's natural dims.
   useEffect(() => {
     const isActiveSegment =
       mySegmentIndex === currentSegmentIndex ||
@@ -294,23 +306,22 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   }, [mySegmentIndex, currentSegmentIndex, meta, flatTex, setCurrentResolution]);
 
   // Dispose per-painting resources when the component unmounts or the id
-  // swaps. baseMaterial and planeGeom are tied to the component lifetime;
-  // textures + cloned materials regenerate per id.
+  // swaps. planeGeom is tied to the component lifetime; textures + flat
+  // materials regenerate per id.
   useEffect(() => () => {
     if (textures) {
       textures.painting.dispose();
-      textures.masks.dispose();
+      textures.depth.dispose();
     }
   }, [textures]);
 
   useEffect(() => () => {
-    for (const m of planeMaterials) m.dispose();
-  }, [planeMaterials]);
+    for (const m of flatMaterials) m.dispose();
+  }, [flatMaterials]);
 
   useEffect(() => () => {
-    baseMaterial.dispose();
     planeGeom.dispose();
-  }, [baseMaterial, planeGeom]);
+  }, [planeGeom]);
 
   useEffect(() => () => {
     if (flatTex?.texture) flatTex.texture.dispose();
@@ -318,34 +329,35 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
 
   // Shared material for the flat fallback. Created once and updated per-frame
   // so it picks up the same distance fade as the layered shell.
-  const flatMaterial = useMemo(
-    () => new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false }),
+  const fallbackMaterial = useMemo(
+    () => new THREE.MeshBasicMaterial({ toneMapped: false }),
     [],
   );
-  useEffect(() => () => flatMaterial.dispose(), [flatMaterial]);
+  useEffect(() => () => fallbackMaterial.dispose(), [fallbackMaterial]);
   useEffect(() => {
-    if (flatTex) flatMaterial.map = flatTex.texture;
-    flatMaterial.needsUpdate = true;
-  }, [flatTex, flatMaterial]);
+    if (flatTex) fallbackMaterial.map = flatTex.texture;
+    fallbackMaterial.needsUpdate = true;
+  }, [flatTex, fallbackMaterial]);
 
-  // Camera distance → fade and colour-bleed envelope. Inside COLOR_HOT the
-  // painting is at full saturation; past COLOR_GONE the hue is bone-white
-  // only; past FADE_GONE the painting is invisible. Flat-fallback material
-  // gets the same fade as opacity so it dissolves rather than popping out.
+  // Camera distance → fade envelope, plus the fly-through dissolve: a flat
+  // the camera is about to cross fades to black over CROSS_FADE units so
+  // the shell can be scrubbed through like theater flats, never clipped.
   useFrame(() => {
     if (!position) return;
     const v = tmpVec.current;
     v.set(position[0] || 0, position[1] || 0, position[2] || 0);
     const dist = camera.position.distanceTo(v);
+    const fade = 1.0 - THREE.MathUtils.smoothstep(dist, FADE_FULL, FADE_GONE);
 
-    const fade  = 1.0 - THREE.MathUtils.smoothstep(dist, COLOR_GONE, FADE_GONE);
-    const bleed = 1.0 - THREE.MathUtils.smoothstep(dist, COLOR_HOT,  COLOR_GONE);
-
-    for (const m of planeMaterials) {
-      m.uniforms.uIntensity.value  = fade;
-      m.uniforms.uColorBleed.value = bleed;
+    for (let i = 0; i < flatMaterials.length; i++) {
+      const flatWorldZ = v.z + flats[i].z;
+      const cross = Math.min(
+        Math.abs(camera.position.z - flatWorldZ) / CROSS_FADE, 1.0);
+      flatMaterials[i].uniforms.uFade.value = fade * cross;
     }
-    flatMaterial.opacity = fade;
+    // Fallback plane: same envelope, applied as a colour dim so it stays
+    // opaque too.
+    fallbackMaterial.color.setScalar(fade);
   });
 
   // Flat fallback render — single textured plane at the shell-front depth.
@@ -356,7 +368,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       <group position={position} rotation={rotEuler}>
         <mesh
           geometry={planeGeom}
-          material={flatMaterial}
+          material={fallbackMaterial}
           position={[0, 0, -SHELL_FRONT]}
           scale={[fw, fh, 1]}
         />
@@ -364,17 +376,21 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     );
   }
 
-  if (!meta || layers.length === 0 || planeMaterials.length === 0) return null;
+  if (!meta || flats.length === 0 || flatMaterials.length === 0) return null;
 
   return (
     <group position={position} rotation={rotEuler}>
-      {layers.map((L, i) => (
+      {flats.map((F, i) => (
         <mesh
           key={i}
           geometry={planeGeom}
-          material={planeMaterials[i]}
-          position={[0, 0, L.z]}
-          scale={[L.planeWidth * fitScale, L.planeHeight * fitScale, 1]}
+          material={flatMaterials[i]}
+          position={[0, 0, F.z]}
+          scale={[
+            F.planeWidth  * fitScale * F.persp * F.overscan,
+            F.planeHeight * fitScale * F.persp * F.overscan,
+            1,
+          ]}
         />
       ))}
     </group>

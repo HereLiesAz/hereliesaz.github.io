@@ -1,6 +1,23 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
 
+// Mirror of TheaterPainting.jsx's shell geometry (see comments there).
+// The hinge focus sits on the shell, so the walk generator needs these.
+const SHELL_FRONT = 11.0;
+const SHELL_DEPTH = 6.0;
+const PAINTING_HEIGHT = 10.0;
+
+// Convert a normalized painting uv (u right, v down) to the painting's
+// local xy. Nominal painting height is used (the renderer's viewport
+// fitScale, typically ~0.9, is not known here — hinge placement tolerates
+// the few-percent error; the camera dive hides the rest).
+function uvToLocal(uv, aspect) {
+  return {
+    x: (uv[0] - 0.5) * PAINTING_HEIGHT * aspect,
+    y: (0.5 - uv[1]) * PAINTING_HEIGHT,
+  };
+}
+
 const useStore = create((set, get) => ({
   // --- STATE ---
   nodes: [],           
@@ -83,36 +100,43 @@ const useStore = create((set, get) => ({
     }
 
     const nextId = edge.target;
-
-    // 2. Place the next painting one segment-length further down the
-    //    Z-axis at the SAME xy as the current painting. With both
-    //    paintings on the same xy axis, any shared blotch (the pareidolia
-    //    hinge from §5) sits at exactly the same world point in both —
-    //    so during the transit the shared mark holds while non-shared
-    //    blotches resolve to whichever painting's null the camera is
-    //    closest to.
-    const nextPos = [
-        current.worldPos[0],
-        current.worldPos[1],
-        currentZ - SEGMENT_LENGTH,
-    ];
-    const anchorWorldPos = null;
-
-    // Paintings stay axis-aligned so a shared blotch at the same
-    // normalized (x, y) lands at the same world point in both A and B —
-    // the pareidolia hinge from AESTHETIC §5 only works under that
-    // invariant. Camera parallax comes from the mid-segment xy swerve
-    // (below) — the camera arcs around / past the painting between
-    // nulls, the painting itself does not rotate.
-    const rotSway = [0, 0, 0];
-    // Enough mid-segment xy offset to read as a real arc rather than a
-    // straight line, but small enough that the destination painting
-    // (10 units tall, FoV 50°) stays in frame as the camera passes the
-    // midpoint. At ~21 units between nulls, 1–2.5 puts the midpoint
-    // 5–12 % off-axis — visible parallax without losing the painting.
-    const swerveDist = 1.0 + Math.random() * 1.5;
-
+    const currentNode = nodes.find(n => n.id === current.id);
     const nextNode = nodes.find(n => n.id === nextId);
+
+    // 2. The pareidolia hinge. The chosen edge carries the shared patch:
+    //    s_uv in painting A, t_uv in painting B — a region that reads as
+    //    part of BOTH paintings' subjects at the same time. Painting B is
+    //    placed so its t_uv point sits at the same world xy as A's s_uv
+    //    point; the camera then orbits that point (below) while A's flats
+    //    give way to B's — the viewer never sees a cut.
+    const aAspect = (currentNode?.width && currentNode?.height)
+        ? currentNode.width / currentNode.height : 1.0;
+    const bAspect = (nextNode?.width && nextNode?.height)
+        ? nextNode.width / nextNode.height : 1.0;
+
+    let hingeLocal = null;   // hinge in A's local xy
+    let nextPos;
+    if (Array.isArray(edge.s_uv) && Array.isArray(edge.t_uv)) {
+        const sL = uvToLocal(edge.s_uv, aAspect);
+        const tL = uvToLocal(edge.t_uv, bAspect);
+        hingeLocal = sL;
+        nextPos = [
+            current.worldPos[0] + sL.x - tL.x,
+            current.worldPos[1] + sL.y - tL.y,
+            currentZ - SEGMENT_LENGTH,
+        ];
+    } else {
+        nextPos = [
+            current.worldPos[0],
+            current.worldPos[1],
+            currentZ - SEGMENT_LENGTH,
+        ];
+    }
+
+    // Paintings stay axis-aligned; all parallax and the fulcrum effect
+    // come from the camera's own movement (AESTHETIC §5 invariant).
+    const rotSway = [0, 0, 0];
+
     const nextCluster = {
         id: nextId,
         worldPos: nextPos,
@@ -120,24 +144,63 @@ const useStore = create((set, get) => ({
         rotSway,
         image: nextNode?.image,
     };
-    
-    // 3. Camera Spline
+
+    // 3. Camera path — the bubbles. The reference video's camera always
+    //    points at one central point while it moves, as if traveling the
+    //    surfaces of nested spheres that share a core. Here the core is
+    //    the hinge (or, hinge-less, the next painting's shell center):
+    //    the camera leaves A's null on a wide sphere, dives to a tight
+    //    one — swinging AROUND the focus at close radius, through A's
+    //    parted flats — then climbs back out to B's null. Look direction
+    //    is handled in AnamorphicCam: locked on `focus`, handed off to
+    //    the next core late in the segment.
     const startPoint = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ);
     const endPoint = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2]);
-    const midPoint = (anchorWorldPos || new THREE.Vector3(
-        (startPoint.x + endPoint.x) * 0.5,
-        (startPoint.y + endPoint.y) * 0.5,
-        (startPoint.z + endPoint.z) * 0.5
-    )).clone();
 
-    const swerveAngle = Math.random() * Math.PI * 2;
-    midPoint.x += Math.cos(swerveAngle) * swerveDist;
-    midPoint.y += Math.sin(swerveAngle) * swerveDist;
+    const focus = hingeLocal
+        ? new THREE.Vector3(
+            current.worldPos[0] + hingeLocal.x,
+            current.worldPos[1] + hingeLocal.y,
+            currentZ - SHELL_FRONT - SHELL_DEPTH * 0.5)
+        : new THREE.Vector3(
+            nextPos[0], nextPos[1],
+            nextPos[2] - SHELL_FRONT - SHELL_DEPTH * 0.5);
+
+    // Where the gaze settles at the segment's end: the next painting's
+    // shell front, dead ahead — the head-on reassembly view at the null.
+    const endLook = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2] - SHELL_FRONT);
+
+    const dir0 = startPoint.clone().sub(focus).normalize();
+    const dir1 = endPoint.clone().sub(focus).normalize();
+    const R0 = startPoint.distanceTo(focus);
+    const R1 = endPoint.distanceTo(focus);
+    // The tight inner bubble: close enough that A's flats part around the
+    // camera, far enough that the hinge patch still fills the frame.
+    const Rmin = THREE.MathUtils.clamp(Math.min(R0, R1) * 0.35, 4.0, 8.0);
+
+    // Lateral sweep direction (horizontal-biased — stage flats read
+    // sideways), breaking the front-to-back degeneracy of dir0 → dir1.
+    const sweepAngle = Math.random() * Math.PI * 2;
+    const sweep = new THREE.Vector3(
+        Math.cos(sweepAngle), Math.sin(sweepAngle) * 0.4, 0).normalize();
+
+    const orbitPoint = (t) => {
+        const dir = dir0.clone().lerp(dir1, t)
+            .addScaledVector(sweep, Math.sin(Math.PI * t) * 0.9)
+            .normalize();
+        const rOut = t < 0.5
+            ? THREE.MathUtils.lerp(R0, Rmin, THREE.MathUtils.smoothstep(t, 0, 0.5))
+            : THREE.MathUtils.lerp(Rmin, R1, THREE.MathUtils.smoothstep(t, 0.5, 1));
+        return focus.clone().addScaledVector(dir, rOut);
+    };
 
     const newSegment = {
-        path: [startPoint, midPoint, endPoint],
+        path: [startPoint, orbitPoint(0.3), orbitPoint(0.5), orbitPoint(0.7), endPoint],
         startId: current.id,
-        endId: nextId
+        endId: nextId,
+        focus,
+        endLook,
+        bank: (Math.random() * 2 - 1) * 0.12,
     };
 
     set({ 
