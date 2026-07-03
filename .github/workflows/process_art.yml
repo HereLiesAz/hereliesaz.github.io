@@ -94,13 +94,16 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          if [ -z "$HF_TOKEN" ]; then
-            echo "::warning::HF_TOKEN secret is not set — skipping theater bake. Add HF_TOKEN under repo Settings → Secrets → Actions to enable it."
-            exit 0
-          fi
+          # Scoped to the 3 curated paintings while the paper-theater
+          # experience is tuned ("until we get this right with 2-3
+          # paintings, it's not worth baking more"). The v2 bake calls
+          # paid/quota'd image models per painting (photorealize +
+          # depth), so do NOT widen this to the full corpus without an
+          # explicit decision.
           python scripts/theater_baker.py \
             --input  public/assets/ \
-            --output public/data/theater/
+            --output public/data/theater/ \
+            --ids 'PXL_20230527_000631951~2,2023-10-15(38),20231129_043102~2'
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
