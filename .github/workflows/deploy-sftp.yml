@@ -1,0 +1,99 @@
+name: Deploy over SFTP
+
+# Mirror the built site to your own host over SFTP (SSH file transfer).
+# Runs on every push to main, and can be fired by hand from the Actions
+# tab.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   SFTP_SERVER      hostname, e.g. sftp.example.com
+#   SFTP_USERNAME    your SSH user
+#   SFTP_SSH_KEY     private key contents, INCLUDING the
+#                    -----BEGIN OPENSSH PRIVATE KEY----- header and
+#                    -----END OPENSSH PRIVATE KEY----- footer. See the
+#                    "SSH key setup" section of the PR body for how to
+#                    generate the pair and register the public half on
+#                    the host.
+#
+# Optional repository variables (Settings → Secrets and variables → Actions → Variables):
+#   SFTP_PORT         defaults to 22
+#   SFTP_REMOTE_PATH  remote path to mirror the built site into.
+#                     Defaults to /public_html/. If your host serves from
+#                     a subfolder (e.g. /portfolio/), also change `base`
+#                     in vite.config.js to match, or the JS/CSS
+#                     <script>/<link> tags will 404.
+#
+# The site's baked data lives on the orphan `art-data` branch and is
+# injected into public/data at build time (same pattern as deploy.yml).
+# Without that step the site would render the flat-fallback plane
+# instead of the paper theater.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: sftp-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source (main)
+        uses: actions/checkout@v4
+        with:
+          path: main
+
+      - name: Check out baked data (art-data)
+        uses: actions/checkout@v4
+        with:
+          ref: art-data
+          path: art-data
+        continue-on-error: true
+
+      - name: Stage baked data into public/data
+        run: |
+          if [ -d art-data ] && [ -n "$(ls -A art-data 2>/dev/null | grep -v '^\.git$')" ]; then
+            mkdir -p main/public/data
+            # Mirror everything from art-data except its git metadata.
+            rsync -a --exclude='.git' art-data/ main/public/data/
+            echo "staged $(find main/public/data -type f | wc -l) data files"
+          else
+            echo "::warning::art-data branch is empty or missing — site will use flat fallback for every painting"
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: main/package-lock.json
+
+      - name: Install
+        working-directory: main
+        run: npm ci
+
+      - name: Build
+        working-directory: main
+        run: npm run build
+
+      - name: Deploy over SFTP
+        uses: wlixcc/SFTP-Deploy-Action@v1.2.6
+        with:
+          server: ${{ secrets.SFTP_SERVER }}
+          username: ${{ secrets.SFTP_USERNAME }}
+          ssh_private_key: ${{ secrets.SFTP_SSH_KEY }}
+          port: ${{ vars.SFTP_PORT || 22 }}
+          local_path: './main/dist/*'
+          remote_path: ${{ vars.SFTP_REMOTE_PATH || '/public_html/' }}
+          # Only speak SFTP — no fallback to plain scp if the server
+          # blocks non-sftp SSH command channels.
+          sftp_only: true
+          # Keep any files the build didn't produce (e.g. .well-known,
+          # any handwritten pages). We're deploying a static site into
+          # what may be a shared web root.
+          delete_remote_files: false
