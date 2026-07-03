@@ -106,7 +106,7 @@ export default function Scene() {
             <group>
                 {activeClusters
                     .map((cluster, index) => ({ ...cluster, index }))
-                    .filter(c => c.index >= currentSegmentIndex - 1 && c.index <= currentSegmentIndex + 2)
+                    .filter(c => c.index >= currentSegmentIndex - 2 && c.index <= currentSegmentIndex + 2)
                     .map((cluster) => (
                         <TheaterPainting
                             key={`${cluster.id}-${cluster.index}`}

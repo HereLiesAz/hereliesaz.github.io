@@ -1,49 +1,97 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
 
-// Mirror of TheaterPainting.jsx's shell geometry (see comments there).
-// The hinge focus sits on the shell, so the walk generator needs these.
-const SHELL_FRONT = 11.0;
-const SHELL_DEPTH = 6.0;
-const PAINTING_HEIGHT = 10.0;
+// Camera radius that reads a painting head-on. Matches TheaterPainting.jsx
+// NULL_DISTANCE — both must agree so the null-sphere sits on the shell.
+const NULL_DISTANCE = 11.0;
 
-// Convert a normalized painting uv (u right, v down) to the painting's
-// local xy. Nominal painting height is used (the renderer's viewport
-// fitScale, typically ~0.9, is not known here — hinge placement tolerates
-// the few-percent error; the camera dive hides the rest).
-function uvToLocal(uv, aspect) {
-  return {
-    x: (uv[0] - 0.5) * PAINTING_HEIGHT * aspect,
-    y: (0.5 - uv[1]) * PAINTING_HEIGHT,
-  };
+// The camera never gets closer to origin than this during the dive
+// through the shared centre — deep enough to be "inside all the paintings
+// at once", far enough not to end up beyond every flat.
+const DIVE_RADIUS   = 2.5;
+
+// FNV-1a-ish deterministic hash of a string — used to give each painting
+// a stable per-id rotation + viewing direction across reloads.
+function hashStr(s) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h;
+}
+
+// Deterministic pseudorandom in [0, 1) seeded by a hash + salt.
+function rand01(hash, salt) {
+  const x = Math.imul(hash ^ salt, 2654435761) >>> 0;
+  return (x >>> 0) / 4294967296;
+}
+
+// Distribute painting viewing directions on a sphere: for each painting
+// id, pick a stable point on S^2 (Fibonacci-style via the golden angle
+// applied to a per-id azimuth, plus a per-id polar). Guarantees adjacent
+// paintings on the walker aren't accidentally colinear.
+function viewDirForId(id) {
+  const h = hashStr(id || 'anon');
+  const phi = rand01(h, 0x9e3779b9) * Math.PI * 2;
+  // Bias polar angle away from the poles so all paintings sit near the
+  // equator — camera can then move sideways without ever pointing at the
+  // sky. Range roughly [40°, 140°] from +Y.
+  const cosTheta = (rand01(h, 0x85ebca6b) - 0.5) * 1.4;    // ~[-0.7, +0.7]
+  const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
+  return new THREE.Vector3(
+    sinTheta * Math.cos(phi),
+    cosTheta,
+    sinTheta * Math.sin(phi),
+  );
+}
+
+// Given a viewing direction, build the euler rotation (deg) that makes
+// a painting sitting at origin face that direction — i.e. its local +Z
+// axis points TOWARD viewDir (so a camera sitting at viewDir·NULL sees
+// the painting head-on). Roll is fixed to 0 (the painting's local +Y
+// stays "as up as possible") plus a tiny per-id twist so consecutive
+// paintings don't feel co-rotated.
+function rotationForViewDir(viewDir, id) {
+  const q = new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 0, 1), viewDir.clone().normalize());
+  const roll = (rand01(hashStr(id || 'anon'), 0xdeadbeef) - 0.5) * 0.6;
+  q.multiply(new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 0, 1), roll));
+  const e = new THREE.Euler().setFromQuaternion(q);
+  return [
+    THREE.MathUtils.radToDeg(e.x),
+    THREE.MathUtils.radToDeg(e.y),
+    THREE.MathUtils.radToDeg(e.z),
+  ];
 }
 
 const useStore = create((set, get) => ({
   // --- STATE ---
-  nodes: [],           
-  edges: [],           
-  
-  activeClusters: [],  // [{ id, worldPos, anchorId, rotSway }]
-  segments: [],        // [{ path, startId, endId }]
-  history: [],         // Not strictly needed for forward scroll, but kept for logic
-  
-  currentNodeId: null, 
+  nodes: [],
+  edges: [],
+
+  activeClusters: [],  // [{ id, worldPos, rotSway, viewDir, image }]
+  segments: [],        // [{ path, startId, endId, focus, startLook, endLook, bank }]
+  history: [],
+
+  currentNodeId: null,
   currentShardCount: 0,
   currentResolution: [1000, 1000],
-  
+
   currentSegmentIndex: 0,
-  transitionProgress: 0, 
+  transitionProgress: 0,
   isTransitioning: false,
-  
+
   // UI State
   showMenu: false,
 
   // --- ACTIONS ---
   setGraph: (graphData) => {
     if (!graphData) return;
-    set({ 
+    set({
       nodes: Array.isArray(graphData.nodes) ? graphData.nodes : [],
-      edges: Array.isArray(graphData.edges) ? graphData.edges : []
+      edges: Array.isArray(graphData.edges) ? graphData.edges : [],
     });
   },
 
@@ -51,12 +99,19 @@ const useStore = create((set, get) => ({
     console.log("[Store] Starting at:", id);
     const { nodes } = get();
     const node = nodes.find(n => n.id === id);
-    const firstCluster = { id, worldPos: [0, 0, 0], image: node?.image };
+    const viewDir = viewDirForId(id);
+    const firstCluster = {
+      id,
+      worldPos: [0, 0, 0],                    // all paintings share origin
+      rotSway: rotationForViewDir(viewDir, id),
+      viewDir,
+      image: node?.image,
+    };
     set({
-        activeClusters: [firstCluster],
-        currentNodeId: id,
-        segments: [],
-        currentSegmentIndex: 0
+      activeClusters: [firstCluster],
+      currentNodeId: id,
+      segments: [],
+      currentSegmentIndex: 0,
     });
     get().buildNextSegment();
   },
@@ -64,192 +119,141 @@ const useStore = create((set, get) => ({
   setCurrentResolution: (res) => set({ currentResolution: res }),
   setCurrentShardCount: (count) => set({ currentShardCount: count }),
 
-  // Build the next step in the infinite void (Append mode)
+  // Build the next step of the walk. All paintings sit at world origin
+  // (rotated differently), so a segment is a camera path on the sphere
+  // of radius NULL_DISTANCE that leaves painting A's ideal viewing point,
+  // dives through the shared centre, and arrives at painting B's ideal
+  // viewing point.
   buildNextSegment: () => {
     const { nodes, edges, activeClusters, segments } = get();
     if (activeClusters.length === 0) return;
 
-    // The segment originates from the LAST cluster in the list
     const current = activeClusters[activeClusters.length - 1];
-    // Distance between consecutive paintings' nulls. The painting shell
-    // is ~15 units deep at its viewing distance, so SEGMENT_LENGTH must
-    // be quite a bit larger than that for the camera to have real
-    // empty-space transit time between paintings instead of plunging
-    // straight from one near-face into the next.
-    const SEGMENT_LENGTH = 36.0;
 
-    const currentZ = current.worldPos[2];
-
-    // 1. Pick next node — weighted by pareidolia edge strength so paintings
-    //    that share more marks with the current one are preferred. Fall back
-    //    to a uniform random other-node if there are no edges.
+    // 1. Pick next node — weighted by pareidolia edge strength if
+    //    available; otherwise a uniform random non-self.
     const candidates = edges.filter(e => e.source === current.id);
     let edge;
     if (candidates.length > 0) {
-        const totalW = candidates.reduce((s, e) => s + (e.weight || 1), 0);
-        let r = Math.random() * totalW;
-        edge = candidates[candidates.length - 1];
-        for (const e of candidates) {
-            r -= (e.weight || 1);
-            if (r <= 0) { edge = e; break; }
-        }
+      const totalW = candidates.reduce((s, e) => s + (e.weight || 1), 0);
+      let r = Math.random() * totalW;
+      edge = candidates[candidates.length - 1];
+      for (const e of candidates) {
+        r -= (e.weight || 1);
+        if (r <= 0) { edge = e; break; }
+      }
     } else {
-        const others = nodes.filter(n => n.id !== current.id);
-        const randomTarget = others[Math.floor(Math.random() * others.length)].id;
-        edge = { target: randomTarget };
+      const others = nodes.filter(n => n.id !== current.id);
+      if (others.length === 0) return;
+      const randomTarget = others[Math.floor(Math.random() * others.length)].id;
+      edge = { target: randomTarget };
     }
 
     const nextId = edge.target;
-    const currentNode = nodes.find(n => n.id === current.id);
     const nextNode = nodes.find(n => n.id === nextId);
-
-    // 2. The pareidolia hinge. The chosen edge carries the shared patch:
-    //    s_uv in painting A, t_uv in painting B — a region that reads as
-    //    part of BOTH paintings' subjects at the same time. Painting B is
-    //    placed so its t_uv point sits at the same world xy as A's s_uv
-    //    point; the camera then orbits that point (below) while A's flats
-    //    give way to B's — the viewer never sees a cut.
-    const aAspect = (currentNode?.width && currentNode?.height)
-        ? currentNode.width / currentNode.height : 1.0;
-    const bAspect = (nextNode?.width && nextNode?.height)
-        ? nextNode.width / nextNode.height : 1.0;
-
-    let hingeLocal = null;   // hinge in A's local xy
-    let nextPos;
-    if (Array.isArray(edge.s_uv) && Array.isArray(edge.t_uv)) {
-        const sL = uvToLocal(edge.s_uv, aAspect);
-        const tL = uvToLocal(edge.t_uv, bAspect);
-        hingeLocal = sL;
-        nextPos = [
-            current.worldPos[0] + sL.x - tL.x,
-            current.worldPos[1] + sL.y - tL.y,
-            currentZ - SEGMENT_LENGTH,
-        ];
-    } else {
-        nextPos = [
-            current.worldPos[0],
-            current.worldPos[1],
-            currentZ - SEGMENT_LENGTH,
-        ];
-    }
-
-    // Paintings stay axis-aligned; all parallax and the fulcrum effect
-    // come from the camera's own movement (AESTHETIC §5 invariant).
-    const rotSway = [0, 0, 0];
+    const nextViewDir = viewDirForId(nextId);
 
     const nextCluster = {
-        id: nextId,
-        worldPos: nextPos,
-        anchorId: undefined,
-        rotSway,
-        image: nextNode?.image,
+      id: nextId,
+      worldPos: [0, 0, 0],
+      rotSway: rotationForViewDir(nextViewDir, nextId),
+      viewDir: nextViewDir,
+      image: nextNode?.image,
     };
 
-    // 3. Camera path — the bubbles. The reference video's camera always
-    //    points at one central point while it moves, as if traveling the
-    //    surfaces of nested spheres that share a core. Here the core is
-    //    the hinge (or, hinge-less, the next painting's shell center):
-    //    the camera leaves A's null on a wide sphere, dives to a tight
-    //    one — swinging AROUND the focus at close radius, through A's
-    //    parted flats — then climbs back out to B's null. Look direction
-    //    is handled in AnamorphicCam: locked on `focus`, handed off to
-    //    the next core late in the segment.
-    const startPoint = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ);
-    const endPoint = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2]);
+    // 2. Camera path.
+    //    Start on A's null-sphere point (viewDir_A × NULL_DISTANCE),
+    //    dive inward past origin (an anti-podal excursion), then
+    //    climb out to B's null-sphere point. The focus is the shared
+    //    origin — same "bubbles" choreography as before, only the
+    //    focus is now a single fixed point rather than a per-segment
+    //    hinge.
+    const startPoint = current.viewDir.clone().multiplyScalar(NULL_DISTANCE);
+    const endPoint   = nextViewDir.clone().multiplyScalar(NULL_DISTANCE);
+    const focus      = new THREE.Vector3(0, 0, 0);
 
-    const focus = hingeLocal
-        ? new THREE.Vector3(
-            current.worldPos[0] + hingeLocal.x,
-            current.worldPos[1] + hingeLocal.y,
-            currentZ - SHELL_FRONT - SHELL_DEPTH * 0.5)
-        : new THREE.Vector3(
-            nextPos[0], nextPos[1],
-            nextPos[2] - SHELL_FRONT - SHELL_DEPTH * 0.5);
+    // Where the gaze rests at each end — dead ahead of each painting.
+    // For paintings at origin facing viewDir, "dead ahead of the null"
+    // simply means the origin itself; but to keep the reassembly
+    // symmetric with the previous choreography we look at origin.
+    const startLook = focus.clone();
+    const endLook   = focus.clone();
 
-    // Where the gaze rests at each end of the segment — the CURRENT
-    // painting's shell front (dead ahead from A's null) and the NEXT
-    // painting's shell front (dead ahead from B's null). Head-on
-    // reassembly at both nulls; only the middle of the transit routes
-    // through the off-center hinge patch.
-    const startLook = new THREE.Vector3(current.worldPos[0], current.worldPos[1], currentZ - SHELL_FRONT);
-    const endLook = new THREE.Vector3(nextPos[0], nextPos[1], nextPos[2] - SHELL_FRONT);
+    const dir0 = startPoint.clone().normalize();
+    const dir1 = endPoint.clone().normalize();
 
-    const dir0 = startPoint.clone().sub(focus).normalize();
-    const dir1 = endPoint.clone().sub(focus).normalize();
-    const R0 = startPoint.distanceTo(focus);
-    const R1 = endPoint.distanceTo(focus);
-    // The tight inner bubble: close enough that A's flats part around the
-    // camera, far enough that the hinge patch still fills the frame.
-    const Rmin = THREE.MathUtils.clamp(Math.min(R0, R1) * 0.35, 4.0, 8.0);
-
-    // Lateral sweep direction (horizontal-biased — stage flats read
-    // sideways), breaking the front-to-back degeneracy of dir0 → dir1.
-    const sweepAngle = Math.random() * Math.PI * 2;
-    const sweep = new THREE.Vector3(
-        Math.cos(sweepAngle), Math.sin(sweepAngle) * 0.4, 0).normalize();
+    // Break the front-to-back degeneracy of dir0 → dir1 with a lateral
+    // sweep vector (perpendicular to the average of the two).
+    const midDir = dir0.clone().add(dir1).normalize();
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    const sweepBase = new THREE.Vector3().crossVectors(midDir, worldUp);
+    if (sweepBase.lengthSq() < 1e-4) sweepBase.set(1, 0, 0);
+    sweepBase.normalize();
+    const sweepSign = Math.random() < 0.5 ? -1 : 1;
+    const sweep = sweepBase.multiplyScalar(sweepSign);
 
     const orbitPoint = (t) => {
-        const dir = dir0.clone().lerp(dir1, t)
-            .addScaledVector(sweep, Math.sin(Math.PI * t) * 0.9)
-            .normalize();
-        const rOut = t < 0.5
-            ? THREE.MathUtils.lerp(R0, Rmin, THREE.MathUtils.smoothstep(t, 0, 0.5))
-            : THREE.MathUtils.lerp(Rmin, R1, THREE.MathUtils.smoothstep(t, 0.5, 1));
-        return focus.clone().addScaledVector(dir, rOut);
+      // Slerp-ish blend of dir0 → dir1 with a sideways bulge.
+      const dir = dir0.clone().lerp(dir1, t)
+        .addScaledVector(sweep, Math.sin(Math.PI * t) * 0.9)
+        .normalize();
+      // Radius shrinks past NULL toward DIVE at t=0.5, then back out.
+      const rOut = t < 0.5
+        ? THREE.MathUtils.lerp(NULL_DISTANCE, DIVE_RADIUS,
+            THREE.MathUtils.smoothstep(t, 0, 0.5))
+        : THREE.MathUtils.lerp(DIVE_RADIUS, NULL_DISTANCE,
+            THREE.MathUtils.smoothstep(t, 0.5, 1));
+      return dir.multiplyScalar(rOut);
     };
 
     const newSegment = {
-        path: [startPoint, orbitPoint(0.3), orbitPoint(0.5), orbitPoint(0.7), endPoint],
-        startId: current.id,
-        endId: nextId,
-        focus,
-        startLook,
-        endLook,
-        bank: (Math.random() * 2 - 1) * 0.12,
+      path: [startPoint, orbitPoint(0.3), orbitPoint(0.5),
+             orbitPoint(0.7), endPoint],
+      startId: current.id,
+      endId: nextId,
+      focus,
+      startLook,
+      endLook,
+      bank: (Math.random() * 2 - 1) * 0.12,
     };
 
-    set({ 
-        activeClusters: [...activeClusters, nextCluster],
-        segments: [...segments, newSegment]
+    set({
+      activeClusters: [...activeClusters, nextCluster],
+      segments: [...segments, newSegment],
     });
-    
+
     console.log(`[Store] Segment ${segments.length} Appended: ${current.id} -> ${nextId}`);
   },
 
   completeTransition: () => {
-    // This now just cleans up far-away segments or prepares for the next
     const { segments, currentSegmentIndex } = get();
     if (currentSegmentIndex < segments.length - 1) {
-        set({ currentSegmentIndex: currentSegmentIndex + 1 });
+      set({ currentSegmentIndex: currentSegmentIndex + 1 });
     }
-    // We can verify if we need to build more
     if (segments.length < currentSegmentIndex + 3) {
-        get().buildNextSegment();
+      get().buildNextSegment();
     }
   },
 
-  goBackward: () => {
-    const { history } = get();
-    if (history.length === 0) return false;
-
-    // Pop the last state from history
-    const lastState = history[history.length - 1];
-    const remainingHistory = history.slice(0, -1);
-
-    set({
-        activeClusters: lastState.activeClusters,
-        currentPath: lastState.currentPath,
-        history: remainingHistory,
-        currentNodeId: lastState.activeClusters[lastState.activeClusters.length - 1].id,
-        transitionProgress: 1.0, // Start at the end of the previous segment
-        isTransitioning: false
-    });
-    
-    console.log("[Store] Navigating Backward. History depth:", remainingHistory.length);
-    return true;
+  // Scrolling BACKWARD past a segment boundary is a legitimate operation
+  // now — the user can revisit prior segments by scrolling up. The
+  // scroll offset is the source of truth for segmentIndex, so we just
+  // let AnamorphicCam re-index; there's no state to unwind here beyond
+  // updating currentSegmentIndex.
+  backtrackTo: (segmentIndex) => {
+    if (segmentIndex < 0) return;
+    const { segments } = get();
+    if (segmentIndex >= segments.length) return;
+    set({ currentSegmentIndex: segmentIndex });
   },
 
-  setTransitionProgress: (val) => set({ transitionProgress: val, isTransitioning: val > 0.01 && val < 0.99 }),
+  // Legacy — kept as a no-op so any external caller doesn't crash.
+  goBackward: () => false,
+
+  setTransitionProgress: (val) => set({
+    transitionProgress: val,
+    isTransitioning: val > 0.01 && val < 0.99,
+  }),
   toggleMenu: () => set(state => ({ showMenu: !state.showMenu })),
 }));
 

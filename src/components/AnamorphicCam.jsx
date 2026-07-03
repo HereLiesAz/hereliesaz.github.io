@@ -1,4 +1,3 @@
-import { useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
@@ -46,7 +45,6 @@ function lookTarget(segments, segmentIndex, r) {
 export default function AnamorphicCam() {
   const { camera } = useThree();
   const scroll = useScroll();
-  const isTransitioningRef = useRef(false);
 
   const segments = useStore(state => state.segments);
   const setTransitionProgress = useStore(state => state.setTransitionProgress);
@@ -55,9 +53,14 @@ export default function AnamorphicCam() {
     if (segments.length === 0) return;
 
     const totalPages = scroll.pages;
+    // Total progress can span [0, segments.length]. We clamp to the
+    // already-built range so the user can scroll back into segments they
+    // have already visited (bidirectional navigation) while forward
+    // scroll builds more.
     const totalProgress = (scroll.offset * totalPages) / PAGES_PER_SEGMENT;
-    const segmentIndex = Math.min(Math.floor(totalProgress), segments.length - 1);
-    const r = totalProgress - Math.floor(totalProgress);
+    const clampedTotal = Math.max(0, Math.min(totalProgress, segments.length - 0.001));
+    const segmentIndex = Math.min(Math.floor(clampedTotal), segments.length - 1);
+    const r = clampedTotal - segmentIndex;
 
     const currentSegment = segments[segmentIndex];
     if (!currentSegment) return;
@@ -65,10 +68,6 @@ export default function AnamorphicCam() {
     setTransitionProgress(r);
 
     const curve = new THREE.CatmullRomCurve3(currentSegment.path);
-
-    // Position on the segment's orbit; gaze locked on the segment focus
-    // (see lookTarget). A touch of bank through the middle of the orbit
-    // keeps the sweep from feeling like it's on rails.
     camera.position.copy(curve.getPointAt(r));
     camera.lookAt(lookTarget(segments, segmentIndex, r));
     if (currentSegment.bank) {
@@ -76,19 +75,19 @@ export default function AnamorphicCam() {
     }
 
     // Build ahead early — the gaze handoff at r>0.6 wants the next
-    // segment's focus to already exist.
+    // segment's focus to already exist. Only fires when the user is
+    // actually near the frontier; scrolling backwards never extends.
     if (r > 0.5 && segments.length < segmentIndex + 2) {
       useStore.getState().buildNextSegment();
     }
 
-    if (useStore.getState().currentSegmentIndex !== segmentIndex) {
-      useStore.getState().completeTransition();
-    }
-
-    if (scroll.offset > 0.999 && !isTransitioningRef.current) {
-      isTransitioningRef.current = true;
-      if (scroll.el) scroll.el.scrollTop = 0;
-      setTimeout(() => { isTransitioningRef.current = false; }, 100);
+    // Keep the store's currentSegmentIndex in sync with the scroll —
+    // this is what drives which paintings are mounted in <Scene>. Update
+    // in BOTH directions (forward and backward) so scrolling back
+    // remounts the earlier paintings.
+    const storeIdx = useStore.getState().currentSegmentIndex;
+    if (storeIdx !== segmentIndex) {
+      useStore.getState().backtrackTo(segmentIndex);
     }
   });
 

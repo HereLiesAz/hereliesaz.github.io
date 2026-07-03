@@ -3,36 +3,40 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 
-// World-height of every painting's central shell, and the depth of the
-// shell from front to back. Each painting occupies a slab of 3D space
-// `PAINTING_HEIGHT × aspect × SHELL_DEPTH`: a full-painting backdrop at
-// the rear plus a handful of cutout flats in front — a paper theater.
-const PAINTING_HEIGHT = 10.0;
-const SHELL_DEPTH     = 6.0;
+// Each painting sits at world (0, 0, 0) with its own rotation. Its layer
+// stack extends along the painting's local Z axis, mirrored across the
+// origin: for every cutout flat at local z = +d there is an identical
+// twin at z = -d. The backdrop plane sits at z = 0. Two families of
+// cutouts stack outward from origin:
+//
+//   depth flats — one per depth band, discarding pixels outside that band
+//   color flats — one per color cluster, discarding pixels outside that cluster
+//
+// Both families are chroma-keyed: pixels darker than CHROMA_L → discard, so
+// the painting's black regions dissolve into the black void behind it.
+//
+// Head-on the front-side flats occlude the origin-plane backdrop and one
+// another to reassemble the painting exactly. Off-axis the flats part
+// with real parallax; as the camera passes through the origin plane, the
+// mirrored back-side layers become the near ones.
+const PAINTING_HEIGHT   = 10.0;
+const SHELL_HALF_DEPTH  = 5.0;      // layers occupy z ∈ [-SHELL_HALF_DEPTH, +SHELL_HALF_DEPTH]
+const NULL_DISTANCE     = 11.0;     // camera radius that reads a painting head-on
+const CHROMA_L          = 0.045;    // luminance below this counts as "black" → discard
 
-// Push the shell ahead of the painting's worldPos so the camera, which
-// arrives at worldPos at each null, sees the painting at a comfortable
-// reading distance instead of plunging into its near face.
-//   front flat at  world z = worldPos.z - SHELL_FRONT
-//   backdrop  at   world z = worldPos.z - SHELL_FRONT - SHELL_DEPTH
-// Chosen so a 10-unit-tall painting at 50° FoV roughly fills the frame.
-const SHELL_FRONT     = 11.0;
-
-// Distance envelope: full colour inside FADE_FULL, gone past FADE_GONE.
-// Paintings are SEGMENT_LENGTH=36 units apart. At the middle of a
-// transit the camera sits ~18 units from each null; if FADE_FULL is
-// also 18 the current painting hits zero exactly as the next hasn't
-// yet risen, so the frame goes fully black. Widened past half-segment
-// so BOTH dioramas are visible mid-transit and their flats interleave.
+// Distance envelope: full colour when the camera is on the painting's
+// null-sphere or inside; fades to black as it drifts far off. Distance is
+// measured from the world origin (paintings share it), so this envelope
+// is really the "how close to any diorama's ideal view" fade — always at
+// least one painting is lit while the camera orbits.
 const FADE_FULL = 24.0;
 const FADE_GONE = 44.0;
 
-// When the camera's world z crosses a flat's z, the flat dissolves to
-// black over this many units instead of clipping across the near plane.
+// Cross-fade when the camera crosses a flat in local z: flat fades to
+// black over this many units instead of clipping the near plane.
 const CROSS_FADE = 1.2;
 
-// The backdrop is slightly oversized so lateral parallax never exposes
-// its frame edge behind the cutout flats.
+// The backdrop is oversized so parallax never exposes its frame edge.
 const BACKDROP_OVERSCAN = 1.08;
 
 
@@ -53,6 +57,7 @@ function fetchTheaterMeta(id) {
 
 // ---- shaders ----------------------------------------------------------------
 
+// Shared vertex passthrough. All flats are unit planes scaled per-mesh.
 const flatVS = /* glsl */ `
 varying vec2 vUv;
 void main() {
@@ -62,50 +67,78 @@ void main() {
 }
 `;
 
-// A cutout flat: sample the painting and the depth map. Pixels whose depth
-// falls outside this flat's band are discarded — the flat is the cut-paper
-// silhouette of one depth stratum. The band threshold is jittered with a
-// small hash noise so the cut edge tears organically instead of aliasing
-// along iso-depth contours. uFade lerps toward black (the void), never
-// toward transparency — flats are opaque cardboard, and real depth-writes
-// keep occlusion honest.
+// Fragment shader for every flat. Behavior varies by three uniforms:
+//   uMode:
+//     0 = backdrop (no cutout, just chroma-key)
+//     1 = depth band cutout
+//     2 = color cluster cutout
+//   uBandMin/Max — depth band edges (mode 1)
+//   uColorIdx + uColorCenters[] — color cluster gate (mode 2)
+//
+// The chroma-key gate runs for every mode: pure-black regions of the
+// painting are discarded so the void shows through.
+//
+// A cheap hash-based tear noise softens the depth-band boundaries into
+// organic torn-paper edges (mode 1 only).
 const flatFS = /* glsl */ `
 precision highp float;
 uniform sampler2D uPainting;
 uniform sampler2D uDepth;
-uniform float uBandMin;    // band edges in [0,1] depth
+uniform float uMode;         // 0 backdrop, 1 depth, 2 color
+uniform float uBandMin;
 uniform float uBandMax;
-uniform float uBackdrop;   // 1.0 = full-bleed backdrop, no discard
-uniform float uFade;       // 0 = black/void, 1 = full colour
+uniform float uColorIdx;
+uniform vec3  uColorCenters[16];
+uniform float uNColorCenters;
+uniform float uFade;
 varying vec2 vUv;
 
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
 
-// Bilinear value noise — smooth enough that the band threshold wanders in
-// organic lobes (paper tears) rather than per-texel speckle.
 float vnoise(vec2 p) {
   vec2 i = floor(p);
   vec2 f = fract(p);
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(
-    mix(hash(i),                 hash(i + vec2(1.0, 0.0)), u.x),
+    mix(hash(i),                  hash(i + vec2(1.0, 0.0)), u.x),
     mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
     u.y);
 }
 
 void main() {
-  if (uBackdrop < 0.5) {
+  vec3 painting = texture2D(uPainting, vUv).rgb;
+
+  // Chroma-key: kill near-black. BT.709 luma; slight uv-noise threshold
+  // so the edges of dark regions tear organically instead of aliasing.
+  float lum = 0.2126 * painting.r + 0.7152 * painting.g + 0.0722 * painting.b;
+  float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
+  if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
+
+  if (uMode > 0.5 && uMode < 1.5) {
+    // Depth band cutout
     float d = texture2D(uDepth, vUv).r;
-    // Torn-paper edge: wander the band threshold with coarse lobes plus a
-    // little fibre-scale fuzz.
     float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05
                + (hash(vUv * 1024.0) - 0.5) * 0.012;
     float dj = d + tear;
     if (dj < uBandMin || dj >= uBandMax) discard;
+  } else if (uMode > 1.5) {
+    // Color cluster cutout — assign this pixel to the nearest cluster
+    // among the first uNColorCenters entries of uColorCenters, then keep
+    // only pixels whose nearest cluster is this flat's uColorIdx.
+    int n = int(uNColorCenters + 0.5);
+    float bestD = 1e6;
+    int best = 0;
+    for (int i = 0; i < 16; i++) {
+      if (i >= n) break;
+      vec3 c = uColorCenters[i];
+      float dd = dot(painting - c, painting - c);
+      if (dd < bestD) { bestD = dd; best = i; }
+    }
+    if (best != int(uColorIdx + 0.5)) discard;
   }
-  vec3 painting = texture2D(uPainting, vUv).rgb;
+
   gl_FragColor = vec4(painting * uFade, 1.0);
 }
 `;
@@ -113,48 +146,84 @@ void main() {
 
 // ---- flat assembly ------------------------------------------------------------
 
-// Build the paper theater from schema-2 metadata: one backdrop (the whole
-// painting, rearmost) + one cutout flat per depth band. Band center depth
-// t (0 = rearmost, 1 = frontmost) maps to
-//   z(t)     = -(SHELL_FRONT + SHELL_DEPTH * (1 - t))
-//   persp(t) =  (SHELL_FRONT + SHELL_DEPTH * (1 - t)) / SHELL_FRONT
-// The perspective compensation makes every flat subtend exactly the same
-// view from the null — head-on the flats reassemble into the original
-// painting over the backdrop; any camera offset parts them into coherent
-// physical parallax.
-function buildFlats(metadata) {
-  const bands = metadata?.depth?.bands;
-  if (!bands || !Array.isArray(bands.edges) || !Array.isArray(bands.centers)) return [];
-  const aspect = (metadata.src?.width || 1) / (metadata.src?.height || 1);
+// Given depth band centers and color center count, build the full mirrored
+// stack of flat descriptors. Local z = 0 is the painting's origin (shared
+// world origin); positive z is the "front" half (camera-facing when the
+// camera is on the +Z side of the group's local frame), negative z is the
+// mirrored back half.
+function buildFlats(meta) {
+  const flats = [];
+  const aspect = (meta?.src?.width || 1) / (meta?.src?.height || 1);
   const planeWidth  = PAINTING_HEIGHT * aspect;
   const planeHeight = PAINTING_HEIGHT;
 
-  const depthAt = (t) => SHELL_FRONT + SHELL_DEPTH * (1 - t);
+  // Perspective compensation: at each null, camera sits at viewDir *
+  // NULL_DISTANCE along the painting's local +Z axis. A flat at local z
+  // is (NULL_DISTANCE - z) units from the camera; scaling it by that
+  // ratio makes every flat subtend the same visual angle so they
+  // reassemble into the painting at the null. Off-axis, the disparate
+  // scales are what create the "layers exploded outward" look.
+  const persp = (z) => (NULL_DISTANCE - z) / NULL_DISTANCE;
 
-  const flats = [{
+  // Backdrop — the whole painting at the origin plane. Slightly overscaled
+  // so lateral parallax never exposes its frame edge behind the cutouts.
+  flats.push({
     kind: 'backdrop',
-    bandMin: 0, bandMax: 1,
-    z: -depthAt(0),
-    persp: depthAt(0) / SHELL_FRONT,
-    overscan: BACKDROP_OVERSCAN,
+    mode: 0,
+    z: 0,
+    scale: BACKDROP_OVERSCAN * persp(0),
     planeWidth, planeHeight,
-  }];
+    bandMin: 0, bandMax: 1,
+    colorIdx: -1,
+  });
 
-  for (let i = 0; i < bands.centers.length; i++) {
-    // The rearmost band is already carried by the backdrop; a cutout copy
-    // of it at the same depth would only z-fight.
-    if (i === 0) continue;
-    const t = bands.centers[i];
-    flats.push({
-      kind: 'flat',
-      bandMin: bands.edges[i],
-      bandMax: bands.edges[i + 1],
-      z: -depthAt(t),
-      persp: depthAt(t) / SHELL_FRONT,
-      overscan: 1.0,
-      planeWidth, planeHeight,
-    });
+  const depthCenters = meta?.depth?.bands?.centers || [];
+  const depthEdges   = meta?.depth?.bands?.edges   || [];
+
+  // Depth flats: spread across the front-half of the shell, then mirrored
+  // to the back. Skip the rearmost band — it's already carried by the
+  // backdrop and a duplicate at z = 0 would z-fight.
+  const nDepth = depthCenters.length;
+  for (let i = 1; i < nDepth; i++) {
+    const t = depthCenters[i]; // 0..1
+    // Map band center depth (0 = far / 1 = near) onto [+eps, +SHELL_HALF_DEPTH].
+    const zFront = SHELL_HALF_DEPTH * ((i) / Math.max(1, nDepth - 1));
+    for (const sign of [+1, -1]) {
+      const z = sign * zFront;
+      flats.push({
+        kind: 'depth',
+        mode: 1,
+        z,
+        scale: persp(z),
+        planeWidth, planeHeight,
+        bandMin: depthEdges[i],
+        bandMax: depthEdges[i + 1],
+        colorIdx: -1,
+      });
+    }
   }
+
+  const colorCenters = meta?.color?.centers || [];
+  const nColor = colorCenters.length;
+  // Color flats: interleave with depth on a different offset so a given z
+  // isn't shared with a depth flat (they'd z-fight when both survive).
+  // Front half again, mirrored to back.
+  for (let i = 0; i < nColor; i++) {
+    const zFront = SHELL_HALF_DEPTH * ((i + 0.5) / nColor) * 0.85 + 0.15;
+    for (const sign of [+1, -1]) {
+      const z = sign * zFront;
+      flats.push({
+        kind: 'color',
+        mode: 2,
+        z,
+        scale: persp(z),
+        planeWidth, planeHeight,
+        bandMin: 0, bandMax: 1,
+        colorIdx: i,
+      });
+    }
+  }
+
   return flats;
 }
 
@@ -173,14 +242,8 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     let cancelled = false;
     fetchTheaterMeta(id).then(json => {
       if (cancelled) return;
-      // Only schema-2 metadata drives the layered shell; anything else
-      // (legacy v1 json, missing bake) drops to the flat fallback below.
       const usable = json && json.schema === 2 && json.depth?.bands ? json : null;
       setMeta(usable);
-      // Flat fallback: when the theater bake hasn't run for this id, render
-      // the original asset image as a single textured plane instead of the
-      // layered shell. Looks like the legacy gallery — no parallax — but
-      // the page isn't blank.
       if (!usable && image) {
         const loader = new THREE.TextureLoader();
         loader.load(
@@ -193,7 +256,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
             setFlatTex({ texture: tex, aspect: w / h, width: w, height: h });
           },
           undefined,
-          () => { /* image missing — render nothing for this id */ },
+          () => { },
         );
       }
     });
@@ -211,10 +274,21 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
 
   const flats = useMemo(() => meta ? buildFlats(meta) : [], [meta]);
 
-  // Calculate dynamic scale to fit the painting into the screen at SHELL_FRONT.
-  // Same math regardless of whether the layered shell or the flat fallback is
-  // rendering — only the source of the aspect ratio differs (theater.json vs.
-  // the raw asset image dimensions).
+  // Color centers packed into a fixed-length array (matches shader
+  // `uColorCenters[16]` uniform). Extra slots zero-padded.
+  const colorCentersUniform = useMemo(() => {
+    const arr = Array.from({ length: 16 }, () => new THREE.Vector3());
+    const centers = meta?.color?.centers || [];
+    for (let i = 0; i < Math.min(centers.length, 16); i++) {
+      arr[i].set(centers[i][0], centers[i][1], centers[i][2]);
+    }
+    return arr;
+  }, [meta]);
+  const nColorCenters = meta?.color?.centers?.length || 0;
+
+  // Dynamic scale so a painting at NULL_DISTANCE fills the frame. Camera
+  // approaches from world origin along the painting's local +Z axis (after
+  // rotation), so head-on distance is exactly NULL_DISTANCE.
   const { size, camera } = useThree();
   const fitScale = useMemo(() => {
     let paintingWidth, paintingHeight;
@@ -227,9 +301,8 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     } else {
       return 1.0;
     }
-
     const vFov = THREE.MathUtils.degToRad(camera.fov);
-    const visibleHeight = 2.0 * SHELL_FRONT * Math.tan(vFov / 2.0);
+    const visibleHeight = 2.0 * NULL_DISTANCE * Math.tan(vFov / 2.0);
     const visibleWidth  = visibleHeight * (size.width / size.height);
     const widthScale  = (visibleWidth  * 0.85) / paintingWidth;
     const heightScale = (visibleHeight * 0.90) / paintingHeight;
@@ -238,26 +311,24 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
 
   const planeGeom = useMemo(() => new THREE.PlaneGeometry(1, 1), []);
 
-  // One material per flat: opaque, depth-writing paper. Texture uniforms
-  // point at the shared painting/depth textures once those load.
   const flatMaterials = useMemo(() => flats.map(flat => new THREE.ShaderMaterial({
     vertexShader:   flatVS,
     fragmentShader: flatFS,
     transparent:    false,
     depthWrite:     true,
-    // Paper is visible from backstage too — the camera's orbit passes
-    // behind the shell mid-transition, and single-sided flats would
-    // vanish into a black beat there.
     side:           THREE.DoubleSide,
     uniforms: {
-      uPainting: { value: null },
-      uDepth:    { value: null },
-      uBandMin:  { value: flat.bandMin },
-      uBandMax:  { value: flat.bandMax },
-      uBackdrop: { value: flat.kind === 'backdrop' ? 1 : 0 },
-      uFade:     { value: 0 },
+      uPainting:      { value: null },
+      uDepth:         { value: null },
+      uMode:          { value: flat.mode },
+      uBandMin:       { value: flat.bandMin },
+      uBandMax:       { value: flat.bandMax },
+      uColorIdx:      { value: flat.colorIdx },
+      uColorCenters:  { value: colorCentersUniform },
+      uNColorCenters: { value: nColorCenters },
+      uFade:          { value: 0 },
     },
-  })), [flats]);
+  })), [flats, colorCentersUniform, nColorCenters]);
 
   // Load painting + depth textures once meta is known. Pass them into
   // every flat's material.
@@ -275,16 +346,11 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       if (cancelled) return;
       painting.colorSpace = THREE.SRGBColorSpace;
       painting.anisotropy = 4;
-      // Depth is data, not colour — keep it linear. (Browsers decode the
-      // 16-bit PNG to 8 bits per channel; 256 depth levels is far more
-      // than the ~6 bands need.)
       depth.colorSpace = THREE.NoColorSpace;
       depth.generateMipmaps = false;
       depth.minFilter = THREE.LinearFilter;
       setTextures({ painting, depth });
-    }).catch(() => {
-      // Texture missing — keep the flats around but they'll render nothing.
-    });
+    }).catch(() => { });
     return () => { cancelled = true; };
   }, [id, meta]);
 
@@ -296,9 +362,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     }
   }, [textures, flatMaterials]);
 
-  // Push the active painting's source resolution to the store so the overlay
-  // stays coherent. Works for both modes: prefer the theater metadata's src
-  // dims, fall back to the flat texture's natural dims.
   useEffect(() => {
     const isActiveSegment =
       mySegmentIndex === currentSegmentIndex ||
@@ -311,9 +374,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     }
   }, [mySegmentIndex, currentSegmentIndex, meta, flatTex, setCurrentResolution]);
 
-  // Dispose per-painting resources when the component unmounts or the id
-  // swaps. planeGeom is tied to the component lifetime; textures + flat
-  // materials regenerate per id.
   useEffect(() => () => {
     if (textures) {
       textures.painting.dispose();
@@ -333,8 +393,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     if (flatTex?.texture) flatTex.texture.dispose();
   }, [flatTex]);
 
-  // Shared material for the flat fallback. Created once and updated per-frame
-  // so it picks up the same distance fade as the layered shell.
   const fallbackMaterial = useMemo(
     () => new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.DoubleSide }),
     [],
@@ -345,37 +403,46 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     fallbackMaterial.needsUpdate = true;
   }, [flatTex, fallbackMaterial]);
 
-  // Camera distance → fade envelope, plus the fly-through dissolve: a flat
-  // the camera is about to cross fades to black over CROSS_FADE units so
-  // the shell can be scrubbed through like theater flats, never clipped.
+  // Distance envelope + fly-through cross-fade. Distance measured from
+  // the painting's world origin (which for the new spatial model is
+  // world (0,0,0) for every painting, so this is really the camera's
+  // distance from the shared centre point).
+  //
+  // Cross-fade: when the camera is close (in the group's local frame) to
+  // one of a flat's local-z faces, dissolve that flat so it doesn't
+  // clip the near plane as the camera passes through.
+  const groupRef = useRef(null);
+  const localCamPos = useMemo(() => new THREE.Vector3(), []);
   useFrame(() => {
-    if (!position) return;
+    if (!position || !groupRef.current) return;
     const v = tmpVec.current;
     v.set(position[0] || 0, position[1] || 0, position[2] || 0);
     const dist = camera.position.distanceTo(v);
     const fade = 1.0 - THREE.MathUtils.smoothstep(dist, FADE_FULL, FADE_GONE);
 
+    // Camera position in the painting's local frame (undoes the group's
+    // rotation and position). Cross-fade uses the local z.
+    groupRef.current.worldToLocal(localCamPos.copy(camera.position));
+
     for (let i = 0; i < flatMaterials.length; i++) {
-      const flatWorldZ = v.z + flats[i].z;
-      const cross = Math.min(
-        Math.abs(camera.position.z - flatWorldZ) / CROSS_FADE, 1.0);
+      const F = flats[i];
+      const cross = F.kind === 'backdrop'
+        ? 1.0
+        : Math.min(Math.abs(localCamPos.z - F.z) / CROSS_FADE, 1.0);
       flatMaterials[i].uniforms.uFade.value = fade * cross;
     }
-    // Fallback plane: same envelope, applied as a colour dim so it stays
-    // opaque too.
     fallbackMaterial.color.setScalar(fade);
   });
 
-  // Flat fallback render — single textured plane at the shell-front depth.
   if (!meta && flatTex) {
     const fw = PAINTING_HEIGHT * flatTex.aspect * fitScale;
     const fh = PAINTING_HEIGHT * fitScale;
     return (
-      <group position={position} rotation={rotEuler}>
+      <group ref={groupRef} position={position} rotation={rotEuler}>
         <mesh
           geometry={planeGeom}
           material={fallbackMaterial}
-          position={[0, 0, -SHELL_FRONT]}
+          position={[0, 0, 0]}
           scale={[fw, fh, 1]}
         />
       </group>
@@ -385,7 +452,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   if (!meta || flats.length === 0 || flatMaterials.length === 0) return null;
 
   return (
-    <group position={position} rotation={rotEuler}>
+    <group ref={groupRef} position={position} rotation={rotEuler}>
       {flats.map((F, i) => (
         <mesh
           key={i}
@@ -393,8 +460,8 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
           material={flatMaterials[i]}
           position={[0, 0, F.z]}
           scale={[
-            F.planeWidth  * fitScale * F.persp * F.overscan,
-            F.planeHeight * fitScale * F.persp * F.overscan,
+            F.planeWidth  * fitScale * F.scale,
+            F.planeHeight * fitScale * F.scale,
             1,
           ]}
         />
