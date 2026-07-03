@@ -86,13 +86,15 @@ jobs:
         working-directory: main
         run: npm run build
 
-      - name: Deploy over SCP/SFTP
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.SFTP_USERNAME }}
-          key: ${{ secrets.SSH_RSA }}
-          port: ${{ vars.SFTP_PORT || 22 }}
-          source: "main/dist/*"
-          target: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
-          strip_components: 2
+      - name: Deploy via Native SCP
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_RSA }}
+          HOST: ${{ secrets.FTP_SERVER }}
+          USERNAME: ${{ secrets.SFTP_USERNAME }}
+          PORT: 22
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p $PORT -H $HOST >> ~/.ssh/known_hosts
+          scp -P $PORT -r ./main/dist/* $USERNAME@$HOST:/public_html/
