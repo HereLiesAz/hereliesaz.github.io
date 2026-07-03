@@ -5,22 +5,16 @@ name: Deploy over SFTP
 # tab.
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
-#   FTP_SERVER       hostname, e.g. sftp.example.com. Named FTP_* for
-#                    continuity with earlier FTP setups; SFTP still works
-#                    against it — the protocol lives in the deploy step
-#                    below, not in the secret name.
-#   SFTP_USERNAME    your SSH login user (distinct from FTP_USERNAME —
-#                    that's for the plain-FTP account; SSH may use a
-#                    different name, often the email the SSH key was
-#                    generated for on managed hosts).
-#   SSH_RSA          private key contents, INCLUDING the
-#                    -----BEGIN OPENSSH PRIVATE KEY----- (or -----BEGIN RSA
-#                    PRIVATE KEY-----) header and matching footer. The
-#                    matching public key must be appended to
-#                    ~/.ssh/authorized_keys for SFTP_USERNAME on the host.
+#   FTP_SERVER      hostname, e.g. sftp.example.com. Named FTP_* for
+#                   continuity with the earlier FTP setup — the ProFTPD
+#                   mod_sftp host we deploy to accepts the same account
+#                   for both protocols.
+#   FTP_USERNAME    login user.
+#   FTP_PASSWORD    login password. Password auth via sshpass; SSH keys
+#                   aren't used against this host.
 #
 # Optional repository variables (Settings → Secrets and variables → Actions → Variables):
-#   SFTP_PORT         defaults to 22
+#   SFTP_PORT         defaults to 22.
 #   FTP_SERVER_DIR    remote path to mirror the built site into.
 #                     Defaults to /public_html/. If your host serves from
 #                     a subfolder (e.g. /portfolio/), also change `base`
@@ -88,17 +82,20 @@ jobs:
         
       - name: Deploy via Native SFTP
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_RSA }}
           HOST: ${{ secrets.FTP_SERVER }}
           USERNAME: ${{ secrets.FTP_USERNAME }}
           PASSWORD: ${{ secrets.FTP_PASSWORD }}
-          PORT: 22
+          PORT: ${{ vars.SFTP_PORT || 22 }}
+          REMOTE_DIR: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
         run: |
           sudo apt-get install -y sshpass
+          # StrictHostKeyChecking is 'no' below, so we don't strictly need
+          # known_hosts, but populating it lets sftp verify the host key
+          # hasn't changed between runs.
           mkdir -p ~/.ssh
-          ssh-keyscan -p $PORT -H $HOST >> ~/.ssh/known_hosts
-          sshpass -p "$PASSWORD" sftp -o StrictHostKeyChecking=no -P $PORT -b - $USERNAME@$HOST <<EOF
-          cd /public_html/
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          sshpass -p "$PASSWORD" sftp -o StrictHostKeyChecking=no -P "$PORT" -b - "$USERNAME@$HOST" <<EOF
+          cd $REMOTE_DIR
           lcd ./main/dist
           put -r *
           bye
