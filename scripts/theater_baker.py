@@ -73,9 +73,10 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # ---- tuning knobs -----------------------------------------------------------
 
 DEFAULT_MAX_SIDE = 768                     # depth Space caps at ~768 long edge
-N_BANDS          = 6                       # AESTHETIC §8.1: ~3-7 flats
-MIN_BAND_COVER   = 0.02                    # merge bands under 2% of pixels
-MIN_BAND_SEP     = 0.08                    # merge bands closer than this in depth
+N_BANDS          = 18                      # depth resolution — dense layer stack
+MIN_BAND_COVER   = 0.008                   # merge bands under 0.8% of pixels
+MIN_BAND_SEP     = 0.025                   # merge bands closer than this in depth
+N_COLOR_BANDS    = 8                       # color-cluster layers (dark→light)
 ACCENT_SAT_FLOOR = 0.18                    # painting reads as desaturated below this
 ACCENT_COUNT     = 2
 N_ACCENT_CLUSTERS = 10
@@ -497,8 +498,18 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     # -- stage D: bands + metadata ------------------------------------------------
     edges, centers = depth_bands_kmeans(depth)
 
-    _, color_centers = color_clusters(rgb, N_ACCENT_CLUSTERS)
-    accents = pick_accents(color_centers)
+    _, color_centers = color_clusters(rgb, N_COLOR_BANDS)
+    color_centers_norm = [
+        [round(float(c[0]) / 255.0, 4),
+         round(float(c[1]) / 255.0, 4),
+         round(float(c[2]) / 255.0, 4)]
+        for c in color_centers
+    ]
+
+    # Accents (for the overlay's per-painting palette flash) still want a
+    # richer color set, so re-run k-means at the accent count.
+    _, accent_centers = color_clusters(rgb, N_ACCENT_CLUSTERS)
+    accents = pick_accents(accent_centers)
 
     meta = {
         "schema": 2,
@@ -508,6 +519,13 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
             "source": source,
             "file":   out_depth.name,
             "bands":  {"count": len(centers), "edges": edges, "centers": centers},
+        },
+        # Color-cluster centers, dark→light, in normalized [0,1] RGB. The
+        # renderer feeds these into the shader as `uColorCenters` and
+        # assigns each pixel to its nearest cluster on the fly.
+        "color":  {
+            "count":   N_COLOR_BANDS,
+            "centers": color_centers_norm,
         },
     }
     if accents is not None:
