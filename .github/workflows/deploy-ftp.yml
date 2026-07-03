@@ -12,7 +12,7 @@ name: Deploy to FTP
 #                    If your host serves from a subfolder (e.g. /portfolio/),
 #                    also change `base` in vite.config.js to match, or the
 #                    JS/CSS <script>/<link> tags will 404.
-#   FTP_PROTOCOL     "ftps" (default) or "ftp" if your host doesn't do TLS.
+#   FTP_PROTOCOL     "ftp" (default) or "ftps" if your host supports TLS.
 #
 # The site's baked data lives on the orphan `art-data` branch and is
 # injected into public/data at build time (same pattern as deploy.yml).
@@ -61,7 +61,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: main/package-lock.json
 
@@ -79,7 +79,7 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ${{ vars.FTP_PROTOCOL || 'ftps' }}
+          protocol: ${{ vars.FTP_PROTOCOL || 'ftp' }}
           local-dir: ./main/dist/
           server-dir: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
           # Only touch changed files (state cached remotely by the action).
