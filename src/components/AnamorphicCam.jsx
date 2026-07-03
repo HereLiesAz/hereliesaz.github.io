@@ -10,26 +10,49 @@ const PAGES_PER_SEGMENT = 4;
 const tmpLook = new THREE.Vector3();
 
 /**
- * The bubbles rule (from the reference video): however the camera moves,
- * it stays pointed at ONE central point — the segment's `focus`, the
- * pareidolia hinge the camera orbits on its nested spheres. Late in the
- * segment the gaze hands off: preferably straight to the NEXT segment's
- * focus (so consecutive orbits share a continuous line of sight),
- * falling back to `endLook` (the destination painting's shell front,
- * dead ahead at the null) while the next segment hasn't been built yet.
+ * The bubbles rule (from the reference video): mid-transit the camera
+ * stays pointed at ONE central point — the segment's `focus`, the
+ * shared patch it orbits on nested spheres. At either NULL, though, the
+ * gaze must be dead-ahead on the current painting so the paper theater
+ * reassembles head-on. The choreography per segment:
+ *
+ *    r ≤ 0.15   look at cur.startLook  (current painting, head-on)
+ *    r ∈ (0.15, 0.35)   blend startLook → focus
+ *    r ∈ (0.35, 0.65)   look at focus  (orbiting the hinge)
+ *    r ∈ (0.65, 0.85)   blend focus → endLook
+ *    r ≥ 0.85   look at cur.endLook  (next painting, head-on)
+ *
+ * Both nulls therefore frame their painting dead centre; only the
+ * middle of the transit routes the gaze through the off-centre hinge.
  */
-function lookTarget(segments, segmentIndex, r) {
-  const cur = segments[segmentIndex];
-  const next = segments[segmentIndex + 1];
-  const from = cur.focus || cur.path[cur.path.length - 1];
-  const to = next?.focus || cur.endLook || cur.path[cur.path.length - 1];
-  const t = THREE.MathUtils.smoothstep(r, 0.6, 0.95);
-  tmpLook.set(
+const tmpA = new THREE.Vector3();
+const tmpB = new THREE.Vector3();
+
+function lerpTo(out, from, to, t) {
+  out.set(
     THREE.MathUtils.lerp(from.x, to.x, t),
     THREE.MathUtils.lerp(from.y, to.y, t),
     THREE.MathUtils.lerp(from.z, to.z, t),
   );
-  return tmpLook;
+  return out;
+}
+
+function lookTarget(segments, segmentIndex, r) {
+  const cur = segments[segmentIndex];
+  const endFallback = cur.path[cur.path.length - 1];
+  const startLook = cur.startLook || cur.path[0];
+  const focus = cur.focus || endFallback;
+  const endLook = cur.endLook || endFallback;
+
+  if (r <= 0.15) return tmpLook.copy(startLook);
+  if (r >= 0.85) return tmpLook.copy(endLook);
+  if (r < 0.35) {
+    return lerpTo(tmpLook, startLook, focus, THREE.MathUtils.smoothstep(r, 0.15, 0.35));
+  }
+  if (r > 0.65) {
+    return lerpTo(tmpLook, focus, endLook, THREE.MathUtils.smoothstep(r, 0.65, 0.85));
+  }
+  return tmpLook.copy(focus);
 }
 
 export default function AnamorphicCam() {
