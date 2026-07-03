@@ -334,7 +334,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   // Shared material for the flat fallback. Created once and updated per-frame
   // so it picks up the same distance fade as the layered shell.
   const fallbackMaterial = useMemo(
-    () => new THREE.MeshBasicMaterial({ toneMapped: false }),
+    () => new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.DoubleSide }),
     [],
   );
   useEffect(() => () => fallbackMaterial.dispose(), [fallbackMaterial]);
