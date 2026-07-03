@@ -132,6 +132,9 @@ public/data/*.json
 public/data/theater/*.painting.webp
 public/data/theater/*.masks.png
 public/data/theater/*.theater.json
+public/data/theater/*.depth.png
+public/data/theater/*.photo.png
+public/data/theater/graph.theater.json
 public/data/theater/_manifest.json
 
 *.example

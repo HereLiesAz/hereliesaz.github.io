@@ -1,8 +1,16 @@
 # HANDOFF — Paper-Theater Rework (2026-07-03)
 
-Session handoff for the in-progress rework on branch
+Session handoff for the rework on branch
 `claude/video-analysis-website-goals-j75jyd`. Read this top to bottom
 before touching anything.
+
+> **Status update:** PR #37 (all code below) was MERGED to main by the
+> user on 2026-07-03. The branch was restarted from the merged main for
+> follow-up work; any further push needs a NEW pull request. Remaining
+> work when this note was written: finish the 3 dark-painting bake
+> (quota-retry loop), run `pareidolia_index.py`, commit the refreshed
+> `_manifest.json` (the merged one is stale — it lists the three removed
+> ids), screenshot pass, show the user.
 
 ## The brief (user directives, in order given)
 
