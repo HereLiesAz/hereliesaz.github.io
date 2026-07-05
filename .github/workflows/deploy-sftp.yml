@@ -102,5 +102,5 @@ jobs:
           # the sshpass/OpenSSH incompatibility we hit earlier.
           lftp -u "$USER_TRIMMED","$PW_TRIMMED" \
             -p "$PORT" \
-            -e "set sftp:auto-confirm yes; set ssl:verify-certificate no; mirror -R --delete --verbose ./main/dist/ $REMOTE_DIR; quit" \
+            -e "set sftp:auto-confirm yes; set ssl:verify-certificate no; mirror -R --verbose ./main/dist/ $REMOTE_DIR; quit" \
             sftp://"$HOST"
