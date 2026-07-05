@@ -1,4 +1,4 @@
-name: Deploy over SFTP
+name: Deploy over FTP
 
 # Mirror the built site to your own host over SFTP (SSH file transfer).
 # Runs on every push to main, and can be fired by hand from the Actions
@@ -102,5 +102,5 @@ jobs:
           # the sshpass/OpenSSH incompatibility we hit earlier.
           lftp -u "$USER_TRIMMED","$PW_TRIMMED" \
             -p "$PORT" \
-            -e "set sftp:auto-confirm yes; set ssl:verify-certificate no; mirror -R --verbose ./main/dist/ $REMOTE_DIR; quit" \
+            -e "set sftp:auto-confirm yes; set ssl:verify-certificate no; mirror -R --delete --verbose ./main/dist/ $REMOTE_DIR; quit" \
             sftp://"$HOST"
