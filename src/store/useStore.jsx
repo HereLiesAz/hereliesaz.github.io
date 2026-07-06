@@ -239,7 +239,12 @@ const useStore = create((set, get) => ({
     const theta = edgeRotY(current.id, tid);
     const qEdge = new THREE.Quaternion().setFromAxisAngle(
       new THREE.Vector3(0, 1, 0), theta);
-    const qB = qA.clone().multiply(qEdge);
+    // Multiply then strip any accumulated X/Z tilt — paintings must be
+    // upright at coalescence. Extract only the Y rotation.
+    const qBraw = qA.clone().multiply(qEdge);
+    const yAngle = new THREE.Euler().setFromQuaternion(qBraw, 'YXZ').y;
+    const qB = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), yAngle);
 
     // Painting A stays where it is (placed by the previous segment's
     // target step, or by setStartNode). Painting B: place at hinge.

@@ -110,11 +110,14 @@ float vnoise(vec2 p) {
 void main() {
   vec3 painting = texture2D(uPainting, vUv).rgb;
 
-  // Chroma-key: kill near-black. BT.709 luma; slight uv-noise threshold
-  // so the edges of dark regions tear organically instead of aliasing.
+  // Chroma-key: kill near-black on cutout flats only (modes 1-2). The
+  // backdrop (mode 0) keeps black pixels opaque so dark painting regions
+  // block whatever is behind — no bleed from other paintings.
   float lum = 0.2126 * painting.r + 0.7152 * painting.g + 0.0722 * painting.b;
-  float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
-  if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
+  if (uMode > 0.5) {
+    float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
+    if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
+  }
 
   if (uMode > 0.5 && uMode < 1.5) {
     // Depth band cutout
