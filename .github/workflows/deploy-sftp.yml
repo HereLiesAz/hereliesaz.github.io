@@ -16,10 +16,9 @@ name: Deploy over FTP
 # Optional repository variables (Settings → Secrets and variables → Actions → Variables):
 #   SFTP_PORT         defaults to 22.
 #   FTP_SERVER_DIR    remote path to mirror the built site into.
-#                     Defaults to /public_html/. If your host serves from
-#                     a subfolder (e.g. /portfolio/), also change `base`
-#                     in vite.config.js to match, or the JS/CSS
-#                     <script>/<link> tags will 404.
+#                     Defaults to / (FTP root = document root on
+#                     Netserver). Override if your host serves from a
+#                     subfolder.
 #
 # The site's baked data lives on the orphan `art-data` branch and is
 # injected into public/data at build time (same pattern as deploy.yml).
@@ -86,7 +85,7 @@ jobs:
           USERNAME: ${{ secrets.FTP_USERNAME }}
           PASSWORD: ${{ secrets.FTP_PASSWORD }}
           PORT: ${{ vars.SFTP_PORT || '22' }}
-          REMOTE_DIR: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
+          REMOTE_DIR: ${{ vars.FTP_SERVER_DIR || '/' }}
         run: |
           set -e
           sudo apt-get install -y lftp
