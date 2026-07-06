@@ -1,3 +1,6 @@
+# Serve index.html, not index.php (overrides server default).
+DirectoryIndex index.html
+
 RewriteEngine On
 
 # If the request is for an existing file or directory, serve it directly.
