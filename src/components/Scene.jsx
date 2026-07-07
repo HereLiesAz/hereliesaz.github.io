@@ -4,6 +4,7 @@ import { ScrollControls, PerspectiveCamera } from '@react-three/drei';
 import { useStore } from '../store/useStore';
 import AnamorphicCam from './AnamorphicCam';
 import TheaterPainting from './TheaterPainting';
+import TexturePreloader from './TexturePreloader';
 
 export default function Scene() {
   const activeClusters = useStore(state => state.activeClusters);
@@ -88,7 +89,9 @@ export default function Scene() {
   const currentSegmentIndex = useStore(state => state.currentSegmentIndex);
 
   return (
-    <Canvas 
+   <>
+    <TexturePreloader />
+    <Canvas
       gl={{ antialias: true, alpha: true }}
       dpr={[1, 2]}
     >
@@ -104,9 +107,18 @@ export default function Scene() {
         <AnamorphicCam />
         <Suspense fallback={null}>
             <group>
+                {/* Only three paintings are ever mounted: the one we're
+                    on (currentSegmentIndex), the one we just left
+                    (−1), and the one we're headed toward (+1). The
+                    scheduled cross-fade already drops a painting to zero
+                    once it's a full segment away, so mounting anything
+                    wider only spends draw calls and texture uploads on
+                    things that are invisible. Neighbours just outside
+                    this window are warmed by <TexturePreloader/> so the
+                    handoff hits cache, not a cold fetch. */}
                 {activeClusters
                     .map((cluster, index) => ({ ...cluster, index }))
-                    .filter(c => c.index >= currentSegmentIndex - 2 && c.index <= currentSegmentIndex + 2)
+                    .filter(c => c.index >= currentSegmentIndex - 1 && c.index <= currentSegmentIndex + 1)
                     .map((cluster) => (
                         <TheaterPainting
                             key={`${cluster.id}-${cluster.index}`}
@@ -122,5 +134,6 @@ export default function Scene() {
         </Suspense>
       </ScrollControls>
     </Canvas>
+   </>
   );
 }

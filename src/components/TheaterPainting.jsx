@@ -35,7 +35,7 @@ const BACKDROP_OVERSCAN = 1.08;
 // ---- module-level fetch caches ----------------------------------------------
 
 const theaterMetaCache = new Map();
-function fetchTheaterMeta(id) {
+export function fetchTheaterMeta(id) {
   if (!id) return Promise.resolve(null);
   const hit = theaterMetaCache.get(id);
   if (hit) return hit;
