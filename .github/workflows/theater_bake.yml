@@ -28,12 +28,15 @@ on:
         description: "Comma-separated painting ids (filename stems in public/assets) to bake. Blank = the DEFAULT_IDS batch."
         required: false
         default: ""
-  # Pushing a change to THIS file kicks off a bake of DEFAULT_IDS. That is
-  # how the batch runs before the workflow reaches the default branch
-  # (workflow_dispatch only lists once it's on the default branch).
+  # Pushing a change to THIS file — or to the hand-authored crop boxes —
+  # kicks off a bake of DEFAULT_IDS. That is how the batch runs before the
+  # workflow reaches the default branch (workflow_dispatch only lists once
+  # it's on the default branch). A crop-box change is picked up per-id by the
+  # baker's crop-change detection, so only the moved crops re-photorealize.
   push:
     paths:
       - '.github/workflows/theater_bake.yml'
+      - 'scripts/crops.json'
 
 concurrency:
   group: theater-bake

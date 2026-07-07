@@ -80,6 +80,43 @@ except Exception as _heif_exc:  # pragma: no cover - environment dependent
           file=sys.stderr)
 
 
+# Hand-authored per-image crop boxes that isolate the artwork from its
+# wall / floor / room. Keyed by image id; each value is a normalized
+# [x0, y0, x1, y1] box, or null to keep the whole image. Ids with no entry
+# fall back to the crop_to_art heuristic. Lives beside this script so the CI
+# bake reads it straight from the checkout.
+_CROPS_PATH = Path(__file__).resolve().parent / "crops.json"
+try:
+    MANUAL_CROPS = json.loads(_CROPS_PATH.read_text()) if _CROPS_PATH.exists() else {}
+except Exception as _crop_exc:  # pragma: no cover - environment dependent
+    print(f"[~] could not read {_CROPS_PATH.name} ({_crop_exc!r}); heuristic crop only",
+          file=sys.stderr)
+    MANUAL_CROPS = {}
+
+
+def crop_directive(pid: str):
+    """The crop directive for `pid`: a normalized box list, None (keep the
+    whole image), or the string 'heuristic' when there is no hand entry."""
+    return MANUAL_CROPS[pid] if pid in MANUAL_CROPS else "heuristic"
+
+
+def apply_crop(rgb: np.ndarray, pid: str) -> np.ndarray:
+    """Crop `rgb` to just the artwork: the hand-authored box when present,
+    else the saturation/structure heuristic; None means keep the whole."""
+    box = crop_directive(pid)
+    if box == "heuristic":
+        return crop_to_art(rgb)
+    if box is None:
+        return rgb
+    h, w = rgb.shape[:2]
+    x0, y0, x1, y1 = box
+    x0i, x1i = max(0, min(int(round(x0 * w)), w - 1)), max(1, min(int(round(x1 * w)), w))
+    y0i, y1i = max(0, min(int(round(y0 * h)), h - 1)), max(1, min(int(round(y1 * h)), h))
+    if x1i <= x0i or y1i <= y0i:
+        return rgb
+    return rgb[y0i:y1i, x0i:x1i]
+
+
 # ---- tuning knobs -----------------------------------------------------------
 
 DEFAULT_MAX_SIDE = 768                     # depth Space caps at ~768 long edge
@@ -505,13 +542,24 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     out_json     = out_dir / f"{pid}.theater.json"
 
     # -- stage A: crop / resize -------------------------------------------------
-    # The existing painting.webp is the canonical cropped painting: reuse it
-    # so a re-bake of later stages stays pixel-aligned with what's deployed.
-    if out_painting.exists() and not force:
+    # A hand-authored crop box (crops.json) isolates the artwork from its
+    # wall/floor/room. The applied directive is recorded in the theater.json,
+    # so a re-bake re-crops (and re-derives the now-misaligned depth) ONLY for
+    # ids whose box changed — no blanket --force when a few crops move.
+    directive = crop_directive(pid)
+    prev_directive = "MISSING"
+    if out_json.exists():
+        try:
+            prev_directive = json.loads(out_json.read_text()).get("crop", "MISSING")
+        except Exception:
+            pass
+    crop_changed = prev_directive != directive
+
+    if out_painting.exists() and not force and not crop_changed:
         rgb = np.array(Image.open(out_painting).convert("RGB"))
     else:
         rgb = np.array(Image.open(path).convert("RGB"))
-        rgb = crop_to_art(rgb)
+        rgb = apply_crop(rgb, pid)
         h, w = rgb.shape[:2]
         scale = min(1.0, max_side / max(h, w))
         if scale < 1.0:
@@ -527,7 +575,7 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     # a reliable local depth model is the primary path.
     depth = None
     source = None
-    if out_depth.exists() and not force:
+    if out_depth.exists() and not force and not crop_changed:
         cached_source = "photo+depth-anything-v2"
         if out_json.exists():
             try:
@@ -572,6 +620,10 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
         "schema": 2,
         "id":     pid,
         "src":    {"image": path.name, "width": w, "height": h},
+        # The crop directive applied in stage A (normalized box, null for
+        # keep-whole, or "heuristic"). Recorded so a re-bake can detect when a
+        # box changed and re-crop + re-derive depth for just that id.
+        "crop":   directive,
         "depth":  {
             "source": source,
             "file":   out_depth.name,
