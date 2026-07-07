@@ -196,25 +196,24 @@ function buildFlats(meta) {
   // scales are what create the "layers exploded outward" look.
   const persp = (z) => (NULL_DISTANCE - z) / NULL_DISTANCE;
 
-  // Backdrop — the whole painting at the origin plane. Slightly overscaled
-  // so lateral parallax never exposes its frame edge behind the cutouts.
-  flats.push({
-    kind: 'backdrop',
-    mode: 0,
-    z: 0,
-    scale: BACKDROP_OVERSCAN * persp(0),
-    planeWidth, planeHeight,
-    bandMin: 0, bandMax: 1,
-    colorIdx: -1,
-  });
-
+  // NO backdrop. A full-painting backdrop under the cutouts means the
+  // whole image is ALWAYS assembled — it reads as "revealed" even
+  // off-axis, before the depth layers have actually converged (the
+  // premature reveal). Likewise there is NO separate colour partition:
+  // colour flats are a second complete copy of the painting stacked over
+  // the depth copy, another redundant overlap. The painting is now drawn
+  // exactly ONCE, split across depth bands only — so it coheres solely
+  // from the layers reassembling at the null, and dissolves into
+  // separate cut-paper shards the moment the camera leaves.
   const depthCenters = meta?.depth?.bands?.centers || [];
   const depthEdges   = meta?.depth?.bands?.edges   || [];
 
   const nDepth = depthCenters.length;
-  // Front-half depth flat z-positions, in band order.
+  // One flat per band, covering the FULL depth range [0,1] with no gaps
+  // and no overlap — the rear band (0) sits at the origin plane where the
+  // backdrop used to be; the nearest band sits fully forward.
   const depthZs = [];
-  for (let i = 1; i < nDepth; i++) {
+  for (let i = 0; i < nDepth; i++) {
     depthZs.push(SHELL_HALF_DEPTH * (i / Math.max(1, nDepth - 1)));
   }
   // Back-half positions: a deterministic permutation of the front zs so
@@ -224,7 +223,7 @@ function buildFlats(meta) {
   const depthPerm = shufflePerId(depthZs.map((_, i) => i), meta?.id + ':d');
 
   for (let i = 0; i < depthZs.length; i++) {
-    const bandIdx = i + 1;  // depthCenters index
+    const bandIdx = i;  // band [edges[i], edges[i+1]); depthCenters index
     // Front (assembles cleanly at the null)
     flats.push({
       kind: 'depth',
@@ -247,36 +246,6 @@ function buildFlats(meta) {
       bandMin: depthEdges[bandIdx],
       bandMax: depthEdges[bandIdx + 1],
       colorIdx: -1,
-    });
-  }
-
-  const colorCenters = meta?.color?.centers || [];
-  const nColor = colorCenters.length;
-  const colorZs = [];
-  for (let i = 0; i < nColor; i++) {
-    colorZs.push(SHELL_HALF_DEPTH * ((i + 0.5) / nColor) * 0.85 + 0.15);
-  }
-  const colorPerm = shufflePerId(colorZs.map((_, i) => i), meta?.id + ':c');
-
-  for (let i = 0; i < nColor; i++) {
-    flats.push({
-      kind: 'color',
-      mode: 2,
-      z: colorZs[i],
-      scale: persp(colorZs[i]),
-      planeWidth, planeHeight,
-      bandMin: 0, bandMax: 1,
-      colorIdx: i,
-    });
-    const zBack = -colorZs[colorPerm[i]];
-    flats.push({
-      kind: 'color-mirror',
-      mode: 2,
-      z: zBack,
-      scale: persp(zBack),
-      planeWidth, planeHeight,
-      bandMin: 0, bandMax: 1,
-      colorIdx: i,
     });
   }
 

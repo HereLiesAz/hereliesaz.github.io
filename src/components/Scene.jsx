@@ -102,8 +102,10 @@ export default function Scene() {
       <ambientLight intensity={0.5} />
       <pointLight position={[10, 10, 10]} intensity={1} />
       
-      {/* 100 pages = 25 artworks at 4 pages/each */}
-      <ScrollControls pages={100} damping={0.12}>
+      {/* 250 pages = 25 segments at 10 pages/each (see PAGES_PER_SEGMENT
+          in AnamorphicCam). Long per-segment scroll: deliberate scrub +
+          load head-room. */}
+      <ScrollControls pages={250} damping={0.12}>
         <AnamorphicCam />
         <Suspense fallback={null}>
             <group>
