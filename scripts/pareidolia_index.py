@@ -69,6 +69,11 @@ W_DEPTH  = 0.15
 
 
 def _norm01(x: np.ndarray) -> np.ndarray:
+    # Normalise in float64 (via the float() casts). Staying in float32
+    # was suggested for efficiency but measurably shifts the match
+    # results on this data — near-tie fulcrums flip, and one edge slides
+    # off the portrait's face. Precision matters more than the (trivial,
+    # 3-painting) perf here.
     mn, mx = float(x.min()), float(x.max())
     return (x - mn) / (mx - mn) if mx - mn > 1e-6 else np.zeros_like(x)
 
@@ -165,6 +170,11 @@ def best_hinge(a: dict, b: dict) -> dict | None:
                 cc = (W_COLOR * cv2.matchTemplate(b["lab"], patch_lab, cv2.TM_CCOEFF_NORMED)
                       + W_STRUCT * cv2.matchTemplate(b["grad"], patch_grd, cv2.TM_CCOEFF_NORMED)
                       + W_DEPTH * cv2.matchTemplate(b["depth"], patch_dep, cv2.TM_CCOEFF_NORMED))
+                # TM_CCOEFF_NORMED divides by window variance; a flat
+                # template or target window (common in the gradient
+                # channel over solid regions) yields NaN/inf. Zero them so
+                # minMaxLoc can't lock onto an invalid location.
+                np.nan_to_num(cc, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
                 # Bias the location search toward B regions that are
                 # themselves salient — the fulcrum must be a feature on
@@ -179,7 +189,7 @@ def best_hinge(a: dict, b: dict) -> dict | None:
                 # saliency of the two endpoints.
                 score = max(0.0, sim) * float(np.sqrt(max(sal_a, 1e-6) * max(sal_b, 1e-6)))
 
-                if best is None or score > best["_score"]:
+                if score > 0.0 and (best is None or score > best["_score"]):
                     best = {
                         "_score": score,
                         "weight": round(score, 4),
