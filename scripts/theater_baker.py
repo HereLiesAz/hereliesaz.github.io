@@ -279,6 +279,46 @@ def synth_depth(rgb: np.ndarray) -> np.ndarray:
     return (depth - mn) / (mx - mn)
 
 
+_depth_pipe = None
+_depth_local_disabled = False
+
+def estimate_depth_local(rgb: np.ndarray) -> np.ndarray | None:
+    """Depth-Anything-V2 run LOCALLY on CPU via transformers/torch. This
+    is the primary depth path: unlike the hosted Space it has no rate
+    limit and no shared-quota kill switch, so a batch of paintings all get
+    real depth instead of the first few succeeding and the rest silently
+    degrading. Returns HxW float32 in [0,1] (higher = closer), or None if
+    torch/transformers/the model can't be loaded (then callers fall back
+    to the Space, then to synthetic)."""
+    global _depth_pipe, _depth_local_disabled
+    if _depth_local_disabled:
+        return None
+    try:
+        if _depth_pipe is None:
+            from transformers import pipeline
+            _depth_pipe = pipeline(
+                "depth-estimation",
+                model="depth-anything/Depth-Anything-V2-Small-hf",
+                device=-1)
+        out = _depth_pipe(Image.fromarray(rgb))
+        # Depth-Anything predicts disparity (higher = closer), which is
+        # exactly our convention. The "depth" PIL is that map, normalised.
+        d = np.array(out["depth"]).astype(np.float32)
+        if d.ndim == 3:
+            d = d[..., 0]
+        if d.shape[:2] != rgb.shape[:2]:
+            d = cv2.resize(d, (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
+        mn, mx = float(d.min()), float(d.max())
+        if mx - mn < 1e-6:
+            return np.zeros_like(d)
+        return (d - mn) / (mx - mn)
+    except Exception as e:
+        print(f"[~] local depth model unavailable "
+              f"({type(e).__name__}: {e}); falling back to Space", file=sys.stderr)
+        _depth_local_disabled = True
+        return None
+
+
 _depth_disabled = False
 
 def estimate_depth(rgb: np.ndarray) -> np.ndarray | None:
@@ -471,26 +511,33 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     h, w = rgb.shape[:2]
 
     # -- stages B+C: photorealize, then depth ------------------------------------
+    # Reuse a cached map only if it was a REAL one. A cached "synthetic"
+    # map is the flat emergency stand-in from a failed run; trusting it
+    # would permanently freeze a painting as flat, so we redo it now that
+    # a reliable local depth model is the primary path.
+    depth = None
+    source = None
     if out_depth.exists() and not force:
-        depth = load_depth_png(out_depth, (h, w))
-        # Provenance of a cached map isn't recoverable from pixels; trust the
-        # existing json if it has it, else assume the photo chain (cached maps
-        # are only ever written by the branches below).
-        source = "photo+depth-anything-v2"
+        cached_source = "photo+depth-anything-v2"
         if out_json.exists():
             try:
-                source = json.loads(out_json.read_text())["depth"]["source"]
+                cached_source = json.loads(out_json.read_text())["depth"]["source"]
             except Exception:
                 pass
-    else:
+        if cached_source != "synthetic":
+            depth = load_depth_png(out_depth, (h, w))
+            source = cached_source
+
+    if depth is None:
         photo = photorealize(rgb, out_photo)
-        if photo is not None:
-            depth = estimate_depth(photo)
-            source = "photo+depth-anything-v2"
-        else:
-            depth = estimate_depth(rgb)
-            source = "depth-anything-v2"
+        src_img = photo if photo is not None else rgb
+        # Local Depth-Anything first (reliable), Space second, synth last.
+        depth = estimate_depth_local(src_img)
         if depth is None:
+            depth = estimate_depth(src_img)
+        if depth is not None:
+            source = "photo+depth-anything-v2" if photo is not None else "depth-anything-v2"
+        else:
             depth = synth_depth(rgb)
             source = "synthetic"
         save_depth_png(depth, out_depth)
