@@ -93,6 +93,12 @@ uniform float uRole;
 uniform vec2  uPatchUv;
 uniform float uPatchR;
 uniform float uReveal;
+// Shard-wipe reveal. uWipe (0..1) is how much of the painting is currently
+// revealed. The painting is wiped in from one edge as uWipe climbs 0->1 and
+// wiped back out as it falls 1->0 — full-strength where revealed, void
+// beyond the moving boundary. That boundary rides a passing shard so its
+// edge is hidden; the art assembles into place instead of fading up.
+uniform float uWipe;
 varying vec2 vUv;
 
 float hash(vec2 p) {
@@ -146,28 +152,36 @@ void main() {
     if (best != int(uColorIdx + 0.5)) discard;
   }
 
-  // Fulcrum reveal. Default opacity is the scheduled fade.
-  float op = uFade;
+  // Base opacity is the fly-through dissolve only (uFade); the LIFESPAN is
+  // now carried by the wipe, not by dimming — so revealed pixels are always
+  // full-strength (no ghostly semi-transparent cross-fade).
+  // Shard-wipe: reveal pixels on the near side of the moving boundary. The
+  // boundary sweeps left->right as uWipe grows and retreats as it falls; a
+  // little uv-noise tears its edge so it reads as torn paper, not a razor.
+  // Remap the boundary to [-0.1, 1.1] so uWipe=1 clears the whole painting
+  // (no right-edge clip at coalescence) and uWipe=0 fully hides it — the
+  // noise jitter + smoothstep band can't leak past either extreme.
+  float wipeAt = mix(-0.1, 1.1, uWipe);
+  float wipeEdge = wipeAt + (vnoise(vUv * 40.0) - 0.5) * 0.06;
+  float wipeGate = 1.0 - smoothstep(wipeEdge - 0.04, wipeEdge + 0.04, vUv.x);
+  float op = uFade * wipeGate;
+
   if (uRole > 1.5) {
-    // Incoming painting. Distance from this pixel to the fulcrum patch.
+    // Incoming painting. Hold the fulcrum patch present (camouflaged as part
+    // of the outgoing image) even before the wipe reaches it, unfurling
+    // outward from that patch as uReveal climbs.
     float dp = distance(vUv, uPatchUv);
-    // The reveal front expands from the patch (uPatchR) to cover the
-    // whole canvas (~1.6 diag) as uReveal climbs.
     float front = mix(uPatchR, 1.6, uReveal);
     float revealed = 1.0 - smoothstep(front - 0.14, front, dp);
-    // Inside the patch the painting is present even before its own fade
-    // lifts — faint at first (camouflaged as part of the outgoing image),
-    // resolving to full as the segment progresses.
     float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
     float presence = inPatch * mix(0.5, 1.0, uReveal);
-    op = max(uFade, presence) * revealed;
+    op = max(op, uFade * presence * revealed);
   } else if (uRole > 0.5) {
-    // Outgoing painting: hold the fulcrum patch a beat longer than the
-    // rest so the shared spot is continuously occupied as it hands off
-    // to the incoming painting's patch.
+    // Outgoing painting: hold the fulcrum patch a beat longer than the rest
+    // so the shared spot stays occupied as it hands off to the incoming one.
     float dp = distance(vUv, uPatchUv);
     float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
-    op = max(uFade, inPatch * (1.0 - uReveal));
+    op = max(op, uFade * inPatch * (1.0 - uReveal));
   }
 
   gl_FragColor = vec4(painting * op, 1.0);
@@ -377,6 +391,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       uPatchUv:       { value: new THREE.Vector2(0.5, 0.5) },
       uPatchR:        { value: 0.14 },
       uReveal:        { value: 0 },
+      uWipe:          { value: 1 },
     },
   })), [flats, colorCentersUniform, nColorCenters]);
 
@@ -485,12 +500,26 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     const st = useStore.getState();
     const T = st.currentSegmentIndex + st.transitionProgress;
     const d = T - mySegmentIndex;
-    // Triangle peaking at d=0, zero at |d|>=1, smoothstepped crossover.
-    const fade = Math.abs(d) >= 1
+    // Asymmetric lifespan. Born at d=-1, coalescence (peak) at d=0, gone by
+    // d=+FALL (2/3). Consecutive paintings are staggered by 3/5 of a
+    // lifespan, so at THIS painting's coalescence the previous one has just
+    // died (it reached its d=+2/3 exactly as we hit d=0) and the next is
+    // only now being born — the peak stands alone. Rise spans a full
+    // segment; fall spans two-thirds, biasing coalescence to 3/5.
+    const FALL = 2 / 3;
+    const fade = d <= -1 || d >= FALL
       ? 0.0
       : (d < 0
           ? THREE.MathUtils.smoothstep(d, -1, 0)
-          : 1.0 - THREE.MathUtils.smoothstep(d, 0, 1));
+          : 1.0 - THREE.MathUtils.smoothstep(d, 0, FALL));
+    // Lifespan phase 0..1 with coalescence at 0.6 — the clock the shard-wipe
+    // reveal runs on. The wipe grows 0->1 while the painting comes in (phase
+    // 0->0.6) and retreats 1->0 as it leaves (0.6->1), so the art is wiped
+    // into place and wiped back out rather than dimmed through.
+    const phase = THREE.MathUtils.clamp((d + 1) / (1 + FALL), 0, 1);
+    const wipeReveal = phase < 0.6
+      ? THREE.MathUtils.smoothstep(phase, 0.0, 0.6)
+      : 1.0 - THREE.MathUtils.smoothstep(phase, 0.6, 1.0);
 
     // Fulcrum role for the ACTIVE segment. This painting is the outgoing
     // (start) painting of segment cur, and the incoming (end) painting of
@@ -525,7 +554,10 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
         ? 1.0
         : Math.min(Math.abs(localCamPos.z - F.z) / CROSS_FADE, 1.0);
       const U = flatMaterials[i].uniforms;
-      U.uFade.value = fade * cross;
+      // uFade now carries ONLY the fly-through dissolve; the lifespan is the
+      // wipe. When the painting is dead (wipeReveal 0) nothing shows.
+      U.uFade.value = cross;
+      U.uWipe.value = wipeReveal;
       U.uRole.value = role;
       U.uReveal.value = reveal;
       if (patch) U.uPatchUv.value.set(patch[0], patch[1]);
