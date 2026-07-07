@@ -83,6 +83,16 @@ uniform float uColorIdx;
 uniform vec3  uColorCenters[16];
 uniform float uNColorCenters;
 uniform float uFade;
+// Fulcrum reveal. uRole: 0 = not in the active segment (plain uFade),
+// 1 = the outgoing painting, 2 = the incoming painting. uPatchUv is this
+// painting's hinge patch (the matched fulcrum) in uv; uPatchR its radius.
+// uReveal (0..1) grows over the segment: the incoming painting is shown
+// ONLY inside its fulcrum patch at uReveal=0 — camouflaged, "already
+// there" — and unfurls outward from that patch as uReveal→1.
+uniform float uRole;
+uniform vec2  uPatchUv;
+uniform float uPatchR;
+uniform float uReveal;
 varying vec2 vUv;
 
 float hash(vec2 p) {
@@ -136,7 +146,31 @@ void main() {
     if (best != int(uColorIdx + 0.5)) discard;
   }
 
-  gl_FragColor = vec4(painting * uFade, 1.0);
+  // Fulcrum reveal. Default opacity is the scheduled fade.
+  float op = uFade;
+  if (uRole > 1.5) {
+    // Incoming painting. Distance from this pixel to the fulcrum patch.
+    float dp = distance(vUv, uPatchUv);
+    // The reveal front expands from the patch (uPatchR) to cover the
+    // whole canvas (~1.6 diag) as uReveal climbs.
+    float front = mix(uPatchR, 1.6, uReveal);
+    float revealed = 1.0 - smoothstep(front - 0.14, front, dp);
+    // Inside the patch the painting is present even before its own fade
+    // lifts — faint at first (camouflaged as part of the outgoing image),
+    // resolving to full as the segment progresses.
+    float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
+    float presence = inPatch * mix(0.5, 1.0, uReveal);
+    op = max(uFade, presence) * revealed;
+  } else if (uRole > 0.5) {
+    // Outgoing painting: hold the fulcrum patch a beat longer than the
+    // rest so the shared spot is continuously occupied as it hands off
+    // to the incoming painting's patch.
+    float dp = distance(vUv, uPatchUv);
+    float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
+    op = max(uFade, inPatch * (1.0 - uReveal));
+  }
+
+  gl_FragColor = vec4(painting * op, 1.0);
 }
 `;
 
@@ -370,6 +404,10 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       uColorCenters:  { value: colorCentersUniform },
       uNColorCenters: { value: nColorCenters },
       uFade:          { value: 0 },
+      uRole:          { value: 0 },
+      uPatchUv:       { value: new THREE.Vector2(0.5, 0.5) },
+      uPatchR:        { value: 0.14 },
+      uReveal:        { value: 0 },
     },
   })), [flats, colorCentersUniform, nColorCenters]);
 
@@ -458,13 +496,15 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   // painting (index i = mySegmentIndex) coalesces at T = i — it is the
   // "from" of segment i and the "to" of segment i-1, and at that instant
   // it must be the ONLY thing on screen. Let d = T - i:
-  //   d = 0    → full (its own null; every other painting is at 0)
+  //   d = 0    → full (its own null)
   //   d = ±1   → zero (a neighbour's null)
   //   between  → cross-fade; at |d| = 0.5 both segment paintings sit at
   //              ~0.5 and interleave — the "emerging from within" moment.
   // So the two paintings of the active segment cross-fade and everything
-  // else is fully dark. At each null, exactly one painting is drawn, and
-  // its black regions are transparent onto the black background.
+  // else is fully dark. This is the GLOBAL body of each painting; the
+  // fulcrum reveal below overrides it at the matched patch so the
+  // incoming painting is already present there (camouflaged) before its
+  // body fades up — that's the "it was sitting there the whole time".
   //
   // Cross-fade: when the camera is close (in the group's local frame) to
   // one of a flat's local-z faces, dissolve that flat so it doesn't clip
@@ -483,6 +523,29 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
           ? THREE.MathUtils.smoothstep(d, -1, 0)
           : 1.0 - THREE.MathUtils.smoothstep(d, 0, 1));
 
+    // Fulcrum role for the ACTIVE segment. This painting is the outgoing
+    // (start) painting of segment cur, and the incoming (end) painting of
+    // segment cur-1. The reveal only matters for the active segment:
+    //   role 1 = outgoing (hold its patch as it dissolves)
+    //   role 2 = incoming (unfurl from its patch)
+    const cur = st.currentSegmentIndex;
+    const seg = st.segments[cur];
+    const r = st.transitionProgress;
+    let role = 0, patch = null, reveal = 0;
+    if (seg) {
+      if (mySegmentIndex === cur) {
+        role = 1;               // outgoing
+        patch = seg.sUv;
+        reveal = THREE.MathUtils.clamp(r, 0, 1);
+      } else if (mySegmentIndex === cur + 1) {
+        role = 2;               // incoming
+        patch = seg.tUv;
+        // Fully unfurled a touch before the null so it's settled when the
+        // camera arrives.
+        reveal = THREE.MathUtils.clamp(r / 0.85, 0, 1);
+      }
+    }
+
     // Camera position in the painting's local frame (undoes the group's
     // rotation and position). Cross-fade uses the local z.
     groupRef.current.worldToLocal(localCamPos.copy(camera.position));
@@ -492,7 +555,11 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       const cross = F.kind === 'backdrop'
         ? 1.0
         : Math.min(Math.abs(localCamPos.z - F.z) / CROSS_FADE, 1.0);
-      flatMaterials[i].uniforms.uFade.value = fade * cross;
+      const U = flatMaterials[i].uniforms;
+      U.uFade.value = fade * cross;
+      U.uRole.value = role;
+      U.uReveal.value = reveal;
+      if (patch) U.uPatchUv.value.set(patch[0], patch[1]);
     }
     fallbackMaterial.color.setScalar(fade);
   });

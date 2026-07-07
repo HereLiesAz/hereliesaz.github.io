@@ -324,14 +324,23 @@ const useStore = create((set, get) => ({
       .add(nullOffsetLocal(tid).applyQuaternion(qB));
 
     // The hinge focus — where both paintings' shared patches sit in
-    // world space (H, marching down the chain).
+    // world space (H, marching down the chain). The camera LOOKS at H
+    // throughout the dive so the fulcrum stays centred.
     const focus = H.clone();
+
+    // But it dives to a point just IN FRONT of the hinge (along the mean
+    // of the two paintings' normals), not onto it — otherwise the camera
+    // embeds in the backdrop plane and one magnified texture washes the
+    // frame. A few units out keeps it immersed in the shards, looking at
+    // the fulcrum, without clipping through the flat.
+    const avgNormal = aNormal.clone().add(bNormal).normalize();
+    const diveTarget = H.clone().addScaledVector(avgNormal, 3.2);
 
     // A's plane centre in world (look target at r=0) and B's (at r=1).
     const startLook = aPosVec.clone();
     const endLook   = bPosVec.clone();
 
-    const path = divePath(startPoint, endPoint, focus, 11);
+    const path = divePath(startPoint, endPoint, diveTarget, 11);
 
     const newSegment = {
       path,
@@ -340,6 +349,12 @@ const useStore = create((set, get) => ({
       focus,
       startLook,
       endLook,
+      // Fulcrum patch uvs: the outgoing painting's matched patch (sUv)
+      // and the incoming painting's matched patch (tUv). The renderer
+      // uses these to keep the shared spot occupied and to unfurl the
+      // incoming painting outward from it.
+      sUv: aSuv,
+      tUv: edge.t_uv || [0.5, 0.5],
     };
 
     set({
