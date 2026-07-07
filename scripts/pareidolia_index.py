@@ -2,24 +2,29 @@
 """
 pareidolia_index.py — transition-fulcrum matcher over painting + depth.
 
-"Pareidolia" here is shorthand, not face detection: a hinge is a patch
-that can read as part of BOTH the previous and the next painting's
-subject at the same time. During a transition the camera dives into
-painting A's hinge patch and pulls out to find the same region already
-serving as part of painting B — the viewer never sees a cut.
+"Pareidolia" here is shorthand, NOT face detection: a hinge is a patch
+that reads as part of BOTH the previous and the next painting at the
+same time — a spot the eye rests on in each composition, structurally
+alike enough that one form becomes the other without a visible cut.
+During a transition the camera dives into painting A's hinge patch and
+pulls out to find that same region already serving as part of painting
+B; the viewer never registers the swap. The subject can be anything (a
+face, a shape, a mass of colour) — some paintings have no figure at all.
 
-For each ordered pair of baked paintings the matcher searches for the
-best shared patch:
+For each ordered pair (A, B) the matcher searches for the patch that is
+simultaneously:
 
-  1. Both paintings are downscaled and converted to LAB; their depth
-     maps ride along as a second matching channel.
-  2. Square patches are sampled from A on a grid at several scales.
-     Flat, featureless patches are skipped (they'd match anything and
-     hinge on nothing).
-  3. Each candidate is template-matched against B (normalised
-     cross-correlation) in LAB and in depth; the combined score is
-     0.7 * colour + 0.3 * depth.
-  4. The best (patch, location) pair per (A, B) becomes an edge.
+  1. SALIENT in A — a feature the eye actually lands on, not flat field.
+     Saliency = local contrast + edge energy + colour distinctiveness.
+  2. SIMILAR to some region of B — matched on colour (LAB) AND on
+     gradient structure (so shapes align, not just palettes), with depth
+     as a light third channel.
+  3. SALIENT in B at the matched spot — the fulcrum has to be a feature
+     in BOTH paintings, or the reveal lands on empty background.
+
+The final score multiplies structural similarity by the mutual saliency
+of the two endpoints, so a hinge is only strong when it is a resonant
+feature on each side. The best (patch, location) per (A, B) is one edge.
 
 Inputs:   public/data/theater/{id}.painting.webp
           public/data/theater/{id}.depth.png
@@ -52,11 +57,93 @@ import numpy as np
 from PIL import Image
 
 WORK_LONG_EDGE = 256                  # matching resolution
-PATCH_SCALES   = (0.22, 0.32, 0.45)   # patch edge / min(painting dims)
-GRID_STEPS     = 7                    # candidate grid per axis
-MIN_STD_LAB    = 6.0                  # skip featureless patches (LAB std floor)
-COLOR_WEIGHT   = 0.7
-DEPTH_WEIGHT   = 0.3
+PATCH_SCALES   = (0.20, 0.30, 0.42)   # patch edge / min(painting dims)
+GRID_STEPS     = 9                    # candidate grid per axis
+MIN_SALIENCY   = 0.18                 # skip A-patches below this mean saliency
+
+# Similarity is a blend of channels; structure carries real weight so the
+# fulcrum's SHAPE lines up, not just its colour.
+W_COLOR  = 0.45
+W_STRUCT = 0.40
+W_DEPTH  = 0.15
+
+
+def _norm01(x: np.ndarray) -> np.ndarray:
+    # Normalise in float64 (via the float() casts). Staying in float32
+    # was suggested for efficiency but measurably shifts the match
+    # results on this data — near-tie fulcrums flip, and one edge slides
+    # off the portrait's face. Precision matters more than the (trivial,
+    # 3-painting) perf here.
+    mn, mx = float(x.min()), float(x.max())
+    return (x - mn) / (mx - mn) if mx - mn > 1e-6 else np.zeros_like(x)
+
+
+def spectral_residual(gray: np.ndarray) -> np.ndarray:
+    """Hou & Zhang spectral-residual saliency — the algorithm behind
+    cv2.saliency.StaticSaliencySpectralResidual, reimplemented so it runs
+    with only base OpenCV/NumPy (no opencv-contrib). Isolates the
+    salient object far better than a linear contrast/edge blend."""
+    h, w = gray.shape[:2]
+    small = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32)
+    f = np.fft.fft2(small)
+    log_amp = np.log(np.abs(f) + 1e-8)
+    phase = np.angle(f)
+    residual = log_amp - cv2.blur(log_amp, (3, 3))
+    recon = np.fft.ifft2(np.exp(residual + 1j * phase))
+    sal = np.abs(recon) ** 2
+    sal = cv2.GaussianBlur(sal, (0, 0), sigmaX=2.5)
+    sal = cv2.resize(sal, (w, h), interpolation=cv2.INTER_CUBIC)
+    return _norm01(sal)
+
+
+def saliency_map(rgb_s: np.ndarray, lab: np.ndarray) -> np.ndarray:
+    """Where the eye lands. Spectral-residual saliency (isolates the
+    subject) reinforced by colour distinctiveness, which matters for
+    these dark, colour-charged paintings. Returned normalised to 0..1."""
+    gray = cv2.cvtColor(rgb_s, cv2.COLOR_RGB2GRAY).astype(np.float32)
+
+    spec = spectral_residual(gray)
+
+    # Colour distinctiveness: distance in LAB from the image's mean colour.
+    lab_mean = lab.reshape(-1, 3).mean(axis=0)
+    color_dev = _norm01(np.linalg.norm(lab - lab_mean, axis=2))
+
+    sal = 0.65 * spec + 0.35 * color_dev
+    sal = cv2.GaussianBlur(sal, (0, 0), sigmaX=2.0)
+    return _norm01(sal)
+
+
+def subject_mask(sal: np.ndarray) -> np.ndarray:
+    """Soft mask of the painting's dominant subject: the largest blob of
+    high saliency. Paintings with a clear figure (a face, a sign) get a
+    tight mask; textural paintings with no single subject get a diffuse
+    one — in which case the matcher just leans on general saliency. Pure
+    OpenCV; CI-safe."""
+    thr = float(np.quantile(sal, 0.80))
+    binary = (sal >= thr).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if n <= 1:
+        return _norm01(cv2.GaussianBlur(sal, (0, 0), sigmaX=6.0))
+    # Largest component by area, ignoring the background label 0.
+    biggest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    mask = (labels == biggest).astype(np.float32)
+    # Grow + feather so the subject reads as a soft region, not a hard cut.
+    k = max(3, int(round(0.04 * max(sal.shape))) | 1)
+    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=max(sal.shape) * 0.03)
+    # Keep a saliency floor everywhere so a diffuse-subject painting still
+    # matches sensibly rather than being forced onto one blob.
+    return _norm01(np.maximum(mask, 0.25 * sal))
+
+
+def window_mean(img: np.ndarray, ps: int) -> np.ndarray:
+    """Mean of every ps×ps window, aligned to cv2.matchTemplate output
+    indexing (result[y,x] ↔ window with top-left (x,y))."""
+    ii = cv2.integral(img.astype(np.float32))
+    h, w = img.shape[:2]
+    s = (ii[ps:h + 1, ps:w + 1] - ii[0:h - ps + 1, ps:w + 1]
+         - ii[ps:h + 1, 0:w - ps + 1] + ii[0:h - ps + 1, 0:w - ps + 1])
+    return s / float(ps * ps)
 
 
 def load_painting(data_dir: Path, pid: str) -> dict:
@@ -69,15 +156,29 @@ def load_painting(data_dir: Path, pid: str) -> dict:
     size = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
     rgb_s = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
     depth_s = cv2.resize(depth, size, interpolation=cv2.INTER_AREA)
-    mn, mx = float(depth_s.min()), float(depth_s.max())
-    depth_s = (depth_s - mn) / (mx - mn) if mx - mn > 1e-6 else np.zeros_like(depth_s)
+    depth_s = _norm01(depth_s)
     lab = cv2.cvtColor(rgb_s, cv2.COLOR_RGB2LAB).astype(np.float32)
-    return {"id": pid, "w": w, "h": h, "lab": lab,
-            "depth": (depth_s * 255.0).astype(np.float32)}
+
+    # Gradient-magnitude channel for structural matching.
+    gray = cv2.cvtColor(rgb_s, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    grad = _norm01(np.sqrt(gx * gx + gy * gy)) * 255.0
+
+    sal = saliency_map(rgb_s, lab)
+    return {
+        "id": pid, "w": w, "h": h,
+        "lab": lab,
+        "grad": grad.astype(np.float32),
+        "depth": (depth_s * 255.0).astype(np.float32),
+        "sal": sal,
+        "subject": subject_mask(sal),
+    }
 
 
 def best_hinge(a: dict, b: dict) -> dict | None:
-    """Best shared patch from painting a into painting b."""
+    """Best shared patch from painting a into painting b: salient in both
+    and structurally similar."""
     ah, aw = a["lab"].shape[:2]
     bh, bw = b["lab"].shape[:2]
     best = None
@@ -86,28 +187,61 @@ def best_hinge(a: dict, b: dict) -> dict | None:
         ps = int(round(frac * min(ah, aw)))
         if ps < 12 or ps >= bh or ps >= bw:
             continue
+
+        # Mean SUBJECT membership of every candidate window in B (aligned
+        # to matchTemplate output). The incoming fulcrum should land on
+        # B's subject so the reveal resolves onto what the next painting
+        # is actually of.
+        subj_b_win = window_mean(b["subject"], ps)
+
         xs = np.linspace(0, aw - ps, GRID_STEPS).astype(int)
         ys = np.linspace(0, ah - ps, GRID_STEPS).astype(int)
         for y in ys:
             for x in xs:
-                patch_lab = a["lab"][y:y + ps, x:x + ps]
-                if float(patch_lab.std()) < MIN_STD_LAB:
-                    continue
-                patch_d = a["depth"][y:y + ps, x:x + ps]
+                sal_a = float(a["sal"][y:y + ps, x:x + ps].mean())
+                if sal_a < MIN_SALIENCY:
+                    continue  # A-patch is flat field — nothing to hinge on
+                subj_a = float(a["subject"][y:y + ps, x:x + ps].mean())
 
-                res_c = cv2.matchTemplate(b["lab"], patch_lab, cv2.TM_CCOEFF_NORMED)
-                res_d = cv2.matchTemplate(b["depth"], patch_d, cv2.TM_CCOEFF_NORMED)
-                res = COLOR_WEIGHT * res_c + DEPTH_WEIGHT * res_d
-                _, score, _, loc = cv2.minMaxLoc(res)
-                if best is None or score > best["weight"]:
+                patch_lab = a["lab"][y:y + ps, x:x + ps]
+                patch_grd = a["grad"][y:y + ps, x:x + ps]
+                patch_dep = a["depth"][y:y + ps, x:x + ps]
+
+                cc = (W_COLOR * cv2.matchTemplate(b["lab"], patch_lab, cv2.TM_CCOEFF_NORMED)
+                      + W_STRUCT * cv2.matchTemplate(b["grad"], patch_grd, cv2.TM_CCOEFF_NORMED)
+                      + W_DEPTH * cv2.matchTemplate(b["depth"], patch_dep, cv2.TM_CCOEFF_NORMED))
+                # TM_CCOEFF_NORMED divides by window variance; a flat
+                # template or target window (common in the gradient
+                # channel over solid regions) yields NaN/inf. Zero them so
+                # minMaxLoc can't lock onto an invalid location.
+                np.nan_to_num(cc, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+
+                # Bias the location search strongly toward B's subject —
+                # the fulcrum resolves onto the next painting's subject,
+                # not onto incidental background texture.
+                weighted = cc * (0.3 + 0.7 * subj_b_win)
+                _, _, _, loc = cv2.minMaxLoc(weighted)
+                lx, ly = loc
+                sim = float(cc[ly, lx])
+                subj_b = float(subj_b_win[ly, lx])
+
+                # Final: structural/colour similarity gated by the mutual
+                # SUBJECT membership of the two endpoints — a strong hinge
+                # joins A's subject to B's subject.
+                score = max(0.0, sim) * float(np.sqrt(max(subj_a, 1e-6) * max(subj_b, 1e-6)))
+
+                if score > 0.0 and (best is None or score > best["_score"]):
                     best = {
-                        "weight": round(float(score), 4),
-                        "s_uv": [round((x + ps / 2) / aw, 4),
-                                 round((y + ps / 2) / ah, 4)],
-                        "t_uv": [round((loc[0] + ps / 2) / bw, 4),
-                                 round((loc[1] + ps / 2) / bh, 4)],
+                        "_score": score,
+                        "weight": round(score, 4),
+                        "s_uv": [round(float(x + ps / 2) / aw, 4),
+                                 round(float(y + ps / 2) / ah, 4)],
+                        "t_uv": [round(float(lx + ps / 2) / bw, 4),
+                                 round(float(ly + ps / 2) / bh, 4)],
                         "scale": round(frac, 4),
                     }
+    if best is not None:
+        best.pop("_score", None)
     return best
 
 
