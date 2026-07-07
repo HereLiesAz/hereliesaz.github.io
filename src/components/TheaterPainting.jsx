@@ -24,14 +24,6 @@ const SHELL_HALF_DEPTH  = 5.0;      // layers occupy z ∈ [-SHELL_HALF_DEPTH, +
 const NULL_DISTANCE     = 11.0;     // camera radius that reads a painting head-on
 const CHROMA_L          = 0.045;    // luminance below this counts as "black" → discard
 
-// Distance envelope: full colour when the camera is on the painting's
-// null-sphere or inside; fades to black as it drifts far off. Distance is
-// measured from the world origin (paintings share it), so this envelope
-// is really the "how close to any diorama's ideal view" fade — always at
-// least one painting is lit while the camera orbits.
-const FADE_FULL = 24.0;
-const FADE_GONE = 44.0;
-
 // Cross-fade when the camera crosses a flat in local z: flat fades to
 // black over this many units instead of clipping the near plane.
 const CROSS_FADE = 1.2;
@@ -110,14 +102,16 @@ float vnoise(vec2 p) {
 void main() {
   vec3 painting = texture2D(uPainting, vUv).rgb;
 
-  // Chroma-key: kill near-black on cutout flats only (modes 1-2). The
-  // backdrop (mode 0) keeps black pixels opaque so dark painting regions
-  // block whatever is behind — no bleed from other paintings.
+  // Chroma-key: kill near-black on every flat, backdrop included. Black
+  // regions must be genuinely empty — transparent onto the black
+  // background — so a painting's dark passages read as void. Nothing
+  // else can bleed there because visibility is scheduled so only ONE
+  // painting is drawn at each coalescence point (see useFrame).
+  // BT.709 luma; slight uv-noise threshold so the edges of dark regions
+  // tear organically instead of aliasing.
   float lum = 0.2126 * painting.r + 0.7152 * painting.g + 0.0722 * painting.b;
-  if (uMode > 0.5) {
-    float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
-    if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
-  }
+  float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
+  if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
 
   if (uMode > 0.5 && uMode < 1.5) {
     // Depth band cutout
@@ -452,22 +446,42 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     fallbackMaterial.needsUpdate = true;
   }, [flatTex, fallbackMaterial]);
 
-  // Distance envelope + fly-through cross-fade. Distance measured from
-  // the painting's world origin (which for the new spatial model is
-  // world (0,0,0) for every painting, so this is really the camera's
-  // distance from the shared centre point).
+  // Scheduled visibility + fly-through cross-fade.
+  //
+  // Every painting shares world origin (0,0,0), so a distance-from-origin
+  // fade can't tell them apart — the camera is equidistant from all of
+  // them and they'd all light up at once, interleaving through each
+  // other's black cut-outs. Instead each painting's opacity is a function
+  // of WHERE we are on the scroll timeline relative to ITS null.
+  //
+  // Timeline position T = currentSegmentIndex + transitionProgress. This
+  // painting (index i = mySegmentIndex) coalesces at T = i — it is the
+  // "from" of segment i and the "to" of segment i-1, and at that instant
+  // it must be the ONLY thing on screen. Let d = T - i:
+  //   d = 0    → full (its own null; every other painting is at 0)
+  //   d = ±1   → zero (a neighbour's null)
+  //   between  → cross-fade; at |d| = 0.5 both segment paintings sit at
+  //              ~0.5 and interleave — the "emerging from within" moment.
+  // So the two paintings of the active segment cross-fade and everything
+  // else is fully dark. At each null, exactly one painting is drawn, and
+  // its black regions are transparent onto the black background.
   //
   // Cross-fade: when the camera is close (in the group's local frame) to
-  // one of a flat's local-z faces, dissolve that flat so it doesn't
-  // clip the near plane as the camera passes through.
+  // one of a flat's local-z faces, dissolve that flat so it doesn't clip
+  // the near plane as the camera passes through.
   const groupRef = useRef(null);
   const localCamPos = useMemo(() => new THREE.Vector3(), []);
   useFrame(() => {
-    if (!position || !groupRef.current) return;
-    const v = tmpVec.current;
-    v.set(position[0] || 0, position[1] || 0, position[2] || 0);
-    const dist = camera.position.distanceTo(v);
-    const fade = 1.0 - THREE.MathUtils.smoothstep(dist, FADE_FULL, FADE_GONE);
+    if (!groupRef.current) return;
+    const st = useStore.getState();
+    const T = st.currentSegmentIndex + st.transitionProgress;
+    const d = T - mySegmentIndex;
+    // Triangle peaking at d=0, zero at |d|>=1, smoothstepped crossover.
+    const fade = Math.abs(d) >= 1
+      ? 0.0
+      : (d < 0
+          ? THREE.MathUtils.smoothstep(d, -1, 0)
+          : 1.0 - THREE.MathUtils.smoothstep(d, 0, 1));
 
     // Camera position in the painting's local frame (undoes the group's
     // rotation and position). Cross-fade uses the local z.
