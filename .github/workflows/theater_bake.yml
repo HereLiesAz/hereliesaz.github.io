@@ -13,7 +13,10 @@ name: Theater Bake
 # painting for the photorealize step, so it is dispatch-only and scoped by
 # an explicit id list — never the whole 1184-image corpus in one go.
 #
-# Required secret: HF_TOKEN (Hugging Face inference token).
+# Required secret: HF_TOKEN (Hugging Face inference token) for the
+# optional photorealize step. Depth now runs locally (Depth-Anything via
+# torch), so a batch no longer degrades to flat/synthetic maps when the
+# hosted depth Space is rate-limited.
 
 on:
   workflow_dispatch:
