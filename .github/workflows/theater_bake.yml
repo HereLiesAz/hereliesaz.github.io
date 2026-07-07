@@ -1,0 +1,98 @@
+name: Theater Bake
+
+# Bakes the paper-theater assets (painting + depth + hinge graph) for an
+# explicit set of paintings and deploys them to the art-data branch.
+#
+# This is deliberately SEPARATE from process_art.yml: that workflow runs
+# the 56-shard legacy stroke grinder before the theater step, which is far
+# too heavy to re-run every time we just want to bake a few more dioramas.
+# This one does only the theater chain (crop -> photorealize -> depth ->
+# metadata -> hinge graph -> deploy).
+#
+# The bake calls a paid/quota'd HF image model (FLUX.1-Kontext) once per
+# painting for the photorealize step, so it is dispatch-only and scoped by
+# an explicit id list — never the whole 1184-image corpus in one go.
+#
+# Required secret: HF_TOKEN (Hugging Face inference token).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: "Comma-separated painting ids (filename stems in public/assets) to bake. Blank = the DEFAULT_IDS batch."
+        required: false
+        default: ""
+  # Pushing a change to THIS file kicks off a bake of DEFAULT_IDS. That is
+  # how the batch runs before the workflow reaches the default branch
+  # (workflow_dispatch only lists once it's on the default branch).
+  push:
+    paths:
+      - '.github/workflows/theater_bake.yml'
+
+concurrency:
+  group: theater-bake
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  DEFAULT_IDS: "2023-10-15(38),20231129_043102~2,PXL_20230527_000631951~2,2020-12-02(10),2020-12-03(46),2023-10-15(24),2023-10-15(5),20240229_142440,IMG_20161216_123644,IMG_20180602_192220,IMG_20210611_073221_746,IMG_20220710_130450,IMG_20230127_191102_101,IMG_20240621_192348~2,IMG_20250606_194351094,PXL_20221026_233419488~4,PXL_20230323_234854707~2,PXL_20230613_074956361.NIGHT~2,PXL_20250124_105205423.RAW-01.COVER,PXL_20260113_131045314.RAW-01.COVER"
+
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Seed existing bakes from art-data (cache the expensive stages)
+        uses: actions/checkout@v4
+        with:
+          ref: art-data
+          path: _artdata
+        continue-on-error: true
+
+      - name: Stage cached bakes into public/data
+        run: |
+          mkdir -p public/data
+          if [ -d _artdata ] && [ -n "$(ls -A _artdata 2>/dev/null | grep -v '^\.git$')" ]; then
+            rsync -a --exclude='.git' _artdata/ public/data/
+            echo "seeded $(find public/data/theater -type f 2>/dev/null | wc -l) cached files"
+          else
+            echo "no art-data seed; every painting bakes from scratch"
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Bake theater layers
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          IDS="${{ github.event.inputs.ids }}"
+          if [ -z "$IDS" ]; then IDS="$DEFAULT_IDS"; fi
+          echo "Baking: $IDS"
+          python scripts/theater_baker.py \
+            --input  public/assets/ \
+            --output public/data/theater/ \
+            --ids "$IDS"
+
+      - name: Build hinge graph
+        run: python scripts/pareidolia_index.py --data public/data/theater/
+
+      - name: Deploy to art-data
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public/data
+          publish_branch: art-data
+          keep_files: true
+          commit_message: "Theater bake: ${{ github.event.inputs.ids }}"
