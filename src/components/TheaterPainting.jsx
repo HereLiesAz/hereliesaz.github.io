@@ -158,7 +158,11 @@ void main() {
   // Shard-wipe: reveal pixels on the near side of the moving boundary. The
   // boundary sweeps left->right as uWipe grows and retreats as it falls; a
   // little uv-noise tears its edge so it reads as torn paper, not a razor.
-  float wipeEdge = uWipe + (vnoise(vUv * 40.0) - 0.5) * 0.06;
+  // Remap the boundary to [-0.1, 1.1] so uWipe=1 clears the whole painting
+  // (no right-edge clip at coalescence) and uWipe=0 fully hides it — the
+  // noise jitter + smoothstep band can't leak past either extreme.
+  float wipeAt = mix(-0.1, 1.1, uWipe);
+  float wipeEdge = wipeAt + (vnoise(vUv * 40.0) - 0.5) * 0.06;
   float wipeGate = 1.0 - smoothstep(wipeEdge - 0.04, wipeEdge + 0.04, vUv.x);
   float op = uFade * wipeGate;
 
