@@ -9,7 +9,14 @@ const NULL_DISTANCE = 11.0;
 // fraction of NULL_DISTANCE. Nonzero so the flats NEVER fully close up:
 // even at coalescence there's a whisper of parallax — the painting is
 // never shown as the flat original.
-const OFF_AXIS = 0.12;
+// Off-axis fraction of the null viewpoint. This is what keeps the
+// painting from EVER re-closing perfectly flat — but it also sets how
+// far the depth bands slide apart at the null, so it must stay a
+// whisper: enough that the flats never quite click shut, not so much
+// that the flat background regions visibly separate into panels. The
+// big shard explosion during a transition comes from the camera's full
+// swing off the axis, not from this, so shrinking it doesn't cost drama.
+const OFF_AXIS = 0.045;
 
 // Nominal painting height in world units — matches TheaterPainting.jsx
 // PAINTING_HEIGHT. Used to convert a hinge uv into a hinge world offset.
