@@ -7,9 +7,11 @@ on:
       - 'public/assets/**'
       - 'scripts/grinder.py'
       - 'scripts/indexer.py'
-      - 'scripts/theater_baker.py'
-      - 'scripts/pareidolia_index.py'
       - 'scripts/requirements.txt'
+    # NOTE: theater_baker.py / pareidolia_index.py are deliberately NOT
+    # triggers here. The paper-theater bake + hinge graph + art-data
+    # deploy live in theater_bake.yml, which is the sole publisher of
+    # theater data. This legacy workflow only runs the stroke grinder.
 
 # Cancel previous runs if you push again (prevents queue jams)
 concurrency:
@@ -91,27 +93,12 @@ jobs:
       - name: Index
         run: python scripts/indexer.py
 
-      - name: Bake Theater Layers
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          # Scoped to the 3 curated paintings while the paper-theater
-          # experience is tuned ("until we get this right with 2-3
-          # paintings, it's not worth baking more"). The v2 bake calls
-          # paid/quota'd image models per painting (photorealize +
-          # depth), so do NOT widen this to the full corpus without an
-          # explicit decision.
-          python scripts/theater_baker.py \
-            --input  public/assets/ \
-            --output public/data/theater/ \
-            --ids 'PXL_20230527_000631951~2,2023-10-15(38),20231129_043102~2'
-
-      - name: Build hinge graph
-        run: |
-          # Transition-fulcrum matcher — reads the baked painting+depth
-          # pairs and writes graph.theater.json (the shared patches the
-          # transitions pivot on). Cheap, local, no network.
-          python scripts/pareidolia_index.py --data public/data/theater/
+      # The paper-theater bake (painting/depth/hinge graph) and its
+      # art-data deploy were REMOVED from this workflow. They now live
+      # solely in theater_bake.yml, which bakes the full curated id list
+      # and seeds from art-data. Baking only the original 3 ids here and
+      # deploying would overwrite theater/_manifest.json and collapse the
+      # live gallery back to 3 paintings — so it must never run here.
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
@@ -120,4 +107,8 @@ jobs:
           publish_dir: ./public/data
           publish_branch: art-data
           keep_files: true
-          commit_message: "Turbo Grind + Theater Bake: ${{ github.sha }}"
+          # keep_files:true preserves everything this run didn't produce
+          # — including the entire theater/ tree (paintings, depth maps,
+          # graph, _manifest.json) deployed by theater_bake.yml. This job
+          # writes only stroke/index output, so the gallery is untouched.
+          commit_message: "Turbo Grind (strokes): ${{ github.sha }}"

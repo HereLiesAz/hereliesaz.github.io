@@ -69,6 +69,16 @@ from PIL import Image, ImageFile
 # avoids derailing a bake over one bad byte.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+# Register the HEIF/HEIC opener so PIL can read iPhone .HEIC source photos.
+# Without this, Image.open() throws UnidentifiedImageError on .HEIC and the
+# painting is silently skipped (it never reaches the bake).
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except Exception as _heif_exc:  # pragma: no cover - environment dependent
+    print(f"[~] pillow_heif unavailable ({_heif_exc!r}); .HEIC sources will be skipped",
+          file=sys.stderr)
+
 
 # ---- tuning knobs -----------------------------------------------------------
 
@@ -93,7 +103,7 @@ PHOTOREAL_PROMPT = (
     "identical; only make surfaces, lighting, and materials photorealistic."
 )
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
 
 
 # ---- env --------------------------------------------------------------------
