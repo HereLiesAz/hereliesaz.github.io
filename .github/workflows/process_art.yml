@@ -8,6 +8,7 @@ on:
       - 'scripts/grinder.py'
       - 'scripts/indexer.py'
       - 'scripts/theater_baker.py'
+      - 'scripts/pareidolia_index.py'
       - 'scripts/requirements.txt'
 
 # Cancel previous runs if you push again (prevents queue jams)
@@ -104,6 +105,13 @@ jobs:
             --input  public/assets/ \
             --output public/data/theater/ \
             --ids 'PXL_20230527_000631951~2,2023-10-15(38),20231129_043102~2'
+
+      - name: Build hinge graph
+        run: |
+          # Transition-fulcrum matcher — reads the baked painting+depth
+          # pairs and writes graph.theater.json (the shared patches the
+          # transitions pivot on). Cheap, local, no network.
+          python scripts/pareidolia_index.py --data public/data/theater/
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
