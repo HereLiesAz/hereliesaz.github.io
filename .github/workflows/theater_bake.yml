@@ -14,7 +14,7 @@ name: Theater Bake
 # an explicit id list — never the whole 1184-image corpus in one go.
 #
 # Source photos may be .HEIC (iPhone); the baker registers a HEIF
-# opener so those decode. Re-run fills any painting the prior run skipped.
+# opener so those decode. Re-run fills any painting the prior run skipped (HEIC now discovered).
 #
 # Required secret: HF_TOKEN (Hugging Face inference token) for the
 # optional photorealize step. Depth now runs locally (Depth-Anything via

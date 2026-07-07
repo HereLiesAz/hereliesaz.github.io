@@ -103,7 +103,7 @@ PHOTOREAL_PROMPT = (
     "identical; only make surfaces, lighting, and materials photorealistic."
 )
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
 
 
 # ---- env --------------------------------------------------------------------
