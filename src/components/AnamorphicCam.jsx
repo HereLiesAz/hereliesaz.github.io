@@ -60,10 +60,18 @@ export default function AnamorphicCam() {
     const totalProgress = (scroll.offset * totalPages) / PAGES_PER_SEGMENT;
     const clampedTotal = Math.max(0, Math.min(totalProgress, segments.length - 0.001));
     const segmentIndex = Math.min(Math.floor(clampedTotal), segments.length - 1);
-    const r = clampedTotal - segmentIndex;
+    const rLin = clampedTotal - segmentIndex;
 
     const currentSegment = segments[segmentIndex];
     if (!currentSegment) return;
+
+    // Ease each segment with a smootherstep so velocity → 0 at both ends.
+    // The camera DECELERATES into every null and accelerates back out:
+    // it visibly ARRIVES at each painting as it coalesces, then departs,
+    // instead of coasting through at constant speed. The reveal reads the
+    // same eased clock (via transitionProgress) so the art resolves
+    // exactly as the motion settles — camera in, art revealed.
+    const r = rLin * rLin * rLin * (rLin * (rLin * 6 - 15) + 10);
 
     setTransitionProgress(r);
 
