@@ -6,8 +6,17 @@ import * as THREE from 'three';
 const NULL_DISTANCE = 11.0;
 
 // The camera never gets closer to origin than this during the dive
-// through the shared centre.
-const DIVE_RADIUS   = 2.5;
+// through the shared centre. Small enough that the camera is INSIDE the
+// shard cloud (flats span ±5 around each painting plane) at the moment
+// the path bends — the turn happens while immersed in abstract chaos,
+// so the viewer can't perceive that the axis changed.
+const DIVE_RADIUS   = 1.4;
+
+// How far off the painting's normal the null viewpoint sits, as a
+// fraction of NULL_DISTANCE. Nonzero so the flats NEVER fully close up:
+// even at coalescence there's a whisper of parallax — the painting is
+// never shown as the flat original.
+const OFF_AXIS = 0.12;
 
 // Nominal painting height in world units — matches TheaterPainting.jsx
 // PAINTING_HEIGHT. Used to convert a hinge uv into a hinge world offset.
@@ -107,11 +116,26 @@ function placeAtHinge(uv, aspect, quaternion) {
   };
 }
 
-// Sample points along an arc that:
-//  - starts at start, ends at end
-//  - dips toward origin (radius shrinks to DIVE_RADIUS at t=0.5)
-//  - rotates through space so it doesn't cut straight through origin
-function orbitPath(start, end, samples = 5) {
+// A stable per-painting lateral direction for the off-axis null offset,
+// in the painting's local frame (unit xy vector, z=0). Hash-derived so
+// the same painting always reads from the same slightly-skewed vantage,
+// including when it is segment N's end and segment N+1's start.
+function nullOffsetLocal(id) {
+  const phi = rand01(hashStr(id), 0xc2b2ae35) * Math.PI * 2;
+  // Damp the vertical component so the skew reads as a natural standing
+  // viewpoint, not craning above / crouching below the painting.
+  return new THREE.Vector3(Math.cos(phi), Math.sin(phi) * 0.4, 0)
+    .normalize().multiplyScalar(NULL_DISTANCE * OFF_AXIS);
+}
+
+// Dolly path: zoom IN along the incoming axis, through the shard cloud,
+// and back OUT along the outgoing axis. NOT an orbit — the direction
+// change is concentrated in t∈[0.35, 0.65], while the camera is at
+// DIVE_RADIUS inside the cloud, where there is no legible geometry to
+// betray that the axis is turning. Outside that band the camera moves
+// on a straight radial line: a push into painting A's hinge patch, then
+// a pull back that reveals painting B already coalescing.
+function divePath(start, end, samples = 9) {
   const dir0 = start.clone().normalize();
   const dir1 = end.clone().normalize();
   const R0 = start.length();
@@ -120,7 +144,8 @@ function orbitPath(start, end, samples = 5) {
   const path = [];
   for (let i = 0; i < samples; i++) {
     const t = i / (samples - 1);
-    const dir = dir0.clone().lerp(dir1, t).normalize();
+    const turn = THREE.MathUtils.smoothstep(t, 0.35, 0.65);
+    const dir = dir0.clone().lerp(dir1, turn).normalize();
     const rOut = t < 0.5
       ? THREE.MathUtils.lerp(R0, DIVE_RADIUS,
           THREE.MathUtils.smoothstep(t, 0, 0.5))
@@ -198,13 +223,14 @@ const useStore = create((set, get) => ({
 
   // Build the next segment. Painting B is placed so its incoming hinge
   // patch (t_uv on the chosen edge) lands at world origin — the same
-  // spot A's outgoing s_uv already occupies. Rotation R_B = R_A · RotY(θ_edge).
+  // spot A's outgoing s_uv already occupies. Rotation R_B = the yaw of
+  // R_A · RotY(θ_edge) — Y-only, so B is upright at coalescence.
   //
-  // The camera arcs on the sphere of radius NULL_DISTANCE around origin,
-  // from A's viewing null (R_A · (0,0,NULL_DISTANCE)) to B's viewing null.
-  // Look target: world origin throughout. Result: the shared patch
-  // sits fixed at screen centre for the whole segment; A dissolves and
-  // B emerges around it.
+  // The camera dollies from A's null straight in toward the hinge,
+  // bends while immersed at DIVE_RADIUS, and pulls back out to B's
+  // null (see divePath). The shared patch is what the viewer is drawn
+  // into; A dissolves around it on the way in, B coalesces around it
+  // on the way out. The transition itself should be imperceptible.
   buildNextSegment: () => {
     const { nodes, edges, activeClusters, segments } = get();
     if (activeClusters.length === 0) return;
@@ -262,25 +288,32 @@ const useStore = create((set, get) => ({
 
     // Camera path.
     //
-    // At r=0 the camera reads painting A head-on: on A's normal, offset
-    // from A's plane centre by NULL_DISTANCE. A's plane centre in world
-    // = current.position (the group offset). A's normal in world =
-    // qA · (0,0,1).
+    // At r=0 the camera reads painting A from its null: on A's normal,
+    // offset from A's plane centre by NULL_DISTANCE, then skewed
+    // sideways by the painting's stable off-axis offset so the flats
+    // never fully close up — the painting coalesces but is never shown
+    // as the flat original. A's plane centre in world = current.position
+    // (the group offset). A's normal in world = qA · (0,0,1).
     //
-    // At r=1 the camera reads painting B head-on: same logic on B.
+    // At r=1 the camera reads painting B the same way.
     //
-    // Mid-transit the path dives toward world origin (the hinge) so both
-    // paintings' shared patch is at screen centre and both dissolve
-    // around it — the moment of maximum chaos, all the flats jumbled and
-    // interleaved before either painting recoheres.
+    // Between them the path is a dolly, not an orbit: push IN toward
+    // world origin (the hinge — a detail of A the viewer is drawn into),
+    // bend while immersed in the shard cloud, pull back OUT along B's
+    // axis. B has already been fading up through the chaos; backing out
+    // simply lets it coalesce.
     const aPosVec = new THREE.Vector3(
       current.position[0], current.position[1], current.position[2]);
     const aNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(qA);
-    const startPoint = aPosVec.clone().addScaledVector(aNormal, NULL_DISTANCE);
+    const startPoint = aPosVec.clone()
+      .addScaledVector(aNormal, NULL_DISTANCE)
+      .add(nullOffsetLocal(current.id).applyQuaternion(qA));
 
     const bPosVec = new THREE.Vector3(bPos[0], bPos[1], bPos[2]);
     const bNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(qB);
-    const endPoint = bPosVec.clone().addScaledVector(bNormal, NULL_DISTANCE);
+    const endPoint = bPosVec.clone()
+      .addScaledVector(bNormal, NULL_DISTANCE)
+      .add(nullOffsetLocal(tid).applyQuaternion(qB));
 
     // The hinge focus — where both paintings' shared patches actually
     // sit in world space, always the origin under this placement.
@@ -294,7 +327,7 @@ const useStore = create((set, get) => ({
     const startLook = aPosVec.clone();
     const endLook   = bPosVec.clone();
 
-    const path = orbitPath(startPoint, endPoint, 5);
+    const path = divePath(startPoint, endPoint, 9);
 
     const newSegment = {
       path,
