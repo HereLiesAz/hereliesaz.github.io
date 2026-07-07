@@ -78,27 +78,62 @@ def _norm01(x: np.ndarray) -> np.ndarray:
     return (x - mn) / (mx - mn) if mx - mn > 1e-6 else np.zeros_like(x)
 
 
+def spectral_residual(gray: np.ndarray) -> np.ndarray:
+    """Hou & Zhang spectral-residual saliency — the algorithm behind
+    cv2.saliency.StaticSaliencySpectralResidual, reimplemented so it runs
+    with only base OpenCV/NumPy (no opencv-contrib). Isolates the
+    salient object far better than a linear contrast/edge blend."""
+    h, w = gray.shape[:2]
+    small = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32)
+    f = np.fft.fft2(small)
+    log_amp = np.log(np.abs(f) + 1e-8)
+    phase = np.angle(f)
+    residual = log_amp - cv2.blur(log_amp, (3, 3))
+    recon = np.fft.ifft2(np.exp(residual + 1j * phase))
+    sal = np.abs(recon) ** 2
+    sal = cv2.GaussianBlur(sal, (0, 0), sigmaX=2.5)
+    sal = cv2.resize(sal, (w, h), interpolation=cv2.INTER_CUBIC)
+    return _norm01(sal)
+
+
 def saliency_map(rgb_s: np.ndarray, lab: np.ndarray) -> np.ndarray:
-    """Where the eye lands: local contrast + edge energy + colour
-    distinctiveness. Returned normalised to 0..1."""
+    """Where the eye lands. Spectral-residual saliency (isolates the
+    subject) reinforced by colour distinctiveness, which matters for
+    these dark, colour-charged paintings. Returned normalised to 0..1."""
     gray = cv2.cvtColor(rgb_s, cv2.COLOR_RGB2GRAY).astype(np.float32)
 
-    # Edge energy.
-    edge = np.abs(cv2.Laplacian(gray, cv2.CV_32F, ksize=3))
-
-    # Local contrast (std over a small window).
-    k = max(3, int(round(0.06 * max(gray.shape))) | 1)
-    mean = cv2.boxFilter(gray, cv2.CV_32F, (k, k))
-    sqmean = cv2.boxFilter(gray * gray, cv2.CV_32F, (k, k))
-    local_std = np.sqrt(np.maximum(sqmean - mean * mean, 0.0))
+    spec = spectral_residual(gray)
 
     # Colour distinctiveness: distance in LAB from the image's mean colour.
     lab_mean = lab.reshape(-1, 3).mean(axis=0)
-    color_dev = np.linalg.norm(lab - lab_mean, axis=2)
+    color_dev = _norm01(np.linalg.norm(lab - lab_mean, axis=2))
 
-    sal = 0.40 * _norm01(edge) + 0.30 * _norm01(local_std) + 0.30 * _norm01(color_dev)
+    sal = 0.65 * spec + 0.35 * color_dev
     sal = cv2.GaussianBlur(sal, (0, 0), sigmaX=2.0)
     return _norm01(sal)
+
+
+def subject_mask(sal: np.ndarray) -> np.ndarray:
+    """Soft mask of the painting's dominant subject: the largest blob of
+    high saliency. Paintings with a clear figure (a face, a sign) get a
+    tight mask; textural paintings with no single subject get a diffuse
+    one — in which case the matcher just leans on general saliency. Pure
+    OpenCV; CI-safe."""
+    thr = float(np.quantile(sal, 0.80))
+    binary = (sal >= thr).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if n <= 1:
+        return _norm01(cv2.GaussianBlur(sal, (0, 0), sigmaX=6.0))
+    # Largest component by area, ignoring the background label 0.
+    biggest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    mask = (labels == biggest).astype(np.float32)
+    # Grow + feather so the subject reads as a soft region, not a hard cut.
+    k = max(3, int(round(0.04 * max(sal.shape))) | 1)
+    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=max(sal.shape) * 0.03)
+    # Keep a saliency floor everywhere so a diffuse-subject painting still
+    # matches sensibly rather than being forced onto one blob.
+    return _norm01(np.maximum(mask, 0.25 * sal))
 
 
 def window_mean(img: np.ndarray, ps: int) -> np.ndarray:
@@ -130,12 +165,14 @@ def load_painting(data_dir: Path, pid: str) -> dict:
     gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
     grad = _norm01(np.sqrt(gx * gx + gy * gy)) * 255.0
 
+    sal = saliency_map(rgb_s, lab)
     return {
         "id": pid, "w": w, "h": h,
         "lab": lab,
         "grad": grad.astype(np.float32),
         "depth": (depth_s * 255.0).astype(np.float32),
-        "sal": saliency_map(rgb_s, lab),
+        "sal": sal,
+        "subject": subject_mask(sal),
     }
 
 
@@ -151,9 +188,11 @@ def best_hinge(a: dict, b: dict) -> dict | None:
         if ps < 12 or ps >= bh or ps >= bw:
             continue
 
-        # Mean saliency of every candidate window in B (aligned to
-        # matchTemplate output), used to bias the match toward B features.
-        sal_b_win = window_mean(b["sal"], ps)
+        # Mean SUBJECT membership of every candidate window in B (aligned
+        # to matchTemplate output). The incoming fulcrum should land on
+        # B's subject so the reveal resolves onto what the next painting
+        # is actually of.
+        subj_b_win = window_mean(b["subject"], ps)
 
         xs = np.linspace(0, aw - ps, GRID_STEPS).astype(int)
         ys = np.linspace(0, ah - ps, GRID_STEPS).astype(int)
@@ -162,6 +201,7 @@ def best_hinge(a: dict, b: dict) -> dict | None:
                 sal_a = float(a["sal"][y:y + ps, x:x + ps].mean())
                 if sal_a < MIN_SALIENCY:
                     continue  # A-patch is flat field — nothing to hinge on
+                subj_a = float(a["subject"][y:y + ps, x:x + ps].mean())
 
                 patch_lab = a["lab"][y:y + ps, x:x + ps]
                 patch_grd = a["grad"][y:y + ps, x:x + ps]
@@ -176,18 +216,19 @@ def best_hinge(a: dict, b: dict) -> dict | None:
                 # minMaxLoc can't lock onto an invalid location.
                 np.nan_to_num(cc, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
-                # Bias the location search toward B regions that are
-                # themselves salient — the fulcrum must be a feature on
-                # both sides, not a match onto flat background.
-                weighted = cc * (0.5 + 0.5 * sal_b_win)
+                # Bias the location search strongly toward B's subject —
+                # the fulcrum resolves onto the next painting's subject,
+                # not onto incidental background texture.
+                weighted = cc * (0.3 + 0.7 * subj_b_win)
                 _, _, _, loc = cv2.minMaxLoc(weighted)
                 lx, ly = loc
                 sim = float(cc[ly, lx])
-                sal_b = float(sal_b_win[ly, lx])
+                subj_b = float(subj_b_win[ly, lx])
 
                 # Final: structural/colour similarity gated by the mutual
-                # saliency of the two endpoints.
-                score = max(0.0, sim) * float(np.sqrt(max(sal_a, 1e-6) * max(sal_b, 1e-6)))
+                # SUBJECT membership of the two endpoints — a strong hinge
+                # joins A's subject to B's subject.
+                score = max(0.0, sim) * float(np.sqrt(max(subj_a, 1e-6) * max(subj_b, 1e-6)))
 
                 if score > 0.0 and (best is None or score > best["_score"]):
                     best = {
