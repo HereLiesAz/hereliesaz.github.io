@@ -1,9 +1,16 @@
+import { useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import { useScroll } from '@react-three/drei';
 
-const PAGES_PER_SEGMENT = 4;
+// Scroll distance (in ScrollControls "pages") spent traversing one
+// painting-to-painting segment. Long on purpose: a slow, deliberate
+// scrub per artwork, and the extra distance is head-room for the next
+// painting's textures to finish loading before it's needed. Keep in
+// step with <ScrollControls pages> in Scene (pages = PAGES_PER_SEGMENT
+// × segment capacity).
+const PAGES_PER_SEGMENT = 10;
 
 // Re-usable temp object so useFrame doesn't allocate per-tick.
 const tmpLook = new THREE.Vector3();
@@ -24,8 +31,10 @@ const tmpLook = new THREE.Vector3();
  */
 function lookTarget(segments, segmentIndex, r) {
   const cur = segments[segmentIndex];
-  const endFallback = cur.path[cur.path.length - 1];
-  const startLook = cur.startLook || cur.path[0];
+  const path = cur?.path;
+  if (!path || path.length === 0) return tmpLook.set(0, 0, 0);
+  const endFallback = path[path.length - 1];
+  const startLook = cur.startLook || path[0] || endFallback;
   const focus = cur.focus || endFallback;
   const endLook = cur.endLook || endFallback;
 
@@ -49,10 +58,26 @@ export default function AnamorphicCam() {
   const segments = useStore(state => state.segments);
   const setTransitionProgress = useStore(state => state.setTransitionProgress);
 
+  // Once segments exist, jump the scroll to the painting we open ON —
+  // which sits a few segments IN, above the backward buffer — so the
+  // viewer can immediately scroll UP into earlier paintings instead of
+  // hitting a wall at the top.
+  const didInit = useRef(false);
+
   useFrame(() => {
     if (segments.length === 0) return;
 
     const totalPages = scroll.pages;
+
+    if (!didInit.current) {
+      const startIdx = useStore.getState().startSegmentIndex || 0;
+      const el = scroll.el;
+      if (startIdx > 0 && el && totalPages > 0) {
+        const offset = Math.min(0.999, (startIdx * PAGES_PER_SEGMENT) / totalPages);
+        el.scrollTop = offset * (el.scrollHeight - el.clientHeight);
+      }
+      didInit.current = true;
+    }
     // Total progress can span [0, segments.length]. We clamp to the
     // already-built range so the user can scroll back into segments they
     // have already visited (bidirectional navigation) while forward
@@ -63,7 +88,9 @@ export default function AnamorphicCam() {
     const rLin = clampedTotal - segmentIndex;
 
     const currentSegment = segments[segmentIndex];
-    if (!currentSegment) return;
+    // A CatmullRom needs >=2 points; a half-built segment (or an index the
+    // scroll briefly overshoots) would otherwise read .x off undefined.
+    if (!currentSegment || !currentSegment.path || currentSegment.path.length < 2) return;
 
     // Ease each segment with a smootherstep so velocity → 0 at both ends.
     // The camera DECELERATES into every null and accelerates back out:

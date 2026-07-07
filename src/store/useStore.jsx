@@ -9,7 +9,14 @@ const NULL_DISTANCE = 11.0;
 // fraction of NULL_DISTANCE. Nonzero so the flats NEVER fully close up:
 // even at coalescence there's a whisper of parallax — the painting is
 // never shown as the flat original.
-const OFF_AXIS = 0.12;
+// Off-axis fraction of the null viewpoint. This is what keeps the
+// painting from EVER re-closing perfectly flat — but it also sets how
+// far the depth bands slide apart at the null, so it must stay a
+// whisper: enough that the flats never quite click shut, not so much
+// that the flat background regions visibly separate into panels. The
+// big shard explosion during a transition comes from the camera's full
+// swing off the axis, not from this, so shrinking it doesn't cost drama.
+const OFF_AXIS = 0.045;
 
 // Nominal painting height in world units — matches TheaterPainting.jsx
 // PAINTING_HEIGHT. Used to convert a hinge uv into a hinge world offset.
@@ -71,6 +78,27 @@ function pickEdge(edges, nodes, srcId, avoidId) {
   const target = others[Math.floor(Math.random() * others.length)].id;
   return { edge: { source: srcId, target, s_uv: [0.5, 0.5], t_uv: [0.5, 0.5] },
            tid: target };
+}
+
+// Pick a PREDECESSOR of `tgtId` — a painting that flows INTO it — for
+// building the backward buffer (the paintings you can scroll up into
+// from the start). Weighted by edge weight; uniform-random fallback.
+// Returns {sid} or null.
+function pickPrevEdge(edges, nodes, tgtId, avoidId) {
+  const candidates = edges.filter(e =>
+    e.target === tgtId && e.source !== avoidId);
+  if (candidates.length > 0) {
+    const totalW = candidates.reduce((s, e) => s + (e.weight || 1), 0);
+    let r = Math.random() * totalW;
+    for (const e of candidates) {
+      r -= (e.weight || 1);
+      if (r <= 0) return { sid: e.source };
+    }
+    return { sid: candidates[candidates.length - 1].source };
+  }
+  const others = nodes.filter(n => n.id !== tgtId && n.id !== avoidId);
+  if (others.length === 0) return null;
+  return { sid: others[Math.floor(Math.random() * others.length)].id };
 }
 
 // A stable per-edge rotation angle around world Y in [+MIN_A, +MAX_A]
@@ -166,6 +194,10 @@ const useStore = create((set, get) => ({
   currentResolution: [1000, 1000],
 
   currentSegmentIndex: 0,
+  // Which segment the viewer opens on. The backward buffer means the
+  // start painting isn't segment 0 — there are paintings before it to
+  // scroll up into — so the camera positions the initial scroll here.
+  startSegmentIndex: 0,
   transitionProgress: 0,
   isTransitioning: false,
 
@@ -188,33 +220,60 @@ const useStore = create((set, get) => ({
   setStartNode: (id) => {
     console.log("[Store] Starting at:", id);
     const { nodes, edges } = get();
-    const node = nodes.find(n => n.id === id);
-    const aspect = (node?.width && node?.height)
-      ? node.width / node.height : 1.0;
 
-    const picked = pickEdge(edges, nodes, id, null);
-    const s_uv = picked?.edge?.s_uv || [0.5, 0.5];
+    // Build a BACKWARD BUFFER: a chain of paintings that flow INTO the
+    // chosen start, so on open the viewer can scroll UP into them rather
+    // than hitting a wall at the top. These are ordinary forward segments
+    // — we just anchor the chain a few paintings earlier and begin
+    // viewing partway in, so the fade/keys behave exactly as normal.
+    const BACK = 4;
+    const chain = [id];         // oldest → … → start
+    let cursor = id;
+    for (let k = 0; k < BACK; k++) {
+      const prev = pickPrevEdge(edges, nodes, cursor, chain[1] || null);
+      if (!prev) break;
+      chain.unshift(prev.sid);
+      cursor = prev.sid;
+    }
+    const rootId = chain[0];
+    const rootNode = nodes.find(n => n.id === rootId);
+    const rootAspect = (rootNode?.width && rootNode?.height)
+      ? rootNode.width / rootNode.height : 1.0;
+    const rootSuv = pickEdge(edges, nodes, rootId, null)?.edge?.s_uv || [0.5, 0.5];
     const identity = new THREE.Quaternion();
 
-    // The very first painting anchors the chain: its outgoing hinge sits
-    // at world origin. Every later painting marches forward from there.
+    // The chain's oldest painting anchors the world origin.
     const { position, rotation } = placeAtHingeWorld(
-      s_uv, aspect, identity, new THREE.Vector3(0, 0, 0));
+      rootSuv, rootAspect, identity, new THREE.Vector3(0, 0, 0));
     const firstCluster = {
-      id,
+      id: rootId,
       position,
       rotation,
       quat: [identity.x, identity.y, identity.z, identity.w],
-      image: node?.image,
-      hingeUvOut: s_uv,
+      image: rootNode?.image,
+      hingeUvOut: rootSuv,
     };
     set({
       activeClusters: [firstCluster],
-      currentNodeId: id,
+      currentNodeId: rootId,
       segments: [],
       currentSegmentIndex: 0,
+      startSegmentIndex: 0,
     });
-    get().buildNextSegment();
+    // March forward through the buffer chain to the chosen start painting.
+    for (let k = 1; k < chain.length; k++) {
+      get().buildNextSegment(chain[k]);
+    }
+    // The chosen start is now segment index chain.length-1. Begin there,
+    // and build a couple ahead so forward scrolling has content.
+    const startIdx = chain.length - 1;
+    set({ currentNodeId: id, currentSegmentIndex: startIdx, startSegmentIndex: startIdx });
+    // Build the full forward warm-window (TexturePreloader.AHEAD = 3) so the
+    // preloader can warm textures three segments out from the very first frame,
+    // not just one.
+    for (let i = 0; i < 3; i++) {
+      get().buildNextSegment();
+    }
   },
 
   setCurrentResolution: (res) => set({ currentResolution: res }),
@@ -232,7 +291,10 @@ const useStore = create((set, get) => ({
   // null (see divePath). The shared patch is what the viewer is drawn
   // into; A dissolves around it on the way in, B coalesces around it
   // on the way out. The transition itself should be imperceptible.
-  buildNextSegment: () => {
+  // `forcedTid` pins the next painting (used to pre-build the backward
+  // buffer through a specific ancestor chain); otherwise the target is
+  // picked from the hinge graph as usual.
+  buildNextSegment: (forcedTid = null) => {
     const { nodes, edges, activeClusters, segments } = get();
     if (activeClusters.length === 0) return;
 
@@ -240,10 +302,17 @@ const useStore = create((set, get) => ({
     const avoidId = segments.length > 0
       ? segments[segments.length - 1].startId : null;
 
+    let edge, tid;
+    if (forcedTid) {
+      // Use the real edge current→forcedTid if the graph has one, else a
+      // centred stand-in so placement still works.
+      edge = edges.find(e => e.source === current.id && e.target === forcedTid)
+          || { source: current.id, target: forcedTid, s_uv: [0.5, 0.5], t_uv: [0.5, 0.5] };
+      tid = forcedTid;
+    }
     // If setStartNode already picked an edge for A's outgoing hinge, use
     // the same edge if possible (so the placement is consistent).
-    let edge, tid;
-    if (current.hingeUvOut && segments.length === 0) {
+    if (!edge && current.hingeUvOut && segments.length === 0) {
       const cand = edges.filter(e =>
         e.source === current.id &&
         e.s_uv?.[0] === current.hingeUvOut[0] &&
