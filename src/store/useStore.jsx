@@ -268,7 +268,12 @@ const useStore = create((set, get) => ({
     // and build a couple ahead so forward scrolling has content.
     const startIdx = chain.length - 1;
     set({ currentNodeId: id, currentSegmentIndex: startIdx, startSegmentIndex: startIdx });
-    get().buildNextSegment();
+    // Build the full forward warm-window (TexturePreloader.AHEAD = 3) so the
+    // preloader can warm textures three segments out from the very first frame,
+    // not just one.
+    for (let i = 0; i < 3; i++) {
+      get().buildNextSegment();
+    }
   },
 
   setCurrentResolution: (res) => set({ currentResolution: res }),

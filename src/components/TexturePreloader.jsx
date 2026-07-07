@@ -15,6 +15,10 @@ const AHEAD  = 3;   // warm this many segments forward (we move forward most)
 const BEHIND = 2;   // and this many back, for scroll-up handoffs
 
 const warmed = new Set();
+// Hold a reference to each in-flight Image until it settles. Without this
+// the object can be GC'd before the fetch completes, and some browsers
+// abort the request when its Image is collected — defeating the warm.
+const inFlight = new Set();
 
 function warm(id) {
   if (!id || warmed.has(id)) return;
@@ -22,8 +26,15 @@ function warm(id) {
   // theater.json first — buildFlats needs it the instant the painting mounts.
   fetchTheaterMeta(id);
   const enc = encodeURIComponent(id);
-  new Image().src = `/data/theater/${enc}.painting.webp`;
-  new Image().src = `/data/theater/${enc}.depth.png`;
+  for (const url of [
+    `/data/theater/${enc}.painting.webp`,
+    `/data/theater/${enc}.depth.png`,
+  ]) {
+    const img = new Image();
+    inFlight.add(img);
+    img.onload = img.onerror = () => inFlight.delete(img);
+    img.src = url;
+  }
 }
 
 export default function TexturePreloader() {

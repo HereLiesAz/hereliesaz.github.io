@@ -72,7 +72,7 @@ export default function AnamorphicCam() {
     if (!didInit.current) {
       const startIdx = useStore.getState().startSegmentIndex || 0;
       const el = scroll.el;
-      if (startIdx > 0 && el) {
+      if (startIdx > 0 && el && totalPages > 0) {
         const offset = Math.min(0.999, (startIdx * PAGES_PER_SEGMENT) / totalPages);
         el.scrollTop = offset * (el.scrollHeight - el.clientHeight);
       }
