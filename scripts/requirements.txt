@@ -3,6 +3,7 @@ opencv-python-headless
 Pillow
 pillow-heif
 scipy
+transformers
 timm
 huggingface_hub
 gradio_client
