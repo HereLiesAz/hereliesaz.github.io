@@ -428,7 +428,9 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       uReveal:        { value: 0 },
       uWipe:          { value: 1 },
       uBgLight:       { value: 0 },
-      uBgColor:       { value: new THREE.Vector3(1, 1, 1) },
+      // A THREE.Color so we can convert the sampled sRGB paper colour into the
+      // linear space the shader sees the (sRGB-decoded) painting texture in.
+      uBgColor:       { value: new THREE.Color(1, 1, 1) },
     },
   })), [flats, colorCentersUniform, nColorCenters]);
 
@@ -466,7 +468,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
         let r = 0, g = 0, b = 0, n = 0;
         const acc = (x, y) => { const i = (y * S + x) * 4; r += px[i]; g += px[i + 1]; b += px[i + 2]; n++; };
         for (let x = 0; x < S; x++) { acc(x, 0); acc(x, S - 1); }
-        for (let y = 0; y < S; y++) { acc(0, y); acc(S - 1, y); }
+        for (let y = 1; y < S - 1; y++) { acc(0, y); acc(S - 1, y); }
         r /= n; g /= n; b /= n;
         const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
         setBgInfo({ light: lum > 0.62, color: [r / 255, g / 255, b / 255] });
@@ -488,7 +490,10 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     const c = bgInfo?.color || [1, 1, 1];
     for (const m of flatMaterials) {
       m.uniforms.uBgLight.value = light;
-      m.uniforms.uBgColor.value.set(c[0], c[1], c[2]);
+      // Sample is sRGB; the shader compares against the linear-decoded
+      // painting texture, so convert to linear to keep the matte threshold
+      // meaningful.
+      m.uniforms.uBgColor.value.setRGB(c[0], c[1], c[2]).convertSRGBToLinear();
     }
   }, [bgInfo, flatMaterials]);
 

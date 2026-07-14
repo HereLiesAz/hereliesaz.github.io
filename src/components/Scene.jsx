@@ -14,7 +14,10 @@ function BackgroundSweep() {
   const scene = useThree(s => s.scene);
   useFrame(() => {
     const lvl = bgSweepLevel();
-    if (scene.background && scene.background.setScalar) scene.background.setScalar(lvl);
+    // THREE.Color has no setScalar — use setRGB. (setScalar would be
+    // undefined, silently disabling the whole sweep.) The clear colour is a
+    // literal RGB level, not a colour-managed value, so no conversion here.
+    if (scene.background && scene.background.setRGB) scene.background.setRGB(lvl, lvl, lvl);
   });
   return null;
 }
