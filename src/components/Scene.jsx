@@ -1,10 +1,23 @@
 import React, { Suspense, useEffect } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { ScrollControls, PerspectiveCamera } from '@react-three/drei';
 import { useStore } from '../store/useStore';
 import AnamorphicCam from './AnamorphicCam';
-import TheaterPainting from './TheaterPainting';
+import TheaterPainting, { bgSweepLevel } from './TheaterPainting';
 import TexturePreloader from './TexturePreloader';
+
+// Drives the whole-site background from black to white as a light-background
+// (paper) piece coalesces, and back as it leaves. The void itself lightens —
+// there is no bounded plane and thus no rectangle. Dark-bg pieces report 0, so
+// the background stays black for them.
+function BackgroundSweep() {
+  const scene = useThree(s => s.scene);
+  useFrame(() => {
+    const lvl = bgSweepLevel();
+    if (scene.background && scene.background.setScalar) scene.background.setScalar(lvl);
+  });
+  return null;
+}
 
 export default function Scene() {
   const activeClusters = useStore(state => state.activeClusters);
@@ -96,7 +109,8 @@ export default function Scene() {
       dpr={[1, 2]}
     >
       <color attach="background" args={['#000000']} />
-      
+      <BackgroundSweep />
+
       <PerspectiveCamera makeDefault position={[0, 0, 0]} fov={50} near={0.01} />
       
       <ambientLight intensity={0.5} />
