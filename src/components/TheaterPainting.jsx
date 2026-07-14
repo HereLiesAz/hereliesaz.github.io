@@ -323,6 +323,11 @@ function shufflePerId(arr, seed) {
 export default function TheaterPainting({ id, image, position, rotation, mySegmentIndex }) {
   const [meta, setMeta] = useState(null);
   const [flatTex, setFlatTex] = useState(null);
+  // Detected background: { light, color:[r,g,b] }. Sampled from the painting's
+  // border once it loads — null until then (treated as a normal dark piece).
+  // Declared here (above fitScale) because fitScale reads it: a later
+  // declaration would leave it in the temporal dead zone when the memo runs.
+  const [bgInfo, setBgInfo] = useState(null);
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const tmpVec = useRef(new THREE.Vector3());
@@ -437,9 +442,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   // Load painting + depth textures once meta is known. Pass them into
   // every flat's material.
   const [textures, setTextures] = useState(null);
-  // Detected background: { light, color:[r,g,b] }. Sampled from the painting's
-  // border once it loads — null until then (treated as a normal dark piece).
-  const [bgInfo, setBgInfo] = useState(null);
   useEffect(() => {
     if (!id || !meta) return;
     let cancelled = false;
