@@ -1,10 +1,60 @@
 import React, { Suspense, useEffect } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { ScrollControls, PerspectiveCamera } from '@react-three/drei';
 import { useStore } from '../store/useStore';
 import AnamorphicCam from './AnamorphicCam';
-import TheaterPainting from './TheaterPainting';
+import TheaterPainting, { bgSweepLevel } from './TheaterPainting';
 import TexturePreloader from './TexturePreloader';
+
+// Drives the whole-site background from black to white as a light-background
+// (paper) piece coalesces, and back as it leaves. Rather than a uniform level,
+// it's a SCREEN-SPACE wipe: white grows across the frame behind a torn moving
+// boundary (uLevel), black ahead of it. The void itself lightens — no bounded
+// plane, so no rectangle — and the moving edge is where the shards sweep past,
+// so it reads as shard-revealed rather than a fade. Dark pieces report 0, so
+// the frame stays fully black for them.
+const bgWipeVS = `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }
+`;
+const bgWipeFS = `
+precision highp float;
+uniform float uLevel;
+varying vec2 vUv;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){
+  vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i+vec2(1,0)), u.x),
+             mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), u.x), u.y);
+}
+void main(){
+  // White where the wipe has passed (vUv.x < uLevel), black ahead; torn edge
+  // so the boundary reads as ripped paper, not a razor line. uLevel 0 = all
+  // black, 1 = all white.
+  float torn = (noise(vUv * 7.0) - 0.5) * 0.05 + (noise(vUv * 23.0) - 0.5) * 0.02;
+  float g = 1.0 - smoothstep(uLevel - 0.02, uLevel + 0.02, vUv.x + torn);
+  gl_FragColor = vec4(vec3(g), 1.0);
+}
+`;
+function BackgroundSweep() {
+  const matRef = React.useRef();
+  useFrame(() => {
+    if (matRef.current) matRef.current.uniforms.uLevel.value = bgSweepLevel();
+  });
+  return (
+    <mesh frustumCulled={false} renderOrder={-1000}>
+      <planeGeometry args={[1, 1]} />
+      <shaderMaterial
+        ref={matRef}
+        vertexShader={bgWipeVS}
+        fragmentShader={bgWipeFS}
+        uniforms={{ uLevel: { value: 0 } }}
+        depthTest={false}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
 
 export default function Scene() {
   const activeClusters = useStore(state => state.activeClusters);
@@ -96,7 +146,8 @@ export default function Scene() {
       dpr={[1, 2]}
     >
       <color attach="background" args={['#000000']} />
-      
+      <BackgroundSweep />
+
       <PerspectiveCamera makeDefault position={[0, 0, 0]} fov={50} near={0.01} />
       
       <ambientLight intensity={0.5} />

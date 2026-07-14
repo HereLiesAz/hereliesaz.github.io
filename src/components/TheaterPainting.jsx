@@ -31,6 +31,22 @@ const CROSS_FADE = 1.2;
 // The backdrop is oversized so parallax never exposes its frame edge.
 const BACKDROP_OVERSCAN = 1.08;
 
+// Light-background pieces overfill the frame at coalescence so the paper's
+// own edges sit off-screen (only the swept site background, never a rectangle).
+const LIGHT_BG_OVERFILL = 1.35;
+
+// Each mounted light-bg painting reports how white the SITE background should
+// be right now (0 black .. 1 white), keyed by painting id. A consumer in the
+// scene reads the max and drives the renderer clear colour, so the whole void
+// — not a bounded plane — lightens toward white as a paper piece coalesces
+// and darkens back as it leaves. Dark-bg pieces never contribute.
+export const bgSweep = new Map();
+export function bgSweepLevel() {
+  let m = 0;
+  for (const v of bgSweep.values()) if (v > m) m = v;
+  return m;
+}
+
 
 // ---- module-level fetch caches ----------------------------------------------
 
@@ -99,6 +115,12 @@ uniform float uReveal;
 // beyond the moving boundary. That boundary rides a passing shard so its
 // edge is hidden; the art assembles into place instead of fading up.
 uniform float uWipe;
+// Light-background pieces (ink/paint on white paper). uBgLight flags the
+// painting; uBgColor is its sampled paper colour. Pixels near that colour are
+// matted out so the subject floats — the paper never shows as a rectangle;
+// the site background (swept black->white elsewhere) becomes its ground.
+uniform float uBgLight;
+uniform vec3  uBgColor;
 varying vec2 vUv;
 
 float hash(vec2 p) {
@@ -128,6 +150,14 @@ void main() {
   float lum = 0.2126 * painting.r + 0.7152 * painting.g + 0.0722 * painting.b;
   float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
   if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
+
+  // Light-background matte: for paper pieces, kill pixels near the paper
+  // colour so the subject floats and the (swept) site background is its
+  // ground. A little noise tears the matte edge like the chroma-key.
+  if (uBgLight > 0.5) {
+    float paperD = distance(painting, uBgColor) + chromaJit;
+    if (paperD < 0.16) discard;
+  }
 
   if (uMode > 0.5 && uMode < 1.5) {
     // Depth band cutout
@@ -293,6 +323,11 @@ function shufflePerId(arr, seed) {
 export default function TheaterPainting({ id, image, position, rotation, mySegmentIndex }) {
   const [meta, setMeta] = useState(null);
   const [flatTex, setFlatTex] = useState(null);
+  // Detected background: { light, color:[r,g,b] }. Sampled from the painting's
+  // border once it loads — null until then (treated as a normal dark piece).
+  // Declared here (above fitScale) because fitScale reads it: a later
+  // declaration would leave it in the temporal dead zone when the memo runs.
+  const [bgInfo, setBgInfo] = useState(null);
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const tmpVec = useRef(new THREE.Vector3());
@@ -366,8 +401,13 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     const visibleWidth  = visibleHeight * (size.width / size.height);
     const widthScale  = (visibleWidth  * 0.85) / paintingWidth;
     const heightScale = (visibleHeight * 0.90) / paintingHeight;
+    // Light-bg pieces overfill so the paper's edges sit off-screen: fit to the
+    // LARGER dimension and push past the frame, instead of fitting inside it.
+    if (bgInfo?.light) {
+      return Math.max(widthScale, heightScale) * LIGHT_BG_OVERFILL;
+    }
     return Math.min(widthScale, heightScale);
-  }, [meta, flats, flatTex, size.width, size.height, camera.fov]);
+  }, [meta, flats, flatTex, size.width, size.height, camera.fov, bgInfo]);
 
   const planeGeom = useMemo(() => new THREE.PlaneGeometry(1, 1), []);
 
@@ -392,6 +432,10 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       uPatchR:        { value: 0.14 },
       uReveal:        { value: 0 },
       uWipe:          { value: 1 },
+      uBgLight:       { value: 0 },
+      // A THREE.Color so we can convert the sampled sRGB paper colour into the
+      // linear space the shader sees the (sRGB-decoded) painting texture in.
+      uBgColor:       { value: new THREE.Color(1, 1, 1) },
     },
   })), [flats, colorCentersUniform, nColorCenters]);
 
@@ -415,6 +459,22 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       depth.generateMipmaps = false;
       depth.minFilter = THREE.LinearFilter;
       setTextures({ painting, depth });
+      // Sample the painting's border to detect a light (paper) background.
+      try {
+        const S = 48;
+        const cnv = document.createElement('canvas');
+        cnv.width = S; cnv.height = S;
+        const ctx = cnv.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(painting.image, 0, 0, S, S);
+        const px = ctx.getImageData(0, 0, S, S).data;
+        let r = 0, g = 0, b = 0, n = 0;
+        const acc = (x, y) => { const i = (y * S + x) * 4; r += px[i]; g += px[i + 1]; b += px[i + 2]; n++; };
+        for (let x = 0; x < S; x++) { acc(x, 0); acc(x, S - 1); }
+        for (let y = 1; y < S - 1; y++) { acc(0, y); acc(S - 1, y); }
+        r /= n; g /= n; b /= n;
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        setBgInfo({ light: lum > 0.62, color: [r / 255, g / 255, b / 255] });
+      } catch { setBgInfo({ light: false, color: [1, 1, 1] }); }
     }).catch(() => { });
     return () => { cancelled = true; };
   }, [id, meta]);
@@ -426,6 +486,22 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       m.uniforms.uDepth.value    = textures.depth;
     }
   }, [textures, flatMaterials]);
+
+  useEffect(() => {
+    const light = bgInfo?.light ? 1 : 0;
+    const c = bgInfo?.color || [1, 1, 1];
+    for (const m of flatMaterials) {
+      m.uniforms.uBgLight.value = light;
+      // Sample is sRGB; the shader compares against the linear-decoded
+      // painting texture, so convert to linear to keep the matte threshold
+      // meaningful.
+      m.uniforms.uBgColor.value.setRGB(c[0], c[1], c[2]).convertSRGBToLinear();
+    }
+  }, [bgInfo, flatMaterials]);
+
+  // Drop this painting's site-background contribution when it unmounts, so a
+  // scrolled-away paper piece can't hold the void white.
+  useEffect(() => () => { bgSweep.delete(id); }, [id]);
 
   useEffect(() => {
     const isActiveSegment =
@@ -520,6 +596,13 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     const wipeReveal = phase < 0.6
       ? THREE.MathUtils.smoothstep(phase, 0.0, 0.6)
       : 1.0 - THREE.MathUtils.smoothstep(phase, 0.6, 1.0);
+
+    // Report this piece's pull on the SITE background. A light-bg (paper)
+    // piece drives the whole void toward white as it coalesces (peak at d=0)
+    // and back to black as it leaves; dark pieces exert none. A scene-level
+    // consumer reads the max across mounted pieces and sets the clear colour.
+    if (bgInfo?.light) bgSweep.set(id, fade);
+    else bgSweep.delete(id);
 
     // Fulcrum role for the ACTIVE segment. This painting is the outgoing
     // (start) painting of segment cur, and the incoming (end) painting of
