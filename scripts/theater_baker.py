@@ -63,7 +63,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile, ImageOps
 
 # Some of the source photos are slightly truncated; opening them tolerantly
 # avoids derailing a bake over one bad byte.
@@ -100,21 +100,31 @@ def crop_directive(pid: str):
     return MANUAL_CROPS[pid] if pid in MANUAL_CROPS else "heuristic"
 
 
-def apply_crop(rgb: np.ndarray, pid: str) -> np.ndarray:
+def apply_crop(rgb: np.ndarray, pid: str) -> tuple[np.ndarray, bool]:
     """Crop `rgb` to just the artwork: the hand-authored box when present,
-    else the saturation/structure heuristic; None means keep the whole."""
+    else the saturation/structure heuristic; None means keep the whole.
+
+    Returns (result, box_applied). box_applied is False only in the one
+    case where a hand-authored box from crops.json rounds to an empty
+    region at this image's actual pixel dimensions — the caller must NOT
+    then record that box in metadata as if it had been applied, since the
+    pixels returned are the untouched full frame."""
     box = crop_directive(pid)
     if box == "heuristic":
-        return crop_to_art(rgb)
+        return crop_to_art(rgb), True
     if box is None:
-        return rgb
+        return rgb, True
     h, w = rgb.shape[:2]
     x0, y0, x1, y1 = box
     x0i, x1i = max(0, min(int(round(x0 * w)), w - 1)), max(1, min(int(round(x1 * w)), w))
     y0i, y1i = max(0, min(int(round(y0 * h)), h - 1)), max(1, min(int(round(y1 * h)), h))
     if x1i <= x0i or y1i <= y0i:
-        return rgb
-    return rgb[y0i:y1i, x0i:x1i]
+        print(f"[!] {pid}: crop box {box} from crops.json degenerated to an "
+              f"empty region after rounding at {w}x{h}; keeping the full "
+              f"frame instead of silently applying a box that isn't there",
+              file=sys.stderr)
+        return rgb, False
+    return rgb[y0i:y1i, x0i:x1i], True
 
 
 # ---- tuning knobs -----------------------------------------------------------
@@ -127,6 +137,24 @@ N_COLOR_BANDS    = 8                       # color-cluster layers (dark→light)
 ACCENT_SAT_FLOOR = 0.18                    # painting reads as desaturated below this
 ACCENT_COUNT     = 2
 N_ACCENT_CLUSTERS = 10
+
+# cv2.kmeans() draws its initial centers (even under KMEANS_PP_CENTERS,
+# which is still probabilistic) from OpenCV's process-global RNG
+# (cv::theRNG()), which is never reseeded between calls. That means the
+# depth-band / color-cluster output for a given image's pixels — which
+# never change — depends on how many OTHER cv2.kmeans() calls happened
+# earlier in the SAME PROCESS, i.e. on batch order/position. Confirmed
+# live: with identical input, band-edge output differed measurably
+# between "first kmeans call in the process" and "call #8, after 7 prior
+# kmeans calls on unrelated images" — see docs/WORKFLOW.md history / PR
+# notes for the repro. Since theater_bake.yml always passes --ids, the
+# schema-2 skip guard never fires in CI, so every id in a batch re-enters
+# this code every run: batch order alone could silently change how many
+# depth cutouts a painting renders, even though its pixels never changed.
+# Fix: reseed cv2's global RNG to this FIXED constant immediately before
+# EVERY cv2.kmeans() call (see KMEANS_SEED usages below), so the result
+# depends only on the input pixels, never on prior calls in the process.
+KMEANS_SEED = 20260214
 
 DEPTH_SPACE_ID   = "depth-anything/Depth-Anything-V2"
 DEPTH_API_NAME   = "/on_submit"
@@ -250,7 +278,7 @@ def photorealize(rgb: np.ndarray, cache_path: Path) -> np.ndarray | None:
     caller then falls back to estimating depth on the painting itself.
     """
     if cache_path.exists():
-        photo = np.array(Image.open(cache_path).convert("RGB"))
+        photo = np.array(ImageOps.exif_transpose(Image.open(cache_path)).convert("RGB"))
         if photo.shape[:2] != rgb.shape[:2]:
             photo = cv2.resize(photo, (rgb.shape[1], rgb.shape[0]),
                                interpolation=cv2.INTER_AREA)
@@ -407,7 +435,7 @@ def estimate_depth(rgb: np.ndarray) -> np.ndarray | None:
 
     # Result is (slider_pair_list, 8bit_depth_png_path, 16bit_depth_png_path).
     depth_16_path = result[2]
-    depth_im = Image.open(depth_16_path)
+    depth_im = ImageOps.exif_transpose(Image.open(depth_16_path))
     arr = np.array(depth_im).astype(np.float32)
     # Resize to match input.
     if arr.shape[:2] != rgb.shape[:2]:
@@ -421,7 +449,7 @@ def estimate_depth(rgb: np.ndarray) -> np.ndarray | None:
 def load_depth_png(path: Path, shape: tuple[int, int]) -> np.ndarray:
     """Read a cached {id}.depth.png (8- or 16-bit grayscale) back to a
     float32 [0,1] map aligned to `shape` (h, w)."""
-    arr = np.array(Image.open(path)).astype(np.float32)
+    arr = np.array(ImageOps.exif_transpose(Image.open(path))).astype(np.float32)
     if arr.ndim == 3:
         arr = arr[..., 0]
     if arr.shape != shape:
@@ -448,6 +476,7 @@ def depth_bands_kmeans(depth: np.ndarray, k: int = N_BANDS,
     their nearest neighbour."""
     flat = depth.reshape(-1, 1).astype(np.float32)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-4)
+    cv2.setRNGSeed(KMEANS_SEED)  # see KMEANS_SEED comment: determinism, not batch order
     _, labels, centers = cv2.kmeans(
         flat, k, None, criteria, attempts=4, flags=cv2.KMEANS_PP_CENTERS,
     )
@@ -505,6 +534,7 @@ def color_clusters(rgb: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
     h, w = rgb.shape[:2]
     samples = rgb.reshape(-1, 3).astype(np.float32)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
+    cv2.setRNGSeed(KMEANS_SEED)  # see KMEANS_SEED comment: determinism, not batch order
     _, labels, centers = cv2.kmeans(
         samples, k, None, criteria, attempts=4, flags=cv2.KMEANS_PP_CENTERS,
     )
@@ -548,18 +578,37 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     # ids whose box changed — no blanket --force when a few crops move.
     directive = crop_directive(pid)
     prev_directive = "MISSING"
+    crop_note = None  # carried over from a cached bake unless recomputed below
     if out_json.exists():
         try:
-            prev_directive = json.loads(out_json.read_text()).get("crop", "MISSING")
+            prev_meta = json.loads(out_json.read_text())
+            prev_directive = prev_meta.get("crop", "MISSING")
+            crop_note = prev_meta.get("crop_note")
         except Exception:
             pass
     crop_changed = prev_directive != directive
 
     if out_painting.exists() and not force and not crop_changed:
-        rgb = np.array(Image.open(out_painting).convert("RGB"))
+        rgb = np.array(ImageOps.exif_transpose(Image.open(out_painting)).convert("RGB"))
     else:
-        rgb = np.array(Image.open(path).convert("RGB"))
-        rgb = apply_crop(rgb, pid)
+        # The raw source photo — the one place in the pipeline where a
+        # camera-authored EXIF Orientation tag can actually be present.
+        # Without correcting it here, a sideways phone photo bakes into a
+        # sideways painting, sideways depth map, and (via
+        # pareidolia_index.py, which only ever reads OUR baked outputs)
+        # garbage hinge patches. exif_transpose() is a no-op when there is
+        # no orientation tag, so this is safe for every source.
+        rgb = np.array(ImageOps.exif_transpose(Image.open(path)).convert("RGB"))
+        rgb, crop_applied = apply_crop(rgb, pid)
+        # meta["crop"] below always records the hand-authored DIRECTIVE
+        # (needed for the change-detection compare above); crop_note is
+        # the separate, honest record of whether that directive actually
+        # produced a crop on this image's real pixels, so metadata never
+        # implies a crop happened when apply_crop silently fell back to
+        # the full frame.
+        crop_note = None if crop_applied else (
+            f"crop box {directive} degenerated to an empty region after "
+            "rounding to pixels; full frame was kept, not this box")
         h, w = rgb.shape[:2]
         scale = min(1.0, max_side / max(h, w))
         if scale < 1.0:
@@ -576,12 +625,20 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     depth = None
     source = None
     if out_depth.exists() and not force and not crop_changed:
-        cached_source = "photo+depth-anything-v2"
+        # Default to UNTRUSTED ("synthetic") rather than "assume real". A
+        # cache hit is only a fast-path when we can actually confirm the
+        # cached depth.png came from a real model; any failure to read
+        # that confirmation (corrupt/partial JSON, missing keys, or no
+        # out_json at all) must fall through to re-deriving depth below,
+        # not silently reuse a possibly-synthetic map. Reading the same
+        # exception-swallowing "assume real" default that used to live
+        # here would defeat the whole point of the cache-staleness check.
+        cached_source = "synthetic"
         if out_json.exists():
             try:
                 cached_source = json.loads(out_json.read_text())["depth"]["source"]
             except Exception:
-                pass
+                cached_source = "synthetic"
         if cached_source != "synthetic":
             depth = load_depth_png(out_depth, (h, w))
             source = cached_source
@@ -639,6 +696,12 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     }
     if accents is not None:
         meta["accents"] = accents
+    if crop_note is not None:
+        # Present ONLY when the hand-authored crop directive above did NOT
+        # actually get applied to this image's pixels (degenerate box after
+        # rounding) — see apply_crop(). Its presence is the honest signal
+        # that "crop" is a request, not a guarantee of what pixels were kept.
+        meta["crop_note"] = crop_note
     out_json.write_text(json.dumps(meta, separators=(",", ":")))
     return meta
 

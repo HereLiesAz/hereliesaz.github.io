@@ -5,6 +5,39 @@ const LOG_LEVELS = {
   CRASH: 'CRASH'
 };
 
+// React's error boundaries can receive ANY thrown value, not just real
+// Error instances (`throw 'oops'`, `throw null`, `throw { code: 1 }` are
+// all legal JS). These helpers make sure a non-Error thrown value still
+// produces a sensible string instead of throwing again (e.g. calling
+// `.message` or `.toString()` on `null`).
+function safeErrorMessage(error) {
+  if (error instanceof Error) return error.message || 'Unknown Error';
+  if (typeof error === 'string') return error || 'Unknown Error';
+  if (error === null || error === undefined) return 'Unknown Error';
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function safeErrorStack(error) {
+  if (error instanceof Error && error.stack) return error.stack;
+  return 'No stack trace available';
+}
+
+// Full safe string representation of a thrown value, for display.
+function stringifyError(error) {
+  if (error instanceof Error) return error.toString();
+  if (typeof error === 'string') return error;
+  if (error === null || error === undefined) return String(error);
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 class JulesLogger {
   constructor() {
     this.logs = [];
@@ -49,7 +82,7 @@ class JulesLogger {
   }
 
   generateIssueUrl(error) {
-    const title = `[Auto-Report] Frontend Crash: ${error.message || 'Unknown Error'}`;
+    const title = `[Auto-Report] Frontend Crash: ${safeErrorMessage(error)}`;
     const body = `
 ### Jules Auto-Report
 **Context:** Frontend Crash
@@ -57,7 +90,7 @@ class JulesLogger {
 
 ### Stack Trace
 \`\`\`
-${error.stack || 'No stack trace available'}
+${safeErrorStack(error)}
 \`\`\`
 
 ### Recent Logs
@@ -77,4 +110,5 @@ ${this.getDump()}
 }
 
 export const logger = new JulesLogger();
+export { stringifyError, safeErrorMessage, safeErrorStack };
 export default logger;

@@ -51,7 +51,12 @@ jobs:
             sam_vit_b_01ec64.pth
             ~/.cache/torch/hub/checkpoints
             ~/.cache/torch/hub
-          key: ${{ runner.os }}-ai-models-v1
+          # Hash the files that pin dependency/checkpoint versions
+          # (grinder.py hardcodes the sam_vit_b_01ec64.pth checkpoint
+          # URL; requirements.txt pins the surrounding deps) so a version
+          # bump invalidates the cache instead of silently reusing a
+          # stale checkpoint under the old static "-v1" key.
+          key: ${{ runner.os }}-ai-models-${{ hashFiles('scripts/requirements.txt', 'scripts/grinder.py') }}
 
       - name: Install Dependencies
         run: pip install -r scripts/requirements.txt
@@ -71,6 +76,13 @@ jobs:
   consolidate:
     needs: grind
     runs-on: ubuntu-latest
+    # Shared with bootstrap.yml's `bootstrap` job and theater_bake.yml's
+    # `bake` job: all three push to the same art-data branch via a plain,
+    # non-force git push (peaceiris/actions-gh-pages) with no retry on
+    # rejection, so overlapping runs must queue rather than race.
+    concurrency:
+      group: art-data-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v3
 
@@ -90,8 +102,15 @@ jobs:
       - name: Install Dependencies
         run: pip install -r scripts/requirements.txt
 
-      - name: Index
-        run: python scripts/indexer.py
+      # scripts/indexer.py used to run here, writing public/manifest.json
+      # (one level ABOVE public/data — public/data.parent). Removed: that
+      # output path is never published (this job's Deploy step below
+      # publishes only ./public/data, so it was discarded with the
+      # runner every time) and nothing in src/ ever reads it — the
+      # frontend's real manifest consumer is /data/theater/_manifest.json,
+      # produced by pareidolia_index.py in theater_bake.yml, an entirely
+      # separate script/pipeline. Verified via grep across src/ before
+      # removing this step.
 
       # The paper-theater bake (painting/depth/hinge graph) and its
       # art-data deploy were REMOVED from this workflow. They now live
@@ -101,7 +120,7 @@ jobs:
       # live gallery back to 3 paintings — so it must never run here.
 
       - name: Deploy
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3.9.3 (pinned commit for the v3 tag)
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public/data

@@ -170,6 +170,24 @@ const STYLES = `
   padding-bottom: 1px;
 }
 .ink-modal a:hover { border-bottom-color: rgba(244, 240, 230, 0.95); }
+
+/* --- Load error --------------------------------------------------------
+   Minimal, unobtrusive notice for the total-data-loss case (no theater
+   bake AND no legacy graph.json) — otherwise the screen just stays
+   black forever with no indication anything is wrong. Styled like the
+   caption: same ink colour/serif, centred instead of corner-anchored so
+   it reads as a message rather than a painting title. */
+.ink-load-error {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  font-size: 0.9rem;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 16px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+}
 `;
 
 /**
@@ -201,6 +219,7 @@ const Overlay = () => {
   // store via a transient subscription below.
   const showMenu   = useStore(s => s.showMenu);
   const toggleMenu = useStore(s => s.toggleMenu);
+  const loadError  = useStore(s => s.loadError);
 
   // Inject styles once.
   useEffect(() => {
@@ -249,6 +268,10 @@ const Overlay = () => {
       <div ref={captionRef} className="ink-caption">
         <div ref={titleRef} className="ink-caption__title" />
       </div>
+
+      {loadError && (
+        <div className="ink-load-error">{loadError}</div>
+      )}
 
       {showMenu && (
         <div className="ink-modal-backdrop" onClick={toggleMenu}>

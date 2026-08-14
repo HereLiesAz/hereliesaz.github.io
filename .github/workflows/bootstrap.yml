@@ -9,6 +9,13 @@ permissions:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
+    # Shared with process_art.yml's `consolidate` job and theater_bake.yml's
+    # `bake` job: all three push to the same art-data branch via a plain,
+    # non-force git push (peaceiris/actions-gh-pages) with no retry on
+    # rejection, so overlapping runs must queue rather than race.
+    concurrency:
+      group: art-data-publish
+      cancel-in-progress: false
     steps:
       - name: Checkout Source
         uses: actions/checkout@v3
@@ -26,10 +33,10 @@ jobs:
         run: python scripts/bootstrap.py
 
       - name: Deploy Data to Orphan Branch
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3.9.3 (pinned commit for the v3 tag)
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
+          publish_dir: ./public/data
           publish_branch: art-data
           keep_files: true
           commit_message: "Bootstrap Data (5 Images): ${{ github.sha }}"

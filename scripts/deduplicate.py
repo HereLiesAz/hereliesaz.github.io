@@ -2,12 +2,24 @@
 Deduplication Script
 ===================
 
-This script acts as a "Janitor" for the raw asset directory. It scans for image files
-that are visually identical (even if the filenames are different) and removes duplicates,
-keeping only the highest-quality version.
+This script acts as a "Janitor" for the source asset directory. It scans for
+image files that are visually identical (even if the filenames are
+different) and removes duplicates, keeping only the highest-quality
+version.
+
+NOTE on directory layout: this repo has no raw/processed split. There is
+one flat source directory, `public/assets/` (1186+ files at last count),
+which scripts/theater_baker.py reads directly via `--input public/assets/`.
+An earlier version of this script assumed a separate `assets/raw/` staging
+folder that does not exist here — INPUT_DIR below points at the real,
+single source directory instead. Because that directory is what the bake
+pipeline actually reads from (by filename stem — theater_bake.yml's
+DEFAULT_IDS and scripts/crops.json both key off exact stems), running this
+script for real deletes files the pipeline may depend on; run it
+deliberately, not as a routine no-op smoke test.
 
 Algorithm:
-    1. Scan `assets/raw` for image files.
+    1. Scan INPUT_DIR for image files.
     2. Compute a Perceptual Hash (pHash) for each image.
        - pHash survives minor edits (resizing, format changes) but detects visual similarity.
     3. Group files by their Hash.
@@ -31,9 +43,12 @@ from PIL import Image  # Python Imaging Library (Pillow) for opening images
 
 # --- CONFIGURATION ---
 
-# The directory containing the source images to process.
-# This should match the location where you dump raw files.
-INPUT_DIR = "assets/raw"
+# The directory containing the source images to process. This is the
+# SAME directory scripts/theater_baker.py bakes from (`--input
+# public/assets/`) — there is no separate raw/processed split in this
+# repo, so this is the one real source-of-truth directory, not a staging
+# area.
+INPUT_DIR = "public/assets"
 
 # The sensitivity of the perceptual hash.
 # A size of 8 produces a 64-bit hash (8x8 grid).
@@ -71,14 +86,19 @@ def find_and_purge_duplicates():
     Main execution function.
     Scans, hashes, ranks, and deletes duplicate images.
     """
-    print("🧹 The Janitor is scanning for duplicates...")
-    
     # --- SAFETY CHECK ---
-    # Ensure the target directory actually exists before trying to list it.
+    # Ensure the target directory actually exists before trying to list it,
+    # and BEFORE printing anything that reads as "it's working" — this used
+    # to print the "scanning" message first and check second, so a missing
+    # INPUT_DIR (e.g. docs/SETUP.md's install-check invocation, run from
+    # the wrong cwd) looked like a successful run instead of the no-op it
+    # actually was.
     if not os.path.exists(INPUT_DIR):
         print(f"⚠️ Directory '{INPUT_DIR}' does not exist. Skipping cleanup.")
         return
-    
+
+    print("🧹 The Janitor is scanning for duplicates...")
+
     # Dictionary to store { hash_string: [list_of_filepaths] }
     # This acts as our collision map. Keys are unique hashes, values are lists of files that match that hash.
     hashes = {}

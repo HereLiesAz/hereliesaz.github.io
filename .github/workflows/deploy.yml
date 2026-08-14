@@ -3,8 +3,12 @@ name: Deploy Site (The Gallery)
 on:
   push:
     branches: ["main"]
+  workflow_dispatch:
   workflow_run:
-    workflows: ["Process Art & Index"]
+    # Must exactly match process_art.yml's `name:` field. Verified by
+    # reading that file directly — it is "Process Art (Turbo 56)", not
+    # the never-existent "Process Art & Index" this used to reference.
+    workflows: ["Process Art (Turbo 56)"]
     types:
       - completed
 
@@ -41,6 +45,22 @@ jobs:
           path: public/data
           fetch-tags: false
 
+      # Consuming-side sanity check (not the full validate_output.py
+      # schema check — that runs on the producing side, in
+      # theater_bake.yml, before this data ever reaches art-data).
+      # Previously a missing/empty art-data checkout was either silently
+      # skipped (branch absent) or produced an empty public/data with no
+      # warning at all — the site would then deploy showing the
+      # flat-fallback plane for every painting with no CI signal. Fail
+      # loudly instead.
+      - name: Verify art data is usable
+        run: |
+          if [ ! -s public/data/theater/_manifest.json ]; then
+            echo "::error::public/data/theater/_manifest.json is missing or empty after the art-data checkout — refusing to deploy a site with no theater data. Check that the art-data branch exists and theater_bake.yml has published to it."
+            exit 1
+          fi
+          echo "art-data verified: $(find public/data -type f | wc -l) files staged"
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -49,6 +69,14 @@ jobs:
 
       - name: Install Dependencies
         run: npm install
+
+      # Legacy graph.json fallback (Scene.jsx uses it when the theater
+      # manifest is missing/empty): self-repairs public/graph.json by
+      # dropping nodes with no matching public/assets/ image and bridging
+      # edges around them. Only touches this ephemeral checkout, not the
+      # repo.
+      - name: Verify legacy graph.json against assets
+        run: npm run verify-assets
 
       - name: Build
         run: npm run build

@@ -3,22 +3,23 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 
-// Each painting sits at world (0, 0, 0) with its own rotation. Its layer
-// stack extends along the painting's local Z axis, mirrored across the
-// origin: for every cutout flat at local z = +d there is an identical
-// twin at z = -d. The backdrop plane sits at z = 0. Two families of
-// cutouts stack outward from origin:
+// Each painting group is positioned so its shared hinge point lands at a
+// world location marched forward down the pareidolia hinge chain (see
+// useStore's placeAtHingeWorld/hingeWorld) — not at a fixed world origin.
+// Within the group's own local frame, its layer stack extends along the
+// painting's local Z axis, mirrored across local z = 0: for every depth
+// flat at local z = +d there is an identical twin at z = -d, built from
+// one flat per depth band, each discarding pixels outside that band.
 //
-//   depth flats — one per depth band, discarding pixels outside that band
-//   color flats — one per color cluster, discarding pixels outside that cluster
+// Dark-background paintings are chroma-keyed: pixels darker than CHROMA_L
+// → discard, so the painting's black regions dissolve into the black void
+// behind it. Light-background ("paper") paintings instead matte out
+// pixels near the sampled paper colour, so near-black ink survives.
 //
-// Both families are chroma-keyed: pixels darker than CHROMA_L → discard, so
-// the painting's black regions dissolve into the black void behind it.
-//
-// Head-on the front-side flats occlude the origin-plane backdrop and one
-// another to reassemble the painting exactly. Off-axis the flats part
-// with real parallax; as the camera passes through the origin plane, the
-// mirrored back-side layers become the near ones.
+// Head-on the front-side flats occlude one another to reassemble the
+// painting exactly. Off-axis the flats part with real parallax; as the
+// camera passes through local z = 0, the mirrored back-side layers become
+// the near ones.
 const PAINTING_HEIGHT   = 10.0;
 const SHELL_HALF_DEPTH  = 5.0;      // layers occupy z ∈ [-SHELL_HALF_DEPTH, +SHELL_HALF_DEPTH]
 const NULL_DISTANCE     = 11.0;     // camera radius that reads a painting head-on
@@ -28,24 +29,30 @@ const CHROMA_L          = 0.045;    // luminance below this counts as "black" �
 // black over this many units instead of clipping the near plane.
 const CROSS_FADE = 1.2;
 
-// The backdrop is oversized so parallax never exposes its frame edge.
-const BACKDROP_OVERSCAN = 1.08;
-
 // Light-background pieces overfill the frame at coalescence so the paper's
 // own edges sit off-screen (only the swept site background, never a rectangle).
 const LIGHT_BG_OVERFILL = 1.35;
 
 // Each mounted light-bg painting reports how white the SITE background should
-// be right now (0 black .. 1 white), keyed by painting id. A consumer in the
-// scene reads the max and drives the renderer clear colour, so the whole void
-// — not a bounded plane — lightens toward white as a paper piece coalesces
-// and darkens back as it leaves. Dark-bg pieces never contribute.
+// be right now (0 black .. 1 white). A consumer in the scene reads the max
+// and drives the renderer clear colour, so the whole void — not a bounded
+// plane — lightens toward white as a paper piece coalesces and darkens back
+// as it leaves. Dark-bg pieces never contribute.
+//
+// Keyed by a unique per-mount instance key (see mountKeyRef below), NOT by
+// painting id: two instances can in principle mount with the same id at
+// once (e.g. a self-loop edge in the hinge graph — not currently possible,
+// but a latent case worth guarding), and an id-keyed map would let one
+// instance's unmount cleanup delete the other still-live instance's entry,
+// snapping the sweep to black under it. bgSweepLevel()'s output contract
+// (max value across all live entries) is unchanged by this internal keying.
 export const bgSweep = new Map();
 export function bgSweepLevel() {
   let m = 0;
   for (const v of bgSweep.values()) if (v > m) m = v;
   return m;
 }
+let bgSweepInstanceSeq = 0;
 
 
 // ---- module-level fetch caches ----------------------------------------------
@@ -57,7 +64,15 @@ export function fetchTheaterMeta(id) {
   if (hit) return hit;
   const p = fetch(`/data/theater/${encodeURIComponent(id)}.theater.json`)
     .then(res => (res.ok ? res.json() : null))
-    .catch(() => null);
+    .catch(() => null)
+    .then(json => {
+      // A transient failure (network blip, brief 5xx, bad JSON) must not
+      // permanently poison this id for the rest of the tab session — only
+      // a successful, non-null result stays cached. Evict on failure so
+      // the next mount (the walk does revisit ids) retries the fetch.
+      if (json === null) theaterMetaCache.delete(id);
+      return json;
+    });
   theaterMetaCache.set(id, p);
   return p;
 }
@@ -75,29 +90,27 @@ void main() {
 }
 `;
 
-// Fragment shader for every flat. Behavior varies by three uniforms:
-//   uMode:
-//     0 = backdrop (no cutout, just chroma-key)
-//     1 = depth band cutout
-//     2 = color cluster cutout
-//   uBandMin/Max — depth band edges (mode 1)
-//   uColorIdx + uColorCenters[] — color cluster gate (mode 2)
+// Fragment shader for every flat. Every flat is a depth-band cutout
+// (uMode is always 1; the value is still passed in as a uniform in case a
+// future bake wants to distinguish flat kinds again, but no code path
+// currently sets anything else): uBandMin/uBandMax gate it to one depth
+// band via the depth texture.
 //
-// The chroma-key gate runs for every mode: pure-black regions of the
-// painting are discarded so the void shows through.
+// For dark-background paintings the chroma-key gate discards pure-black
+// regions so the void shows through. For light-background ("paper")
+// paintings the chroma-key is skipped entirely and a paper-colour matte
+// (uBgLight/uBgColor) discards pixels near the paper instead, so near-black
+// ink and linework survive.
 //
 // A cheap hash-based tear noise softens the depth-band boundaries into
-// organic torn-paper edges (mode 1 only).
+// organic torn-paper edges.
 const flatFS = /* glsl */ `
 precision highp float;
 uniform sampler2D uPainting;
 uniform sampler2D uDepth;
-uniform float uMode;         // 0 backdrop, 1 depth, 2 color
+uniform float uMode;         // always 1 (depth band cutout)
 uniform float uBandMin;
 uniform float uBandMax;
-uniform float uColorIdx;
-uniform vec3  uColorCenters[16];
-uniform float uNColorCenters;
 uniform float uFade;
 // Fulcrum reveal. uRole: 0 = not in the active segment (plain uFade),
 // 1 = the outgoing painting, 2 = the incoming painting. uPatchUv is this
@@ -140,46 +153,38 @@ float vnoise(vec2 p) {
 void main() {
   vec3 painting = texture2D(uPainting, vUv).rgb;
 
-  // Chroma-key: kill near-black on every flat, backdrop included. Black
-  // regions must be genuinely empty — transparent onto the black
-  // background — so a painting's dark passages read as void. Nothing
-  // else can bleed there because visibility is scheduled so only ONE
-  // painting is drawn at each coalescence point (see useFrame).
   // BT.709 luma; slight uv-noise threshold so the edges of dark regions
   // tear organically instead of aliasing.
   float lum = 0.2126 * painting.r + 0.7152 * painting.g + 0.0722 * painting.b;
   float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
-  if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
 
-  // Light-background matte: for paper pieces, kill pixels near the paper
-  // colour so the subject floats and the (swept) site background is its
-  // ground. A little noise tears the matte edge like the chroma-key.
   if (uBgLight > 0.5) {
+    // Light-background (paper) matte: near-black ink/linework is genuine
+    // content on these pieces, so the base near-black chroma-key below
+    // must NOT run for them — it would punch holes through the darkest
+    // strokes before this branch ever runs. Instead kill only pixels near
+    // the sampled paper colour, so the subject floats and the (swept)
+    // site background is its ground. A little noise tears the matte edge
+    // like the chroma-key would.
     float paperD = distance(painting, uBgColor) + chromaJit;
     if (paperD < 0.16) discard;
+  } else {
+    // Dark-background chroma-key: kill near-black on every flat. Black
+    // regions must be genuinely empty — transparent onto the black
+    // background — so a painting's dark passages read as void. Nothing
+    // else can bleed there because visibility is scheduled so only ONE
+    // painting is drawn at each coalescence point (see useFrame).
+    if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
   }
 
+  // Depth band cutout (the only flat kind produced today; see uMode note
+  // above).
   if (uMode > 0.5 && uMode < 1.5) {
-    // Depth band cutout
     float d = texture2D(uDepth, vUv).r;
     float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05
                + (hash(vUv * 1024.0) - 0.5) * 0.012;
     float dj = d + tear;
     if (dj < uBandMin || dj >= uBandMax) discard;
-  } else if (uMode > 1.5) {
-    // Color cluster cutout — assign this pixel to the nearest cluster
-    // among the first uNColorCenters entries of uColorCenters, then keep
-    // only pixels whose nearest cluster is this flat's uColorIdx.
-    int n = int(uNColorCenters + 0.5);
-    float bestD = 1e6;
-    int best = 0;
-    for (int i = 0; i < 16; i++) {
-      if (i >= n) break;
-      vec3 c = uColorCenters[i];
-      float dd = dot(painting - c, painting - c);
-      if (dd < bestD) { bestD = dd; best = i; }
-    }
-    if (best != int(uColorIdx + 0.5)) discard;
   }
 
   // Base opacity is the fly-through dissolve only (uFade); the LIFESPAN is
@@ -214,6 +219,14 @@ void main() {
     op = max(op, uFade * inPatch * (1.0 - uReveal));
   }
 
+  // A faded-to-nothing flat (op ~ 0, a painting a segment away from its
+  // null) must not occlude what's behind it. The material writes alpha =
+  // 1.0 unconditionally with depthWrite on, so without this the "invisible"
+  // flat would still rasterize as a solid opaque black rectangle — hiding
+  // the background sweep and anything else behind it. Discard it instead;
+  // discarded fragments write neither colour nor depth.
+  if (op < 0.004) discard;
+
   gl_FragColor = vec4(painting * op, 1.0);
 }
 `;
@@ -221,8 +234,9 @@ void main() {
 
 // ---- flat assembly ------------------------------------------------------------
 
-// Given depth band centers and color center count, build the full mirrored
-// stack of flat descriptors. Local z = 0 is the painting's origin (shared
+// Given depth band centers, build the full mirrored stack of flat
+// descriptors. Local z = 0 is the group's own local origin (the group is
+// positioned in world space per the hinge-marched placement, not fixed at
 // world origin); positive z is the "front" half (camera-facing when the
 // camera is on the +Z side of the group's local frame), negative z is the
 // mirrored back half.
@@ -277,7 +291,6 @@ function buildFlats(meta) {
       planeWidth, planeHeight,
       bandMin: depthEdges[bandIdx],
       bandMax: depthEdges[bandIdx + 1],
-      colorIdx: -1,
     });
     // Back mirror at scrambled z — same band content, jumbled position.
     const zBack = -depthZs[depthPerm[i]];
@@ -289,7 +302,6 @@ function buildFlats(meta) {
       planeWidth, planeHeight,
       bandMin: depthEdges[bandIdx],
       bandMax: depthEdges[bandIdx + 1],
-      colorIdx: -1,
     });
   }
 
@@ -331,13 +343,24 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const tmpVec = useRef(new THREE.Vector3());
+  // Unique key for this mount's bgSweep entry — see the comment on bgSweep
+  // above. Assigned once per mount (a monotonic counter, not id or Math.random,
+  // so it's guaranteed collision-free even against a same-id sibling).
+  const mountKeyRef = useRef(null);
+  if (mountKeyRef.current === null) {
+    mountKeyRef.current = `${id}#${++bgSweepInstanceSeq}`;
+  }
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
     fetchTheaterMeta(id).then(json => {
       if (cancelled) return;
-      const usable = json && json.schema === 2 && json.depth?.bands ? json : null;
+      // Require at least one actual depth band, not just a present-but-empty
+      // `bands` object — an empty-bands bake would otherwise pass this check,
+      // produce zero flats, and hit the render guard below that returns null
+      // outright instead of falling through to the legacy flat-texture path.
+      const usable = json && json.schema === 2 && json.depth?.bands?.centers?.length > 0 ? json : null;
       setMeta(usable);
       if (!usable && image) {
         const loader = new THREE.TextureLoader();
@@ -368,18 +391,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   }, [rotation]);
 
   const flats = useMemo(() => meta ? buildFlats(meta) : [], [meta]);
-
-  // Color centers packed into a fixed-length array (matches shader
-  // `uColorCenters[16]` uniform). Extra slots zero-padded.
-  const colorCentersUniform = useMemo(() => {
-    const arr = Array.from({ length: 16 }, () => new THREE.Vector3());
-    const centers = meta?.color?.centers || [];
-    for (let i = 0; i < Math.min(centers.length, 16); i++) {
-      arr[i].set(centers[i][0], centers[i][1], centers[i][2]);
-    }
-    return arr;
-  }, [meta]);
-  const nColorCenters = meta?.color?.centers?.length || 0;
 
   // Dynamic scale so a painting at NULL_DISTANCE fills the frame. Camera
   // approaches from world origin along the painting's local +Z axis (after
@@ -423,9 +434,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       uMode:          { value: flat.mode },
       uBandMin:       { value: flat.bandMin },
       uBandMax:       { value: flat.bandMax },
-      uColorIdx:      { value: flat.colorIdx },
-      uColorCenters:  { value: colorCentersUniform },
-      uNColorCenters: { value: nColorCenters },
       uFade:          { value: 0 },
       uRole:          { value: 0 },
       uPatchUv:       { value: new THREE.Vector2(0.5, 0.5) },
@@ -437,7 +445,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       // linear space the shader sees the (sRGB-decoded) painting texture in.
       uBgColor:       { value: new THREE.Color(1, 1, 1) },
     },
-  })), [flats, colorCentersUniform, nColorCenters]);
+  })), [flats]);
 
   // Load painting + depth textures once meta is known. Pass them into
   // every flat's material.
@@ -500,8 +508,9 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   }, [bgInfo, flatMaterials]);
 
   // Drop this painting's site-background contribution when it unmounts, so a
-  // scrolled-away paper piece can't hold the void white.
-  useEffect(() => () => { bgSweep.delete(id); }, [id]);
+  // scrolled-away paper piece can't hold the void white. Deletes only this
+  // instance's own entry (see mountKeyRef above), never a same-id sibling's.
+  useEffect(() => () => { bgSweep.delete(mountKeyRef.current); }, []);
 
   useEffect(() => {
     const isActiveSegment =
@@ -546,11 +555,15 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
 
   // Scheduled visibility + fly-through cross-fade.
   //
-  // Every painting shares world origin (0,0,0), so a distance-from-origin
-  // fade can't tell them apart — the camera is equidistant from all of
-  // them and they'd all light up at once, interleaving through each
-  // other's black cut-outs. Instead each painting's opacity is a function
-  // of WHERE we are on the scroll timeline relative to ITS null.
+  // Paintings sit at different world positions (the hinge-marched
+  // placement from useStore), but a distance-from-camera fade still can't
+  // reliably tell them apart: every painting's null sits at the same
+  // NULL_DISTANCE radius from its own local origin, and neighbouring
+  // paintings along the dive path can be roughly equidistant from the
+  // camera at once mid-transit — a distance rule would light several up
+  // together, interleaving through each other's black cut-outs. Instead
+  // each painting's opacity is a function of WHERE we are on the scroll
+  // timeline relative to ITS null.
   //
   // Timeline position T = currentSegmentIndex + transitionProgress. This
   // painting (index i = mySegmentIndex) coalesces at T = i — it is the
@@ -601,8 +614,8 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     // piece drives the whole void toward white as it coalesces (peak at d=0)
     // and back to black as it leaves; dark pieces exert none. A scene-level
     // consumer reads the max across mounted pieces and sets the clear colour.
-    if (bgInfo?.light) bgSweep.set(id, fade);
-    else bgSweep.delete(id);
+    if (bgInfo?.light) bgSweep.set(mountKeyRef.current, fade);
+    else bgSweep.delete(mountKeyRef.current);
 
     // Fulcrum role for the ACTIVE segment. This painting is the outgoing
     // (start) painting of segment cur, and the incoming (end) painting of
@@ -633,9 +646,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
 
     for (let i = 0; i < flatMaterials.length; i++) {
       const F = flats[i];
-      const cross = F.kind === 'backdrop'
-        ? 1.0
-        : Math.min(Math.abs(localCamPos.z - F.z) / CROSS_FADE, 1.0);
+      const cross = Math.min(Math.abs(localCamPos.z - F.z) / CROSS_FADE, 1.0);
       const U = flatMaterials[i].uniforms;
       // uFade now carries ONLY the fly-through dissolve; the lifespan is the
       // wipe. When the painting is dead (wipeReveal 0) nothing shows.

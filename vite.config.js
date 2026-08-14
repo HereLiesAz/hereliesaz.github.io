@@ -24,7 +24,7 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,json,bin}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,json,bin,webp}'],
         // Increase maximum file size for caching large shard data
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024 
       }

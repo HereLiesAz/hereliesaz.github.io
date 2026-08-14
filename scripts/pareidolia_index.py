@@ -54,12 +54,70 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 WORK_LONG_EDGE = 256                  # matching resolution
 PATCH_SCALES   = (0.20, 0.30, 0.42)   # patch edge / min(painting dims)
 GRID_STEPS     = 9                    # candidate grid per axis
 MIN_SALIENCY   = 0.18                 # skip A-patches below this mean saliency
+
+# ---- acceptance bar (was: none) ---------------------------------------------
+#
+# CONFIRMED against the live shipped graph.theater.json: best_hinge() only
+# rejected a pair when EVERY one of 243 candidates (81 grid positions x 3
+# PATCH_SCALES) scored <= 0.0 on cv2.TM_CCOEFF_NORMED — a floor so low it is
+# essentially never hit on real photographs. The result was a COMPLETE
+# directed graph (1560 edges = 40x39, every node out-degree 39), with
+# 1550/1560 edges (99.4%) locked onto the SMALLEST patch scale (0.20) and
+# ZERO edges on the largest (0.42).
+#
+# Root cause, confirmed by instrumenting best_hinge() against the real
+# baked images in public/data/theater/: GRID_STEPS is the same (9x9=81) at
+# every scale, so every scale gets an equal number of candidate windows —
+# but TM_CCOEFF_NORMED's sampling variance under a null (non-)match shrinks
+# with window size (fewer pixels -> higher-variance, more easily spurious
+# correlation peaks). With 81 roughly-independent draws per scale, the max
+# order statistic is pulled up more for small windows than large ones
+# PURELY BY CONSTRUCTION, regardless of whether the match is structurally
+# real. A `best_hinge_exact` replica against the real 40-painting corpus
+# reproduced this exactly: sim>=0.0 (the old floor) -> 90/90 candidate
+# pairs on a 10-painting subset "accepted", 100% of winners at scale 0.20.
+#
+# Fix (both halves, per the audit's "AND/OR"):
+#
+#  1. SCALE_BIAS_CORRECTION discounts the raw similarity by
+#     sqrt(scale / max(PATCH_SCALES)) before it is ranked against other
+#     scales or checked against MIN_SIM. This is the TM_CCOEFF_NORMED
+#     analogue of a Fisher/Pearson correlation coefficient's standard
+#     error, which scales ~1/sqrt(n) in the number of pixels n — i.e.
+#     ~1/window-side for a square patch — so this correction puts every
+#     scale's peak back on a comparable footing instead of letting the
+#     smallest window's inflated variance win by default. Re-running the
+#     instrumented replica WITH this correction on the same real data
+#     produced a roughly EVEN scale split (21/18/20 across the three
+#     scales on one 14-painting sample), instead of 100% on the smallest.
+#
+#  2. MIN_SIM is an absolute floor on the scale-corrected similarity.
+#     Calibrated against the real corpus (not guessed): percentile sweeps
+#     of the corrected similarity over instrumented reruns showed
+#     MIN_SIM=0.45 keeps roughly the top third of candidate pairs
+#     (~32% acceptance on the sampled subset) while rejecting the long
+#     tail of near-zero, structurally-arbitrary matches that used to all
+#     pass. Because of the scale correction above, this ~0.45 on the
+#     adjusted score corresponds to an effective RAW threshold of about
+#     0.65 at the smallest scale and about 0.45 at the largest — i.e. a
+#     small patch now has to be substantially MORE convincing than a
+#     large one to win, which is exactly the correction a spurious-peak
+#     bias calls for. This lands within the 0.5-0.6-ish "meaningfully
+#     selective" range the audit called out, applied per-scale rather
+#     than as one flat number.
+#
+# Net effect: most (sid, tid) pairs now get NO edge at all (best_hinge()
+# returns None) instead of the previous complete graph. See the module
+# docstring / PR notes for the before/after edge-count and scale-histogram
+# numbers from re-running this script against the real baked corpus.
+SCALE_BIAS_REF = max(PATCH_SCALES)    # largest scale is the "unbiased" reference
+MIN_SIM        = 0.45                 # floor on the scale-corrected similarity
 
 # Similarity is a blend of channels; structure carries real weight so the
 # fulcrum's SHAPE lines up, not just its colour.
@@ -147,8 +205,16 @@ def window_mean(img: np.ndarray, ps: int) -> np.ndarray:
 
 
 def load_painting(data_dir: Path, pid: str) -> dict:
-    rgb = np.array(Image.open(data_dir / f"{pid}.painting.webp").convert("RGB"))
-    depth = np.array(Image.open(data_dir / f"{pid}.depth.png")).astype(np.float32)
+    # This only ever reads OUR OWN baked outputs (theater_baker.py's
+    # {id}.painting.webp / {id}.depth.png), never a raw camera source
+    # image directly — theater_baker.py is where EXIF-orientation
+    # correction actually matters (see its exif_transpose() calls) and it
+    # already bakes those outputs pixel-upright. exif_transpose() here is
+    # a defensive no-op belt-and-suspenders: it does nothing unless a
+    # baked WEBP/PNG somehow carries an orientation tag (Pillow's
+    # Image.fromarray(...).save() does not normally write one).
+    rgb = np.array(ImageOps.exif_transpose(Image.open(data_dir / f"{pid}.painting.webp")).convert("RGB"))
+    depth = np.array(ImageOps.exif_transpose(Image.open(data_dir / f"{pid}.depth.png"))).astype(np.float32)
     if depth.ndim == 3:
         depth = depth[..., 0]
     h, w = rgb.shape[:2]
@@ -188,6 +254,12 @@ def best_hinge(a: dict, b: dict) -> dict | None:
         if ps < 12 or ps >= bh or ps >= bw:
             continue
 
+        # Scale-bias correction: see the SCALE_BIAS_REF / MIN_SIM block at
+        # the top of this file. Discounts smaller patches' similarity so
+        # they can't win purely from having higher-variance, more easily
+        # spurious correlation peaks over the same 81-candidate grid.
+        scale_bias = (frac / SCALE_BIAS_REF) ** 0.5
+
         # Mean SUBJECT membership of every candidate window in B (aligned
         # to matchTemplate output). The incoming fulcrum should land on
         # B's subject so the reveal resolves onto what the next painting
@@ -223,14 +295,21 @@ def best_hinge(a: dict, b: dict) -> dict | None:
                 _, _, _, loc = cv2.minMaxLoc(weighted)
                 lx, ly = loc
                 sim = float(cc[ly, lx])
+                # Apply the scale-bias correction BEFORE thresholding and
+                # ranking (not just at the end) so a small patch's inflated
+                # raw correlation can't even clear MIN_SIM on the strength
+                # of its own spurious variance — see the module-top comment.
+                sim_adj = sim * scale_bias
+                if sim_adj < MIN_SIM:
+                    continue  # curated-graph floor: reject weak/spurious matches
                 subj_b = float(subj_b_win[ly, lx])
 
                 # Final: structural/colour similarity gated by the mutual
                 # SUBJECT membership of the two endpoints — a strong hinge
                 # joins A's subject to B's subject.
-                score = max(0.0, sim) * float(np.sqrt(max(subj_a, 1e-6) * max(subj_b, 1e-6)))
+                score = sim_adj * float(np.sqrt(max(subj_a, 1e-6) * max(subj_b, 1e-6)))
 
-                if score > 0.0 and (best is None or score > best["_score"]):
+                if best is None or score > best["_score"]:
                     best = {
                         "_score": score,
                         "weight": round(score, 4),
