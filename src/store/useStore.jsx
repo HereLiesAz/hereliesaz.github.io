@@ -57,12 +57,27 @@ function uvToLocal(uv, aspect) {
   );
 }
 
+// Small rolling-history length used to steer the walk away from short
+// backtracking cycles (see pickEdge/pickPrevEdge below).
+const HISTORY_LEN = 5;
+
 // Pick the outgoing edge from `srcId` to some target, weighted by weight.
-// Falls back to a uniform-random target when no edges exist. Returns
-// {edge, tid} or null if the graph has no other node.
-function pickEdge(edges, nodes, srcId, avoidId) {
-  const candidates = edges.filter(e =>
-    e.source === srcId && e.target !== avoidId);
+// Falls back to a uniform-random target when no edges exist. Always
+// rejects self-loops (e.target === srcId) defensively, even though the
+// current baked graph doesn't contain any — two simultaneously-mounted
+// TheaterPainting instances must never be asked to share an id.
+// `avoidIds` is a small rolling history of recently-visited node ids
+// (see HISTORY_LEN) filtered out of the candidate set to discourage
+// short revisit cycles; if that would leave zero candidates the filter
+// is relaxed (self-loops stay rejected) so a pick is always produced
+// when any non-self target exists. Returns {edge, tid} or null only
+// when the graph truly has no other node to go to (<=1 node).
+function pickEdge(edges, nodes, srcId, avoidIds) {
+  const avoid = new Set(Array.isArray(avoidIds) ? avoidIds
+    : (avoidIds != null ? [avoidIds] : []));
+  const notSelf = e => e.source === srcId && e.target !== srcId;
+  let candidates = edges.filter(e => notSelf(e) && !avoid.has(e.target));
+  if (candidates.length === 0) candidates = edges.filter(notSelf);
   if (candidates.length > 0) {
     const totalW = candidates.reduce((s, e) => s + (e.weight || 1), 0);
     let r = Math.random() * totalW;
@@ -73,7 +88,8 @@ function pickEdge(edges, nodes, srcId, avoidId) {
     return { edge: candidates[candidates.length - 1],
              tid: candidates[candidates.length - 1].target };
   }
-  const others = nodes.filter(n => n.id !== srcId && n.id !== avoidId);
+  let others = nodes.filter(n => n.id !== srcId && !avoid.has(n.id));
+  if (others.length === 0) others = nodes.filter(n => n.id !== srcId);
   if (others.length === 0) return null;
   const target = others[Math.floor(Math.random() * others.length)].id;
   return { edge: { source: srcId, target, s_uv: [0.5, 0.5], t_uv: [0.5, 0.5] },
@@ -83,10 +99,14 @@ function pickEdge(edges, nodes, srcId, avoidId) {
 // Pick a PREDECESSOR of `tgtId` — a painting that flows INTO it — for
 // building the backward buffer (the paintings you can scroll up into
 // from the start). Weighted by edge weight; uniform-random fallback.
-// Returns {sid} or null.
-function pickPrevEdge(edges, nodes, tgtId, avoidId) {
-  const candidates = edges.filter(e =>
-    e.target === tgtId && e.source !== avoidId);
+// Same self-loop guard and rolling-history relaxation as pickEdge.
+// Returns {sid} or null only when the graph has no other node.
+function pickPrevEdge(edges, nodes, tgtId, avoidIds) {
+  const avoid = new Set(Array.isArray(avoidIds) ? avoidIds
+    : (avoidIds != null ? [avoidIds] : []));
+  const notSelf = e => e.target === tgtId && e.source !== tgtId;
+  let candidates = edges.filter(e => notSelf(e) && !avoid.has(e.source));
+  if (candidates.length === 0) candidates = edges.filter(notSelf);
   if (candidates.length > 0) {
     const totalW = candidates.reduce((s, e) => s + (e.weight || 1), 0);
     let r = Math.random() * totalW;
@@ -96,7 +116,8 @@ function pickPrevEdge(edges, nodes, tgtId, avoidId) {
     }
     return { sid: candidates[candidates.length - 1].source };
   }
-  const others = nodes.filter(n => n.id !== tgtId && n.id !== avoidId);
+  let others = nodes.filter(n => n.id !== tgtId && !avoid.has(n.id));
+  if (others.length === 0) others = nodes.filter(n => n.id !== tgtId);
   if (others.length === 0) return null;
   return { sid: others[Math.floor(Math.random() * others.length)].id };
 }
@@ -203,6 +224,13 @@ const useStore = create((set, get) => ({
 
   showMenu: false,
 
+  // Set by Scene when BOTH the theater manifest and the legacy graph.json
+  // fallback fail to produce any nodes, so the UI has something to react
+  // to instead of silently staying on a permanent black screen. Null
+  // means no load error. See Overlay's loadError rendering.
+  loadError: null,
+  setLoadError: (msg) => set({ loadError: msg }),
+
   setGraph: (graphData) => {
     if (!graphData) return;
     set({
@@ -230,7 +258,11 @@ const useStore = create((set, get) => ({
     const chain = [id];         // oldest → … → start
     let cursor = id;
     for (let k = 0; k < BACK; k++) {
-      const prev = pickPrevEdge(edges, nodes, cursor, chain[1] || null);
+      // Rolling history (most-recently-added first) instead of a single
+      // one-hop avoid, so the backward buffer doesn't loop through a
+      // short cycle on graphs where that's possible.
+      const recentIds = chain.slice(0, HISTORY_LEN);
+      const prev = pickPrevEdge(edges, nodes, cursor, recentIds);
       if (!prev) break;
       chain.unshift(prev.sid);
       cursor = prev.sid;
@@ -299,8 +331,10 @@ const useStore = create((set, get) => ({
     if (activeClusters.length === 0) return;
 
     const current = activeClusters[activeClusters.length - 1];
-    const avoidId = segments.length > 0
-      ? segments[segments.length - 1].startId : null;
+    // Rolling history of recently-visited node ids (most-recent last),
+    // used to steer the walk away from short revisit cycles — widened
+    // from a single one-hop avoid (see pickEdge).
+    const recentIds = activeClusters.slice(-HISTORY_LEN).map(c => c.id);
 
     let edge, tid;
     if (forcedTid) {
@@ -315,16 +349,32 @@ const useStore = create((set, get) => ({
     if (!edge && current.hingeUvOut && segments.length === 0) {
       const cand = edges.filter(e =>
         e.source === current.id &&
+        e.target !== current.id &&
         e.s_uv?.[0] === current.hingeUvOut[0] &&
         e.s_uv?.[1] === current.hingeUvOut[1] &&
-        e.target !== avoidId);
+        !recentIds.includes(e.target));
       if (cand.length > 0) { edge = cand[0]; tid = edge.target; }
     }
     if (!edge) {
-      const picked = pickEdge(edges, nodes, current.id, avoidId);
-      if (!picked) return;
-      edge = picked.edge;
-      tid = picked.tid;
+      const picked = pickEdge(edges, nodes, current.id, recentIds);
+      if (picked) {
+        edge = picked.edge;
+        tid = picked.tid;
+      } else {
+        // Degenerate case: the graph has no other node to connect to
+        // (<=1 node total). Build a self-referential segment that frames
+        // the same painting at both ends rather than bailing out with
+        // zero segments — that would leave the camera glued to Scene's
+        // hardcoded world-origin placeholder for the whole session even
+        // though a painting is on screen. Currently unreachable with the
+        // real 40-node graph.
+        edge = {
+          source: current.id, target: current.id,
+          s_uv: current.hingeUvOut || [0.5, 0.5],
+          t_uv: current.hingeUvOut || [0.5, 0.5],
+        };
+        tid = current.id;
+      }
     }
 
     const nextNode = nodes.find(n => n.id === tid);
@@ -434,29 +484,21 @@ const useStore = create((set, get) => ({
     console.log(`[Store] Segment ${segments.length} Appended: ${current.id} -> ${tid} (θ=${(theta*180/Math.PI).toFixed(1)}°)`);
   },
 
-  completeTransition: () => {
-    const { segments, currentSegmentIndex } = get();
-    if (currentSegmentIndex < segments.length - 1) {
-      set({ currentSegmentIndex: currentSegmentIndex + 1 });
-    }
-    if (segments.length < currentSegmentIndex + 3) {
-      get().buildNextSegment();
-    }
-  },
-
-  backtrackTo: (segmentIndex) => {
-    if (segmentIndex < 0) return;
-    const { segments } = get();
-    if (segmentIndex >= segments.length) return;
-    set({ currentSegmentIndex: segmentIndex });
-  },
-
-  goBackward: () => false,
-
-  setTransitionProgress: (val) => set({
-    transitionProgress: val,
-    isTransitioning: val > 0.01 && val < 0.99,
+  // Atomic per-frame update: AnamorphicCam calls this ONCE per frame with
+  // both the eased transition progress and the segment index the scroll
+  // currently resolves to. Combining them into a single `set()` (rather
+  // than a setTransitionProgress() call followed by a conditional
+  // backtrackTo() call) means any subscriber — in particular Overlay's
+  // raw useStore.subscribe(), which fires synchronously on every
+  // individual set() and isn't batched the way the React useStore(selector)
+  // hook is — can never observe a fresh transitionProgress paired with a
+  // stale currentSegmentIndex (or vice versa).
+  updateFrame: (segmentIndex, r) => set({
+    currentSegmentIndex: segmentIndex,
+    transitionProgress: r,
+    isTransitioning: r > 0.01 && r < 0.99,
   }),
+
   toggleMenu: () => set(state => ({ showMenu: !state.showMenu })),
 }));
 

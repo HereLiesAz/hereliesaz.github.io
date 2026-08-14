@@ -11,9 +11,11 @@ on:
 jobs:
   backup:
     runs-on: windows-latest
+    # This job only reads the checked-out tree and uploads a build
+    # artifact — no GitHub API calls anywhere in the script, so
+    # pull-requests: write (previously requested but unused) is dropped.
     permissions:
       contents: read
-      pull-requests: write
     name: Execute Backup Protocol
 
     steps:

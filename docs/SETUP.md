@@ -1,7 +1,7 @@
 # Installation & Setup Guide
 
 This guide will walk you through setting up the "Infinite Void" environment. The project consists of two parts:
-1.  **Backend (Python)**: For processing raw images into 3D-ready data.
+1.  **Backend (Python)**: For processing source images (`public/assets/`) into the paper-theater gallery data (`public/data/theater/`) and the legacy stroke-grinder data. See `docs/WORKFLOW.md` for the actual current pipeline — there is no `assets/raw/` staging directory in this repo; scripts read directly from `public/assets/`.
 2.  **Frontend (Node.js)**: For running the web application.
 
 ## Prerequisites
@@ -32,22 +32,30 @@ source venv/bin/activate
 
 ### Step 1.2: Install Dependencies
 
-**Note on PyTorch**: The `requirements.txt` includes `torch` for CPU by default. If you have an NVIDIA GPU, you should install the CUDA version of PyTorch *before* running the requirements file to enable hardware acceleration (which significantly speeds up the `grinder.py` process). See [pytorch.org](https://pytorch.org/get-started/locally/) for specific commands.
+**Note on PyTorch**: `scripts/requirements.txt` includes `torch` for CPU by default. If you have an NVIDIA GPU, you should install the CUDA version of PyTorch *before* running the requirements file to enable hardware acceleration (which significantly speeds up the `grinder.py` process, and the local Depth-Anything-V2 pass in `theater_baker.py`). See [pytorch.org](https://pytorch.org/get-started/locally/) for specific commands.
 
 ```bash
 # Standard install (CPU or pre-configured GPU)
-pip install -r requirements.txt
+# NOTE: scripts/requirements.txt, not the root requirements.txt — every
+# real workflow (theater_bake.yml, process_art.yml, bootstrap.yml)
+# installs from this one; the root-level file is a separate, incomplete
+# list and won't get you torch/transformers/segment_anything/opencv.
+pip install -r scripts/requirements.txt
 ```
 
 ### Step 1.3: Verify Installation
 
-Run the deduplication script to check if imports work.
+Run the theater baker's `--help` to check the core imports (opencv-python,
+numpy, Pillow, pillow-heif) resolve without touching any real data:
 
 ```bash
-python scripts/deduplicate.py
+python scripts/theater_baker.py --help
 ```
 
-If it prints "The Janitor is scanning...", you are ready.
+If that prints the usage text without an `ImportError`/`ModuleNotFoundError`,
+you are ready. (Don't use `scripts/deduplicate.py` for this check — it's a
+destructive script that deletes files under `public/assets/` on a real
+run; see `docs/WORKFLOW.md`.)
 
 ---
 

@@ -7,7 +7,13 @@ from pathlib import Path
 
 # --- Configuration ---
 DATA_DIR = "public/data"
-RAW_DIR = "assets/raw"  # <--- Explicitly tell it where the images are
+# There is no separate assets/raw staging directory in this repo — the
+# same public/assets/ directory scripts/theater_baker.py bakes from
+# (`--input public/assets/`) is the only source image directory that
+# exists. DATA_DIR above is intentionally different: it's the legacy
+# per-painting JSON directory this script scans/patches in place, not the
+# theater pipeline's public/data/theater/.
+RAW_DIR = "public/assets"  # <--- Explicitly tell it where the images are
 CASCADE_URL = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_alt2.xml"
 CASCADE_FILE = "haarcascade_frontalface_alt2.xml"
 
