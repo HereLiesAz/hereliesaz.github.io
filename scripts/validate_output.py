@@ -30,8 +30,13 @@ owned by a different agent and wired to this exact contract):
 
 Checks performed, against everything in --dir:
 
-  1. Every *.theater.json (excluding graph.theater.json and
-     _manifest.json): required top-level keys (schema, src.width/height,
+  1. For every id listed in _manifest.json — NOT every *.theater.json file
+     present in --dir. A directory that's accumulated older-format or
+     orphaned theater.json files across earlier pipeline generations must
+     not fail validation over data the frontend never fetches (Scene.jsx
+     only ever reads ids _manifest.json lists); such files are reported as
+     an informational note instead. For each manifest-listed id's
+     {id}.theater.json: required top-level keys (schema, src.width/height,
      depth.bands, depth.source) are present; depth.bands.centers is
      non-empty; and depth.source is NOT "synthetic" — a synthetic depth
      map is theater_baker.py's documented emergency-only stand-in (its
@@ -106,19 +111,27 @@ def validate_theater_json(path: Path) -> None:
               f"depth shipped undetected; re-bake with network access")
 
 
-def validate_manifest(dir_: Path) -> None:
+def load_manifest_ids(dir_: Path) -> list[str] | None:
+    """Parse _manifest.json and return its id list, or None if it's missing
+    or malformed (the caller is responsible for reporting that as an error
+    via `check` — this helper only reports parse-level problems itself so
+    every caller doesn't have to)."""
     manifest_path = dir_ / "_manifest.json"
     if not manifest_path.exists():
         check(False, f"_manifest.json missing from {dir_}")
-        return
+        return None
     try:
         ids = json.loads(manifest_path.read_text())
     except Exception as e:
         check(False, f"_manifest.json: could not parse JSON ({type(e).__name__}: {e})")
-        return
+        return None
     check(isinstance(ids, list), "_manifest.json: not a JSON array")
     if not isinstance(ids, list):
-        return
+        return None
+    return ids
+
+
+def validate_manifest(dir_: Path, ids: list[str]) -> None:
     for pid in ids:
         for suffix in (".painting.webp", ".depth.png", ".theater.json"):
             fp = dir_ / f"{pid}{suffix}"
@@ -192,15 +205,30 @@ def main(argv: list[str]) -> int:
         print(f"[!] not a directory: {dir_}", file=sys.stderr)
         return 2
 
-    theater_jsons = [
-        p for p in sorted(dir_.glob("*.theater.json"))
-        if p.name != "graph.theater.json"
-    ]
-    check(len(theater_jsons) > 0, f"no *.theater.json files found in {dir_}")
-    for p in theater_jsons:
-        validate_theater_json(p)
+    ids = load_manifest_ids(dir_)
+    if ids is not None:
+        check(len(ids) > 0, f"_manifest.json in {dir_} is an empty list — nothing to ship")
+        # Only ids _manifest.json actually lists are validated against the
+        # current schema — that's the sole "what's shipped" contract the
+        # frontend reads (Scene.jsx never fetches a theater.json outside
+        # _manifest.json). A directory that's accumulated older-format or
+        # orphaned *.theater.json files across pipeline generations must
+        # not fail every future bake over data nobody serves; surface them
+        # as an informational note instead of a hard error.
+        for pid in ids:
+            validate_theater_json(dir_ / f"{pid}.theater.json")
 
-    validate_manifest(dir_)
+        all_jsons = {
+            p.name for p in dir_.glob("*.theater.json") if p.name != "graph.theater.json"
+        }
+        shipped = {f"{pid}.theater.json" for pid in ids}
+        orphaned = sorted(all_jsons - shipped)
+        if orphaned:
+            print(f"[i] {len(orphaned)} *.theater.json file(s) present but not in "
+                  f"_manifest.json (not served, not validated): {', '.join(orphaned[:10])}"
+                  f"{' ...' if len(orphaned) > 10 else ''}")
+
+    validate_manifest(dir_, ids or [])
     validate_graph(dir_)
 
     if errors:
@@ -209,7 +237,7 @@ def main(argv: list[str]) -> int:
             print(f"  - {e}")
         return 1
 
-    print(f"✅ {len(theater_jsons)} files validated OK in {dir_}")
+    print(f"✅ {len(ids or [])} manifest-listed painting(s) validated OK in {dir_}")
     return 0
 
 
