@@ -1,5 +1,5 @@
 import React from 'react';
-import { logger } from '../utils/Logger';
+import { logger, stringifyError } from '../utils/Logger';
 
 class JulesBoundary extends React.Component {
   constructor(props) {
@@ -33,7 +33,7 @@ class JulesBoundary extends React.Component {
             background: '#111', padding: '20px', borderRadius: '4px', 
             margin: '20px 0', maxWidth: '800px', overflow: 'auto' 
           }}>
-            {this.state.error.toString()}
+            {stringifyError(this.state.error)}
           </div>
 
           <a 

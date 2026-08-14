@@ -11,11 +11,18 @@
 
       gtag('config', 'G-QEVWXVQY66');
     </script>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#000000" />
     <meta name="description" content="HereLiesAz — paintings, in the dark." />
+    <meta property="og:title" content="HereLiesAz" />
+    <meta property="og:description" content="HereLiesAz — paintings, in the dark." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/pwa-icon-512.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="HereLiesAz" />
+    <meta name="twitter:description" content="HereLiesAz — paintings, in the dark." />
     <title>HereLiesAz</title>
     <style>
         html, body, #root {
@@ -26,6 +33,20 @@
             background: #000;
             color: #f4f0e6;
             overflow: hidden;
+        }
+
+        /* Reduced-motion accommodation (partial): this only reaches the DOM
+           overlay layer — CSS cannot touch the WebGL canvas, so the
+           scroll-driven camera flythrough and shader wipes (owned by
+           AnamorphicCam.jsx / Scene.jsx) are unaffected by this rule. Full
+           support would need an easing change in AnamorphicCam.jsx. */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.001ms !important;
+                scroll-behavior: auto !important;
+            }
         }
     </style>
 </head>

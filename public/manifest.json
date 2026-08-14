@@ -1,70 +1,17 @@
 {
-  "generated_at": "BOOTSTRAP_MODE",
-  "nodes": [
+  "name": "HereLiesAz",
+  "short_name": "HereLiesAz",
+  "description": "HereLiesAz — paintings, in the dark.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
     {
-      "id": "20230423_120126",
-      "file": "20230423_120126.jpg.json",
-      "strokes": 33,
-      "res": [
-        512,
-        310
-      ],
-      "neighbors": [
-        "PXL_20221219_083648643",
-        "IMG_0355"
-      ]
-    },
-    {
-      "id": "IMG_0355",
-      "file": "IMG_0355.JPG.json",
-      "strokes": 10,
-      "res": [
-        511,
-        202
-      ],
-      "neighbors": [
-        "20230423_120126",
-        "2023-10-15(16)"
-      ]
-    },
-    {
-      "id": "2023-10-15(16)",
-      "file": "2023-10-15(16).jpg.json",
-      "strokes": 25,
-      "res": [
-        512,
-        512
-      ],
-      "neighbors": [
-        "IMG_0355",
-        "2020-12-03(7)"
-      ]
-    },
-    {
-      "id": "2020-12-03(7)",
-      "file": "2020-12-03(7).jpg.json",
-      "strokes": 40,
-      "res": [
-        289,
-        512
-      ],
-      "neighbors": [
-        "2023-10-15(16)",
-        "PXL_20221219_083648643"
-      ]
-    },
-    {
-      "id": "PXL_20221219_083648643",
-      "file": "PXL_20221219_083648643.jpg.json",
-      "strokes": 20,
-      "res": [
-        512,
-        384
-      ],
-      "neighbors": [
-        "2020-12-03(7)",
-        "20230423_120126"
-      ]
+      "src": "/pwa-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
     }
   ]
 }

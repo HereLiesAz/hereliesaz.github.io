@@ -2,8 +2,13 @@ name: Deploy over FTP
 
 # Mirror the built site to your own host over SFTP (SSH file transfer).
 # Runs on every push to main, and can be fired by hand from the Actions
-# tab. Uses lftp's built-in SFTP implementation — not OpenSSH — because
+# tab. Uses lftp — not a raw `sshpass ssh`/`sftp` invocation — because
 # ProFTPD mod_sftp/0.9.9's password auth is incompatible with sshpass.
+# lftp's sftp module implements the SFTP wire protocol itself, but by
+# default it transports/authenticates over an `ssh` subprocess, which
+# DOES consult ~/.ssh/known_hosts for host-key verification (see the
+# "Pin SFTP host key" step below) — it is not a from-scratch SSH stack
+# that bypasses known_hosts.
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   FTP_SERVER      hostname, e.g. sftp.example.com. Named FTP_* for
@@ -12,6 +17,19 @@ name: Deploy over FTP
 #                   for both protocols.
 #   FTP_USERNAME    login user.
 #   FTP_PASSWORD    login password (lftp handles the auth exchange).
+#   SFTP_HOST_KEY   the server's SSH host key(s), in known_hosts format,
+#                   used to pin host-key verification for every deploy.
+#                   Populate this ONCE, out-of-band, by running from a
+#                   machine/network path you trust at that moment:
+#                       ssh-keyscan -t ed25519,rsa <FTP_SERVER host>
+#                   and pasting the full output (one or more lines) as
+#                   the secret value. This is a human, out-of-band step —
+#                   the workflow cannot generate or verify this key
+#                   itself; doing so would defeat the point of pinning.
+#                   Until this secret is populated, deploys FAIL CLOSED
+#                   (see "Pin SFTP host key" step below) rather than
+#                   silently trusting whatever key is presented — that is
+#                   the correct, safe default.
 #
 # Optional repository variables (Settings → Secrets and variables → Actions → Variables):
 #   SFTP_PORT         defaults to 22.
@@ -64,6 +82,20 @@ jobs:
             echo "::warning::art-data branch is empty or missing — site will use flat fallback for every painting"
           fi
 
+      # Consuming-side sanity check (not the full validate_output.py
+      # schema check — that runs on the producing side, in
+      # theater_bake.yml, before this data ever reaches art-data). This
+      # replaces the previous silent-degrade-and-proceed behavior (a
+      # ::warning:: above was the only signal, and the build/deploy
+      # continued regardless) with a hard failure.
+      - name: Verify art data is usable
+        run: |
+          if [ ! -s main/public/data/theater/_manifest.json ]; then
+            echo "::error::main/public/data/theater/_manifest.json is missing or empty after staging art-data — refusing to deploy a site with no theater data. Check that the art-data branch exists and theater_bake.yml has published to it."
+            exit 1
+          fi
+          echo "art-data verified: $(find main/public/data -type f | wc -l) files staged"
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -75,10 +107,44 @@ jobs:
         working-directory: main
         run: npm ci
 
+      # Legacy graph.json fallback (Scene.jsx uses it when the theater
+      # manifest is missing/empty): self-repairs public/graph.json by
+      # dropping nodes with no matching public/assets/ image and bridging
+      # edges around them. Only touches this ephemeral checkout, not the
+      # repo.
+      - name: Verify legacy graph.json against assets
+        working-directory: main
+        run: npm run verify-assets
+
       - name: Build
         working-directory: main
         run: npm run build
         
+      # SECURITY: pins the SFTP server's host key so lftp's ssh transport
+      # (lftp's sftp module speaks the SFTP wire protocol itself, but
+      # delegates the underlying SSH connection/auth to an `ssh`
+      # subprocess by default — see sftp:connect-program in lftp's docs)
+      # can verify it against a known-good value instead of blindly
+      # trusting whatever key the server presents on every run.
+      #
+      # This step FAILS CLOSED: if secrets.SFTP_HOST_KEY is not yet
+      # populated, ~/.ssh/known_hosts stays empty, ssh's default
+      # StrictHostKeyChecking behavior will refuse to proceed on an
+      # unrecognized host key, and the deploy step below will fail
+      # loudly instead of silently accepting a possibly-spoofed key.
+      # That is intentional and correct — see the secrets comment at
+      # the top of this file for how to populate SFTP_HOST_KEY.
+      - name: Pin SFTP host key
+        env:
+          SFTP_HOST_KEY: ${{ secrets.SFTP_HOST_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          if [ -z "$SFTP_HOST_KEY" ]; then
+            echo "::warning::secrets.SFTP_HOST_KEY is not set — ~/.ssh/known_hosts will be empty and the deploy step will fail closed (refuse an unpinned host key) rather than accept it silently. Populate SFTP_HOST_KEY (see comment at top of this workflow) to fix."
+          fi
+          echo "${SFTP_HOST_KEY}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
       - name: Deploy via lftp (SFTP)
         env:
           HOST: ${{ secrets.FTP_SERVER }}
@@ -96,10 +162,19 @@ jobs:
           echo "[diag] password length raw=$(printf '%s' "$PASSWORD" | wc -c) trimmed=$(printf '%s' "$PW_TRIMMED" | wc -c)"
           echo "[diag] host: $(printf '%s' "$HOST" | wc -c) chars, port: $PORT"
 
-          # lftp has its own SFTP implementation (not OpenSSH) which
-          # handles ProFTPD mod_sftp password auth reliably — bypasses
-          # the sshpass/OpenSSH incompatibility we hit earlier.
+          # lftp's sftp module implements the SFTP wire protocol itself
+          # but transports/authenticates over an `ssh` subprocess by
+          # default, which DOES consult ~/.ssh/known_hosts (populated by
+          # the "Pin SFTP host key" step above) for host-key
+          # verification. sftp:auto-confirm is intentionally NOT set to
+          # "yes" here: leaving it unset means lftp/ssh will refuse to
+          # proceed on an unknown or mismatched host key instead of
+          # silently accepting it — fail closed, not fail open.
+          # set ssl:verify-certificate no is retained only because it is
+          # inert for the sftp:// protocol (that setting governs FTPS,
+          # not SSH-based SFTP) — it is not doing any of the security
+          # work here.
           lftp -u "$USER_TRIMMED","$PW_TRIMMED" \
             -p "$PORT" \
-            -e "set sftp:auto-confirm yes; set ssl:verify-certificate no; mirror -R --verbose ./main/dist/ $REMOTE_DIR; quit" \
+            -e "set ssl:verify-certificate no; mirror -R --verbose ./main/dist/ $REMOTE_DIR; quit" \
             sftp://"$HOST"

@@ -7,10 +7,11 @@ import { useScroll } from '@react-three/drei';
 // Scroll distance (in ScrollControls "pages") spent traversing one
 // painting-to-painting segment. Long on purpose: a slow, deliberate
 // scrub per artwork, and the extra distance is head-room for the next
-// painting's textures to finish loading before it's needed. Keep in
-// step with <ScrollControls pages> in Scene (pages = PAGES_PER_SEGMENT
-// × segment capacity).
-const PAGES_PER_SEGMENT = 10;
+// painting's textures to finish loading before it's needed. Exported so
+// Scene can derive <ScrollControls pages> from the actual corpus size
+// (pages = PAGES_PER_SEGMENT × segment capacity) instead of a hardcoded
+// constant that caps how much of the gallery a full scroll can reach.
+export const PAGES_PER_SEGMENT = 10;
 
 // Re-usable temp object so useFrame doesn't allocate per-tick.
 const tmpLook = new THREE.Vector3();
@@ -56,7 +57,7 @@ export default function AnamorphicCam() {
   const scroll = useScroll();
 
   const segments = useStore(state => state.segments);
-  const setTransitionProgress = useStore(state => state.setTransitionProgress);
+  const updateFrame = useStore(state => state.updateFrame);
 
   // Once segments exist, jump the scroll to the painting we open ON —
   // which sits a few segments IN, above the backward buffer — so the
@@ -100,26 +101,30 @@ export default function AnamorphicCam() {
     // exactly as the motion settles — camera in, art revealed.
     const r = rLin * rLin * rLin * (rLin * (rLin * 6 - 15) + 10);
 
-    setTransitionProgress(r);
-
     const curve = new THREE.CatmullRomCurve3(currentSegment.path);
     camera.position.copy(curve.getPointAt(r));
     camera.lookAt(lookTarget(segments, segmentIndex, r));
 
+    // Single atomic update: transitionProgress and currentSegmentIndex
+    // (which drives which paintings <Scene> mounts) always change
+    // together here, in one set() call, so subscribers never observe one
+    // fresh and the other stale (see updateFrame's doc comment). This
+    // replaces what used to be a separate setTransitionProgress() call
+    // plus a conditional backtrackTo() call. Update in BOTH directions
+    // (forward and backward) so scrolling back remounts earlier paintings.
+    updateFrame(segmentIndex, r);
+
     // Build ahead early — the gaze handoff at r>0.6 wants the next
     // segment's focus to already exist. Only fires when the user is
     // actually near the frontier; scrolling backwards never extends.
-    if (r > 0.5 && segments.length < segmentIndex + 2) {
+    // Second condition is a safety net for a fast/large scroll jump that
+    // outruns what's built (clampedTotal above would otherwise leave the
+    // camera pinned on a stale trailing segment until r next climbs
+    // past 0.5): if the raw scroll target has already outrun the built
+    // segments, catch up immediately regardless of r.
+    if (segments.length < segmentIndex + 2 &&
+        (r > 0.5 || totalProgress > segments.length - 1)) {
       useStore.getState().buildNextSegment();
-    }
-
-    // Keep the store's currentSegmentIndex in sync with the scroll —
-    // this is what drives which paintings are mounted in <Scene>. Update
-    // in BOTH directions (forward and backward) so scrolling back
-    // remounts the earlier paintings.
-    const storeIdx = useStore.getState().currentSegmentIndex;
-    if (storeIdx !== segmentIndex) {
-      useStore.getState().backtrackTo(segmentIndex);
     }
   });
 

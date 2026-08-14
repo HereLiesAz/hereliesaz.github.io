@@ -13,7 +13,16 @@ from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 PROJECT_ROOT = Path(os.getcwd())
 INPUT_DIR = PROJECT_ROOT / "assets/raw"
 OUTPUT_DIR = PROJECT_ROOT / "public/data"
-MANIFEST_PATH = PROJECT_ROOT / "public/manifest.json"
+# NOT public/manifest.json: index.html references that path as the real
+# PWA manifest (<link rel="manifest" href="/manifest.json" />), and a
+# different agent is turning it into one. This bootstrap script's own
+# graph-bootstrap JSON ({"generated_at", "nodes": [...]}) has nothing to
+# do with the PWA manifest and must not clobber it. It's also distinct
+# from public/data/theater/_manifest.json (the real theater-pipeline
+# manifest, just a bare id list) and public/data/manifest.json (written by
+# scripts/repair_and_index.py) — hence the "bootstrap-manifest" name.
+# Confirmed via repo-wide grep: nothing else reads this path.
+MANIFEST_PATH = PROJECT_ROOT / "public/data/bootstrap-manifest.json"
 LIMIT = 5
 
 warnings.filterwarnings("ignore")

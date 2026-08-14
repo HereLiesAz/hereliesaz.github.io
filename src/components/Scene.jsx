@@ -2,7 +2,7 @@ import React, { Suspense, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { ScrollControls, PerspectiveCamera } from '@react-three/drei';
 import { useStore } from '../store/useStore';
-import AnamorphicCam from './AnamorphicCam';
+import AnamorphicCam, { PAGES_PER_SEGMENT } from './AnamorphicCam';
 import TheaterPainting, { bgSweepLevel } from './TheaterPainting';
 import TexturePreloader from './TexturePreloader';
 
@@ -60,6 +60,8 @@ export default function Scene() {
   const activeClusters = useStore(state => state.activeClusters);
   const setGraph = useStore(state => state.setGraph);
   const setStartNode = useStore(state => state.setStartNode);
+  const setLoadError = useStore(state => state.setLoadError);
+  const nodeCount = useStore(state => state.nodes.length);
 
   // Primary path: the walker reads /data/theater/_manifest.json for the list
   // of baked paintings, plus /data/theater/graph.theater.json — the
@@ -125,7 +127,12 @@ export default function Scene() {
         return loadFromGraph().then(g => {
           if (cancelled) return;
           if (!g) {
+            // Total data loss: neither source produced any nodes. Record
+            // it in the store so the UI (Overlay) can show something
+            // instead of a silent, permanently black screen — nodes/edges
+            // stay at their empty defaults forever otherwise.
             console.error("[Scene] No theater bake and no graph.json — gallery cannot render.");
+            setLoadError("Unable to load gallery — please refresh.");
             return;
           }
           setGraph({ schemaVersion: 2, nodes: g.nodes, edges: g.edges });
@@ -134,9 +141,25 @@ export default function Scene() {
       });
 
     return () => { cancelled = true; };
-  }, [setGraph, setStartNode]);
+  }, [setGraph, setStartNode, setLoadError]);
 
   const currentSegmentIndex = useStore(state => state.currentSegmentIndex);
+
+  // <ScrollControls pages> sets the hard ceiling on how much of the
+  // gallery a single full scroll can ever reach (see AnamorphicCam's
+  // totalProgress = scroll.offset * pages / PAGES_PER_SEGMENT, clamped
+  // at segments.length). It must scale with the actual corpus size, not
+  // sit at a fixed constant — a fixed 250 pages / 10 pages-per-segment
+  // caps a full scroll at exactly 25 segments no matter how large the
+  // baked graph is, leaving anything beyond that permanently
+  // unreachable. Three full "coverage passes" worth of segments gives
+  // the random walk very good odds of visiting close to the full corpus
+  // in one scroll. Falls back to the old constant until nodeCount is
+  // known (0 before the graph loads); once it is, drei's ScrollControls
+  // is remounted (via `key`) so it picks up the new `pages` prop.
+  const pages = nodeCount > 0
+    ? Math.max(250, nodeCount * PAGES_PER_SEGMENT * 3)
+    : 250;
 
   return (
    <>
@@ -153,22 +176,29 @@ export default function Scene() {
       <ambientLight intensity={0.5} />
       <pointLight position={[10, 10, 10]} intensity={1} />
       
-      {/* 250 pages = 25 segments at 10 pages/each (see PAGES_PER_SEGMENT
-          in AnamorphicCam). Long per-segment scroll: deliberate scrub +
-          load head-room. */}
-      <ScrollControls pages={250} damping={0.12}>
+      {/* pages scales with the corpus (see `pages` above) so a full
+          scroll can reach close to the whole graph, at PAGES_PER_SEGMENT
+          pages per segment (see AnamorphicCam). Long per-segment scroll:
+          deliberate scrub + load head-room. Keyed on `pages` so drei's
+          ScrollControls remounts and picks up the real value once the
+          graph has loaded, instead of staying pinned to the initial
+          fallback. */}
+      <ScrollControls key={pages} pages={pages} damping={0.12}>
         <AnamorphicCam />
         <Suspense fallback={null}>
             <group>
                 {/* Only three paintings are ever mounted: the one we're
-                    on (currentSegmentIndex), the one we just left
-                    (−1), and the one we're headed toward (+1). The
-                    scheduled cross-fade already drops a painting to zero
-                    once it's a full segment away, so mounting anything
-                    wider only spends draw calls and texture uploads on
-                    things that are invisible. Neighbours just outside
-                    this window are warmed by <TexturePreloader/> so the
-                    handoff hits cache, not a cold fetch. */}
+                    on (currentSegmentIndex), the one we're headed
+                    toward (+1), and the one we just left (−1). The −1
+                    slot is fully invisible for the whole time it's
+                    mounted during the active segment (fade=0,
+                    wipeReveal=0) — it's not there to save draw calls,
+                    it's backward-scroll insurance: keeping it mounted
+                    (and its texture warm) means scrolling back up
+                    re-reveals it instantly instead of popping in from a
+                    cold mount. Neighbours just outside this window are
+                    warmed by <TexturePreloader/> so the handoff hits
+                    cache, not a cold fetch. */}
                 {activeClusters
                     .map((cluster, index) => ({ ...cluster, index }))
                     .filter(c => c.index >= currentSegmentIndex - 1 && c.index <= currentSegmentIndex + 1)
