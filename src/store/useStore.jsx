@@ -22,11 +22,43 @@ const OFF_AXIS = 0.045;
 // PAINTING_HEIGHT. Used to convert a hinge uv into a hinge world offset.
 const PAINTING_HEIGHT = 10.0;
 
-// Painting height * fitScale ≈ what the renderer actually draws. fitScale
-// depends on FoV and viewport but is ~0.9 for the current setup. Undoing
-// this in the store is imperfect but the hinge placement tolerates the
-// few-percent error (the camera arc's dive hides the rest).
-const FIT_SCALE = 0.9;
+// Camera vertical FOV in degrees — must match Scene.jsx's
+// <PerspectiveCamera fov={50}>. Needed to reproduce TheaterPainting.jsx's
+// fitScale exactly (see computeFitScale below): the store computes hinge
+// placement ahead of mount, so it can't read the live camera/viewport from
+// R3F and has to know these inputs on its own.
+const CAMERA_FOV_DEG = 50;
+
+// Reproduces TheaterPainting.jsx's fitScale useMemo EXACTLY (same
+// NULL_DISTANCE, same FOV, same 0.85/0.90 fit margins, same
+// Math.min(widthScale, heightScale)) for the standard (non-light-bg) case,
+// so a painting's hinge patch lands in world space at the precise point
+// the renderer will actually draw it — not an approximated constant. A
+// mismatched scale here was why coalescence never quite aligned: the store
+// previously assumed a flat FIT_SCALE=0.9 regardless of the painting's
+// aspect ratio or the viewport's actual size, while the renderer computed
+// its real fit per painting and per viewport — the two diverged by however
+// far 0.9 was from the true value for that specific pairing.
+//
+// One known residual gap: light-background ("paper") pieces get an
+// additional LIGHT_BG_OVERFILL factor in TheaterPainting.jsx, decided by
+// an async runtime sample of the loaded texture (bgInfo.light) — a signal
+// the store can't see this far ahead of mount. Those pieces will still
+// drift slightly until that flag is baked into the graph data at bake time
+// instead of detected at render time (a change already planned separately
+// for the light/dark auto-detection's reliability in general).
+function computeFitScale(aspect) {
+  const paintingWidth  = PAINTING_HEIGHT * aspect;
+  const paintingHeight = PAINTING_HEIGHT;
+  const vFov = THREE.MathUtils.degToRad(CAMERA_FOV_DEG);
+  const visibleHeight = 2.0 * NULL_DISTANCE * Math.tan(vFov / 2.0);
+  const vw = (typeof window !== 'undefined' && window.innerWidth)  || 1;
+  const vh = (typeof window !== 'undefined' && window.innerHeight) || 1;
+  const visibleWidth = visibleHeight * (vw / vh);
+  const widthScale  = (visibleWidth  * 0.85) / paintingWidth;
+  const heightScale = (visibleHeight * 0.90) / paintingHeight;
+  return Math.min(widthScale, heightScale);
+}
 
 // FNV-1a-ish hash — stable per-string. Used for the per-edge rotation
 // angle around Y, so consecutive paintings differ visibly but the
@@ -48,8 +80,9 @@ function rand01(hash, salt) {
 // the nominal painting height * fitScale. Local z = 0 because the hinge
 // sits on the origin-plane backdrop.
 function uvToLocal(uv, aspect) {
-  const w = PAINTING_HEIGHT * aspect * FIT_SCALE;
-  const h = PAINTING_HEIGHT * FIT_SCALE;
+  const s = computeFitScale(aspect);
+  const w = PAINTING_HEIGHT * aspect * s;
+  const h = PAINTING_HEIGHT * s;
   return new THREE.Vector3(
     (uv[0] - 0.5) * w,
     (0.5 - uv[1]) * h,
