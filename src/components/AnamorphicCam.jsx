@@ -59,6 +59,13 @@ export default function AnamorphicCam() {
   const segments = useStore(state => state.segments);
   const updateFrame = useStore(state => state.updateFrame);
 
+  // Cache of {index, curve} — CatmullRomCurve3 (and the arc-length LUT it
+  // builds internally on first sample) is only rebuilt when the segment
+  // actually changes, not every frame. This also means a segment's curve
+  // is built exactly once from a stable, fully-formed points array,
+  // rather than freshly re-parametrized every tick.
+  const curveCache = useRef({ index: -1, curve: null });
+
   // Once segments exist, jump the scroll to the painting we open ON —
   // which sits a few segments IN, above the backward buffer — so the
   // viewer can immediately scroll UP into earlier paintings instead of
@@ -100,10 +107,42 @@ export default function AnamorphicCam() {
     // same eased clock (via transitionProgress) so the art resolves
     // exactly as the motion settles — camera in, art revealed.
     const r = rLin * rLin * rLin * (rLin * (rLin * 6 - 15) + 10);
+    // getPointAt requires u in [0,1]; the upstream clamp keeps rLin just
+    // under 1 in the normal case, but a large/instant scroll jump (a
+    // scrollbar-thumb drag, Home/End) can hand this a value that's
+    // *effectively* 1 after float rounding, which THREE's arc-length
+    // lookup doesn't tolerate gracefully — clamp explicitly rather than
+    // trust every upstream path to land inside range.
+    const rSafe = Math.min(1, Math.max(0, r));
 
-    const curve = new THREE.CatmullRomCurve3(currentSegment.path);
-    camera.position.copy(curve.getPointAt(r));
-    camera.lookAt(lookTarget(segments, segmentIndex, r));
+    if (curveCache.current.index !== segmentIndex) {
+      curveCache.current = {
+        index: segmentIndex,
+        curve: new THREE.CatmullRomCurve3(currentSegment.path),
+      };
+    }
+    try {
+      const p = curveCache.current.curve.getPointAt(rSafe);
+      // A degenerate segment (e.g. near-coincident start/hinge/end points
+      // from an edge case in the placement math) can hand back a
+      // non-finite point even without throwing. Never feed that to the
+      // camera — hold the last good position instead of snapping to
+      // NaN/Infinity, which would blank the canvas.
+      if (Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) {
+        camera.position.copy(p);
+      }
+      camera.lookAt(lookTarget(segments, segmentIndex, rSafe));
+    } catch (err) {
+      // Never let a curve-sampling edge case turn into a permanent,
+      // every-frame-repeating crash loop (observed: CatmullRomCurve3's
+      // arc-length search throwing on a large/instant scroll jump) — hold
+      // the camera at its last good position for this frame and recover
+      // on the next one instead of freezing the whole experience.
+      if (!curveCache.current.warned) {
+        console.warn('[AnamorphicCam] curve sample failed, holding position:', err);
+        curveCache.current.warned = true;
+      }
+    }
 
     // Single atomic update: transitionProgress and currentSegmentIndex
     // (which drives which paintings <Scene> mounts) always change

@@ -513,8 +513,6 @@ const useStore = create((set, get) => ({
       activeClusters: [...activeClusters, nextCluster],
       segments: [...segments, newSegment],
     });
-
-    console.log(`[Store] Segment ${segments.length} Appended: ${current.id} -> ${tid} (θ=${(theta*180/Math.PI).toFixed(1)}°)`);
   },
 
   // Atomic per-frame update: AnamorphicCam calls this ONCE per frame with
