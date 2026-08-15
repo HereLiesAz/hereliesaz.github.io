@@ -1,4 +1,5 @@
-import React, { Suspense, useEffect } from 'react';
+import React, { Suspense, useEffect, useMemo } from 'react';
+import * as THREE from 'three';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { ScrollControls, PerspectiveCamera } from '@react-three/drei';
 import { useStore } from '../store/useStore';
@@ -37,21 +38,29 @@ void main(){
 }
 `;
 function BackgroundSweep() {
-  const matRef = React.useRef();
-  useFrame(() => {
-    if (matRef.current) matRef.current.uniforms.uLevel.value = bgSweepLevel();
-  });
+  // Built imperatively (not via JSX <shaderMaterial uniforms={...}>) for the
+  // same reason TheaterPainting's flat materials are: a plain uniforms object
+  // literal in JSX has no .set()/.copy(), so react-three-fiber's applyProps
+  // falls through to `currentInstance.uniforms = value` on every re-render —
+  // wholesale REPLACING the uniforms object, including whatever this
+  // component's own useFrame just wrote into it. Scene re-renders on every
+  // updateFrame() (i.e. continuously during scroll), which was silently
+  // stomping uLevel back to its initial 0 almost every frame — the sweep
+  // was computing correctly and never reaching the screen. A stable,
+  // useMemo'd material sidesteps prop-diffing entirely: the mutation below
+  // is the only thing that ever touches uLevel.
+  const material = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader: bgWipeVS,
+    fragmentShader: bgWipeFS,
+    uniforms: { uLevel: { value: 0 } },
+    depthTest: false,
+    depthWrite: false,
+  }), []);
+  useEffect(() => () => material.dispose(), [material]);
+  useFrame(() => { material.uniforms.uLevel.value = bgSweepLevel(); });
   return (
-    <mesh frustumCulled={false} renderOrder={-1000}>
+    <mesh frustumCulled={false} renderOrder={-1000} material={material}>
       <planeGeometry args={[1, 1]} />
-      <shaderMaterial
-        ref={matRef}
-        vertexShader={bgWipeVS}
-        fragmentShader={bgWipeFS}
-        uniforms={{ uLevel: { value: 0 } }}
-        depthTest={false}
-        depthWrite={false}
-      />
     </mesh>
   );
 }
