@@ -23,6 +23,10 @@ body {
   height: 100%;
 }
 
-canvas {
-  touch-action: none; /* Disable default touch actions for custom gestures */
-}
+/* No touch-action override on canvas: nothing in this app implements a
+   custom touch gesture (grepped — no touchstart/touchmove/pointerdown
+   handlers anywhere), and the canvas fills the entire viewport, so a
+   blanket touch-action:none here was blocking pinch-zoom everywhere on
+   screen — silently defeating the viewport-meta fix that was supposed to
+   re-enable it. Native drei ScrollControls hijacks scroll via its own
+   overflow:auto div, unaffected by this. */
