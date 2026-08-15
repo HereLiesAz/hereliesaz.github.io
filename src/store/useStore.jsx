@@ -507,6 +507,13 @@ const useStore = create((set, get) => ({
       // incoming painting outward from it.
       sUv: aSuv,
       tUv: edge.t_uv || [0.5, 0.5],
+      // pareidolia_index.py bakes the matched patch's real edge length
+      // (as a fraction of the painting's min dimension) per edge — pass it
+      // through so the fulcrum-reveal circle's radius reflects the actual
+      // match size instead of a fixed guess. Null for edges without one
+      // (the degenerate/no-graph-edge fallbacks), so the renderer can fall
+      // back to its own default.
+      patchScale: typeof edge.scale === 'number' ? edge.scale : null,
     };
 
     set({

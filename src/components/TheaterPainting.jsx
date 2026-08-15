@@ -29,6 +29,11 @@ const CHROMA_L          = 0.045;    // luminance below this counts as "black" â†
 // black over this many units instead of clipping the near plane.
 const CROSS_FADE = 1.2;
 
+// Fulcrum-reveal patch radius used when a segment has no baked patchScale
+// (the degenerate/no-graph-edge fallback cases) â€” otherwise it's derived
+// per-transition from pareidolia_index.py's real matched-patch size.
+const DEFAULT_PATCH_R = 0.14;
+
 // Light-background pieces overfill the frame at coalescence so the paper's
 // own edges sit off-screen (only the swept site background, never a rectangle).
 const LIGHT_BG_OVERFILL = 1.35;
@@ -437,7 +442,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       uFade:          { value: 0 },
       uRole:          { value: 0 },
       uPatchUv:       { value: new THREE.Vector2(0.5, 0.5) },
-      uPatchR:        { value: 0.14 },
+      uPatchR:        { value: DEFAULT_PATCH_R },
       uReveal:        { value: 0 },
       uWipe:          { value: 1 },
       uBgLight:       { value: 0 },
@@ -625,8 +630,14 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     const cur = st.currentSegmentIndex;
     const seg = st.segments[cur];
     const r = st.transitionProgress;
-    let role = 0, patch = null, reveal = 0;
+    let role = 0, patch = null, reveal = 0, patchR = DEFAULT_PATCH_R;
     if (seg) {
+      // pareidolia_index.py bakes the real matched-patch edge length per
+      // edge (seg.patchScale, a fraction of the painting's min dimension);
+      // halve it (edge -> radius) so the reveal circle's size actually
+      // reflects that specific match instead of one fixed guess for every
+      // transition in the gallery.
+      if (typeof seg.patchScale === 'number') patchR = seg.patchScale / 2;
       if (mySegmentIndex === cur) {
         role = 1;               // outgoing
         patch = seg.sUv;
@@ -655,6 +666,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       U.uRole.value = role;
       U.uReveal.value = reveal;
       if (patch) U.uPatchUv.value.set(patch[0], patch[1]);
+      U.uPatchR.value = patchR;
     }
     fallbackMaterial.color.setScalar(fade);
   });
