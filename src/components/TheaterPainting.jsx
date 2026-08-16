@@ -183,13 +183,23 @@ void main() {
   }
 
   // Depth band cutout (the only flat kind produced today; see uMode note
-  // above).
+  // above). A hard discard against a noisy threshold (dj outside
+  // [uBandMin, uBandMax]) aliases badly once several depth flats' torn edges line up
+  // on screen at coalescence: each screen pixel near a seam flips between
+  // kept/discarded slightly differently frame to frame, reading as
+  // sparkling static exactly where the layers should merge seamlessly.
+  // Soften the boundary into a ramp sized to the on-screen rate of change
+  // (fwidth) instead of a fixed uv-space width, so it stays a crisp,
+  // stable ~1px edge at any distance without flickering.
+  float bandAlpha = 1.0;
   if (uMode > 0.5 && uMode < 1.5) {
     float d = texture2D(uDepth, vUv).r;
-    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05
-               + (hash(vUv * 1024.0) - 0.5) * 0.012;
+    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05;
     float dj = d + tear;
-    if (dj < uBandMin || dj >= uBandMax) discard;
+    float aa = clamp(fwidth(dj), 0.0015, 0.03);
+    bandAlpha = smoothstep(uBandMin - aa, uBandMin + aa, dj)
+              - smoothstep(uBandMax - aa, uBandMax + aa, dj);
+    if (bandAlpha <= 0.002) discard;
   }
 
   // Base opacity is the fly-through dissolve only (uFade); the LIFESPAN is
@@ -204,7 +214,7 @@ void main() {
   float wipeAt = mix(-0.1, 1.1, uWipe);
   float wipeEdge = wipeAt + (vnoise(vUv * 40.0) - 0.5) * 0.06;
   float wipeGate = 1.0 - smoothstep(wipeEdge - 0.04, wipeEdge + 0.04, vUv.x);
-  float op = uFade * wipeGate;
+  float op = uFade * wipeGate * bandAlpha;
 
   if (uRole > 1.5) {
     // Incoming painting. Hold the fulcrum patch present (camouflaged as part
@@ -433,6 +443,10 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     transparent:    false,
     depthWrite:     true,
     side:           THREE.DoubleSide,
+    // fwidth() in the depth-band antialiasing needs derivatives; a no-op
+    // under WebGL2 (always available there) but required for a WebGL1
+    // fallback context.
+    extensions:     { derivatives: true },
     uniforms: {
       uPainting:      { value: null },
       uDepth:         { value: null },
