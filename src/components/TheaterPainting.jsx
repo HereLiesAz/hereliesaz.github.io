@@ -163,6 +163,39 @@ void main() {
   float lum = 0.2126 * painting.r + 0.7152 * painting.g + 0.0722 * painting.b;
   float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
 
+  // Depth band cutout (the only flat kind produced today; see uMode note
+  // above), computed unconditionally and BEFORE any content-dependent
+  // discard below. fwidth() is only well-defined while every fragment in
+  // a GPU 2x2 quad is still executing in lockstep; a discard a neighbour
+  // took earlier for an unrelated reason (the chroma-key/paper-matte
+  // tests further down) breaks that lockstep for anything computed after
+  // it, which can reintroduce unstable/sparkling edges right where a
+  // depth-band seam happens to sit near a chroma-key boundary. uMode is a
+  // uniform (identical for every fragment in the draw call), so branching
+  // on it alone doesn't break derivative lockstep — only a per-fragment
+  // (varying-dependent) discard does, which is why the actual discard is
+  // deferred below instead of happening inline here.
+  //
+  // A hard discard against a noisy threshold (dj outside [uBandMin,
+  // uBandMax]) aliases badly once several depth flats' torn edges line up
+  // on screen at coalescence: each screen pixel near a seam flips between
+  // kept/discarded slightly differently frame to frame, reading as
+  // sparkling static exactly where the layers should merge seamlessly.
+  // Soften the boundary into a ramp sized to the on-screen rate of change
+  // (fwidth) instead of a fixed uv-space width, so it stays a crisp,
+  // stable ~1px edge at any distance without flickering.
+  float bandAlpha = 1.0;
+  bool bandDiscard = false;
+  if (uMode > 0.5 && uMode < 1.5) {
+    float d = texture2D(uDepth, vUv).r;
+    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05;
+    float dj = d + tear;
+    float aa = clamp(fwidth(dj), 0.0015, 0.03);
+    bandAlpha = smoothstep(uBandMin - aa, uBandMin + aa, dj)
+              - smoothstep(uBandMax - aa, uBandMax + aa, dj);
+    bandDiscard = bandAlpha <= 0.002;
+  }
+
   if (uBgLight > 0.5) {
     // Light-background (paper) matte: near-black ink/linework is genuine
     // content on these pieces, so the base near-black chroma-key below
@@ -181,16 +214,7 @@ void main() {
     // painting is drawn at each coalescence point (see useFrame).
     if (lum + chromaJit < ${CHROMA_L.toFixed(4)}) discard;
   }
-
-  // Depth band cutout (the only flat kind produced today; see uMode note
-  // above).
-  if (uMode > 0.5 && uMode < 1.5) {
-    float d = texture2D(uDepth, vUv).r;
-    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05
-               + (hash(vUv * 1024.0) - 0.5) * 0.012;
-    float dj = d + tear;
-    if (dj < uBandMin || dj >= uBandMax) discard;
-  }
+  if (bandDiscard) discard;
 
   // Base opacity is the fly-through dissolve only (uFade); the LIFESPAN is
   // now carried by the wipe, not by dimming — so revealed pixels are always
@@ -204,7 +228,7 @@ void main() {
   float wipeAt = mix(-0.1, 1.1, uWipe);
   float wipeEdge = wipeAt + (vnoise(vUv * 40.0) - 0.5) * 0.06;
   float wipeGate = 1.0 - smoothstep(wipeEdge - 0.04, wipeEdge + 0.04, vUv.x);
-  float op = uFade * wipeGate;
+  float op = uFade * wipeGate * bandAlpha;
 
   if (uRole > 1.5) {
     // Incoming painting. Hold the fulcrum patch present (camouflaged as part
@@ -215,13 +239,17 @@ void main() {
     float revealed = 1.0 - smoothstep(front - 0.14, front, dp);
     float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
     float presence = inPatch * mix(0.5, 1.0, uReveal);
-    op = max(op, uFade * presence * revealed);
+    // Still gated by bandAlpha: without it, this override replaces the
+    // antialiased depth-band edge with a hard-opaque one right inside the
+    // fulcrum patch -- exactly where the coalescing transition draws the
+    // eye, reintroducing the sparkle this shader change is meant to fix.
+    op = max(op, uFade * presence * revealed * bandAlpha);
   } else if (uRole > 0.5) {
     // Outgoing painting: hold the fulcrum patch a beat longer than the rest
     // so the shared spot stays occupied as it hands off to the incoming one.
     float dp = distance(vUv, uPatchUv);
     float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
-    op = max(op, uFade * inPatch * (1.0 - uReveal));
+    op = max(op, uFade * inPatch * (1.0 - uReveal) * bandAlpha);
   }
 
   // A faded-to-nothing flat (op ~ 0, a painting a segment away from its
@@ -433,6 +461,10 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     transparent:    false,
     depthWrite:     true,
     side:           THREE.DoubleSide,
+    // fwidth() in the depth-band antialiasing needs derivatives; a no-op
+    // under WebGL2 (always available there) but required for a WebGL1
+    // fallback context.
+    extensions:     { derivatives: true },
     uniforms: {
       uPainting:      { value: null },
       uDepth:         { value: null },
