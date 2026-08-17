@@ -180,36 +180,35 @@ void main() {
   float chromaJit = (vnoise(vUv * 128.0) - 0.5) * 0.015;
 
   // Depth band cutout (the only flat kind produced today; see uMode note
-  // above), computed unconditionally and BEFORE any content-dependent
-  // discard below. fwidth() is only well-defined while every fragment in
-  // a GPU 2x2 quad is still executing in lockstep; a discard a neighbour
-  // took earlier for an unrelated reason (the chroma-key/paper-matte
-  // tests further down) breaks that lockstep for anything computed after
-  // it, which can reintroduce unstable/sparkling edges right where a
-  // depth-band seam happens to sit near a chroma-key boundary. uMode is a
-  // uniform (identical for every fragment in the draw call), so branching
-  // on it alone doesn't break derivative lockstep — only a per-fragment
-  // (varying-dependent) discard does, which is why the actual discard is
-  // deferred below instead of happening inline here.
+  // above). Each flat claims a mutually-exclusive slice of the depth
+  // range; a torn-paper noise term jitters the boundary so it reads as a
+  // rough edge rather than a razor line.
   //
-  // A hard discard against a noisy threshold (dj outside [uBandMin,
-  // uBandMax]) aliases badly once several depth flats' torn edges line up
-  // on screen at coalescence: each screen pixel near a seam flips between
-  // kept/discarded slightly differently frame to frame, reading as
-  // sparkling static exactly where the layers should merge seamlessly.
-  // Soften the boundary into a ramp sized to the on-screen rate of change
-  // (fwidth) instead of a fixed uv-space width, so it stays a crisp,
-  // stable ~1px edge at any distance without flickering.
-  float bandAlpha = 1.0;
+  // An earlier version of this antialiased the boundary by fading a
+  // bandAlpha value into the pixel's output opacity as dj approached
+  // uBandMin/uBandMax. That traded the original flicker for a different,
+  // worse artifact: this material is opaque and depth-tested (not real
+  // alpha-blended), so two neighbouring bands never actually COMBINE —
+  // whichever one wins the z-test just draws its own darkened edge, which
+  // sits there as a static line. With ~18 bands per painting, every one
+  // of those lines together read as a topographic contour map traced
+  // over the reassembled image — seamless in time (no more flicker) but
+  // not seamless in space.
+  //
+  // A plain hard discard has no such line: two adjacent bands show the
+  // exact SAME painting pixel at full, undimmed brightness right up to
+  // their shared boundary, so there's nothing to see a seam in. What
+  // actually drove most of the original flicker was a since-removed
+  // very-high-frequency hash(vUv*1024.0) term in the tear noise, which
+  // aliased badly as the camera's sub-pixel position shifted frame to
+  // frame; the coarser vnoise(vUv*48.0) term alone already keeps that
+  // under control without needing to fake antialiasing here.
   bool bandDiscard = false;
   if (uMode > 0.5 && uMode < 1.5) {
     float d = texture2D(uDepth, vUv).r;
     float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05;
     float dj = d + tear;
-    float aa = clamp(fwidth(dj), 0.0015, 0.03);
-    bandAlpha = smoothstep(uBandMin - aa, uBandMin + aa, dj)
-              - smoothstep(uBandMax - aa, uBandMax + aa, dj);
-    bandDiscard = bandAlpha <= 0.002;
+    bandDiscard = dj < uBandMin || dj >= uBandMax;
   }
 
   if (uBgLight > 0.5) {
@@ -244,7 +243,7 @@ void main() {
   float wipeAt = mix(-0.1, 1.1, uWipe);
   float wipeEdge = wipeAt + (vnoise(vUv * 40.0) - 0.5) * 0.06;
   float wipeGate = 1.0 - smoothstep(wipeEdge - 0.04, wipeEdge + 0.04, vUv.x);
-  float op = uFade * wipeGate * bandAlpha;
+  float op = uFade * wipeGate;
 
   if (uRole > 1.5) {
     // Incoming painting. Hold the fulcrum patch present (camouflaged as part
@@ -255,17 +254,13 @@ void main() {
     float revealed = 1.0 - smoothstep(front - 0.14, front, dp);
     float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
     float presence = inPatch * mix(0.5, 1.0, uReveal);
-    // Still gated by bandAlpha: without it, this override replaces the
-    // antialiased depth-band edge with a hard-opaque one right inside the
-    // fulcrum patch -- exactly where the coalescing transition draws the
-    // eye, reintroducing the sparkle this shader change is meant to fix.
-    op = max(op, uFade * presence * revealed * bandAlpha);
+    op = max(op, uFade * presence * revealed);
   } else if (uRole > 0.5) {
     // Outgoing painting: hold the fulcrum patch a beat longer than the rest
     // so the shared spot stays occupied as it hands off to the incoming one.
     float dp = patchDist(vUv, uPatchUv);
     float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
-    op = max(op, uFade * inPatch * (1.0 - uReveal) * bandAlpha);
+    op = max(op, uFade * inPatch * (1.0 - uReveal));
   }
 
   // A faded-to-nothing flat (op ~ 0, a painting a segment away from its
@@ -479,10 +474,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       transparent:    false,
       depthWrite:     true,
       side:           THREE.DoubleSide,
-      // fwidth() in the depth-band antialiasing needs derivatives; a no-op
-      // under WebGL2 (always available there) but required for a WebGL1
-      // fallback context.
-      extensions:     { derivatives: true },
       uniforms: {
         uPainting:      { value: null },
         uDepth:         { value: null },
