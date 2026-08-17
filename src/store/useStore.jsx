@@ -1,9 +1,6 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
-
-// Camera radius that reads a painting head-on. Matches TheaterPainting.jsx
-// NULL_DISTANCE — both must agree so the null-sphere sits on the shell.
-const NULL_DISTANCE = 11.0;
+import { NULL_DISTANCE, PAINTING_HEIGHT, CAMERA_FOV_DEG } from '../sceneConstants';
 
 // How far off the painting's normal the null viewpoint sits, as a
 // fraction of NULL_DISTANCE. Nonzero so the flats NEVER fully close up:
@@ -17,17 +14,6 @@ const NULL_DISTANCE = 11.0;
 // big shard explosion during a transition comes from the camera's full
 // swing off the axis, not from this, so shrinking it doesn't cost drama.
 const OFF_AXIS = 0.045;
-
-// Nominal painting height in world units — matches TheaterPainting.jsx
-// PAINTING_HEIGHT. Used to convert a hinge uv into a hinge world offset.
-const PAINTING_HEIGHT = 10.0;
-
-// Camera vertical FOV in degrees — must match Scene.jsx's
-// <PerspectiveCamera fov={50}>. Needed to reproduce TheaterPainting.jsx's
-// fitScale exactly (see computeFitScale below): the store computes hinge
-// placement ahead of mount, so it can't read the live camera/viewport from
-// R3F and has to know these inputs on its own.
-const CAMERA_FOV_DEG = 50;
 
 // Reproduces TheaterPainting.jsx's fitScale useMemo EXACTLY (same
 // NULL_DISTANCE, same FOV, same 0.85/0.90 fit margins, same
@@ -234,6 +220,97 @@ function divePath(start, end, hinge, samples = 11) {
   return path;
 }
 
+// Given the already-placed cluster A, a target id, and the edge connecting
+// them, compute B's placement (position/rotation/quat) and the A->B camera
+// segment (dive path/focus/look targets). Pulled out of buildNextSegment so
+// recomputePlacements (below) can replay the exact same math against a
+// fresh fitScale after a resize, without the two ever drifting apart from
+// hand-duplicated copies of this logic.
+function computeSegmentPlacement(current, tid, edge, nodes) {
+  const nextNode = nodes.find(n => n.id === tid);
+  const aAspect = getAspect(nodes, current.id);
+  const bAspect = getAspect(nodes, tid);
+
+  const qA = new THREE.Quaternion(...(current.quat || [0, 0, 0, 1]));
+  const theta = edgeRotY(current.id, tid);
+  const qEdge = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0), theta);
+  // Multiply then strip any accumulated X/Z tilt — paintings must be
+  // upright at coalescence. Extract only the Y rotation.
+  const qBraw = qA.clone().multiply(qEdge);
+  const yAngle = new THREE.Euler().setFromQuaternion(qBraw, 'YXZ').y;
+  const qB = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0), yAngle);
+
+  // The shared hinge for THIS segment is the world location of A's
+  // OUTGOING patch (edge.s_uv) — wherever A already put it. Painting B is
+  // placed so its INCOMING patch (edge.t_uv) lands on that same world
+  // point, so A and B share exactly one point (the fulcrum) and diverge
+  // in space everywhere else.
+  const aSuv = edge.s_uv || [0.5, 0.5];
+  const H = hingeWorld(current.position, qA, aSuv, aAspect);
+
+  const { position: bPos, rotation: bRot } = placeAtHingeWorld(
+    edge.t_uv || [0.5, 0.5], bAspect, qB, H);
+
+  const nextCluster = {
+    id: tid,
+    position: bPos,
+    rotation: bRot,
+    quat: [qB.x, qB.y, qB.z, qB.w],
+    image: nextNode?.image,
+    hingeUvOut: null,
+  };
+
+  // Camera path. At r=0 the camera reads painting A from its null: on A's
+  // normal, offset from A's plane centre by NULL_DISTANCE, then skewed
+  // sideways by the painting's stable off-axis offset. At r=1 the same for
+  // B. Between them the path dollies IN toward the shared hinge H and back
+  // OUT, rather than orbiting.
+  const aPosVec = new THREE.Vector3(
+    current.position[0], current.position[1], current.position[2]);
+  const aNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(qA);
+  const startPoint = aPosVec.clone()
+    .addScaledVector(aNormal, NULL_DISTANCE)
+    .add(nullOffsetLocal(current.id).applyQuaternion(qA));
+
+  const bPosVec = new THREE.Vector3(bPos[0], bPos[1], bPos[2]);
+  const bNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(qB);
+  const endPoint = bPosVec.clone()
+    .addScaledVector(bNormal, NULL_DISTANCE)
+    .add(nullOffsetLocal(tid).applyQuaternion(qB));
+
+  const focus = H.clone();
+  const avgNormal = aNormal.clone().add(bNormal).normalize();
+  const diveTarget = H.clone().addScaledVector(avgNormal, 3.2);
+
+  const startLook = aPosVec.clone();
+  const endLook   = bPosVec.clone();
+
+  const path = divePath(startPoint, endPoint, diveTarget, 11);
+
+  const newSegment = {
+    path,
+    startId: current.id,
+    endId: tid,
+    focus,
+    startLook,
+    endLook,
+    // Fulcrum patch uvs: the outgoing painting's matched patch (sUv) and
+    // the incoming painting's matched patch (tUv).
+    sUv: aSuv,
+    tUv: edge.t_uv || [0.5, 0.5],
+    // pareidolia_index.py bakes the matched patch's real edge length (as a
+    // fraction of the painting's min dimension) per edge — pass it through
+    // so the fulcrum-reveal circle's radius reflects the actual match size
+    // instead of a fixed guess. Null for edges without one, so the
+    // renderer can fall back to its own default.
+    patchScale: typeof edge.scale === 'number' ? edge.scale : null,
+  };
+
+  return { nextCluster, newSegment };
+}
+
 const useStore = create((set, get) => ({
   // --- STATE ---
   nodes: [],
@@ -410,116 +487,66 @@ const useStore = create((set, get) => ({
       }
     }
 
-    const nextNode = nodes.find(n => n.id === tid);
-    const aAspect = getAspect(nodes, current.id);
-    const bAspect = getAspect(nodes, tid);
-
-    const qA = new THREE.Quaternion(...(current.quat || [0, 0, 0, 1]));
-    const theta = edgeRotY(current.id, tid);
-    const qEdge = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(0, 1, 0), theta);
-    // Multiply then strip any accumulated X/Z tilt — paintings must be
-    // upright at coalescence. Extract only the Y rotation.
-    const qBraw = qA.clone().multiply(qEdge);
-    const yAngle = new THREE.Euler().setFromQuaternion(qBraw, 'YXZ').y;
-    const qB = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(0, 1, 0), yAngle);
-
-    // The shared hinge for THIS segment is the world location of A's
-    // OUTGOING patch (edge.s_uv) — wherever A already put it. Paintings
-    // no longer stack at the origin: the hinge marches forward down the
-    // chain. Painting B is placed so its INCOMING patch (edge.t_uv)
-    // lands on that same world point, so A and B share exactly one point
-    // (the fulcrum) and diverge in space everywhere else. Non-adjacent
-    // paintings, sharing no hinge, end up far apart and never bleed.
-    const aSuv = edge.s_uv || [0.5, 0.5];
-    const H = hingeWorld(current.position, qA, aSuv, aAspect);
-
-    const { position: bPos, rotation: bRot } = placeAtHingeWorld(
-      edge.t_uv || [0.5, 0.5], bAspect, qB, H);
-
-    const nextCluster = {
-      id: tid,
-      position: bPos,
-      rotation: bRot,
-      quat: [qB.x, qB.y, qB.z, qB.w],
-      image: nextNode?.image,
-      hingeUvOut: null,
-    };
-
-    // Camera path.
-    //
-    // At r=0 the camera reads painting A from its null: on A's normal,
-    // offset from A's plane centre by NULL_DISTANCE, then skewed
-    // sideways by the painting's stable off-axis offset so the flats
-    // never fully close up — the painting coalesces but is never shown
-    // as the flat original. A's plane centre in world = current.position
-    // (the group offset). A's normal in world = qA · (0,0,1).
-    //
-    // At r=1 the camera reads painting B the same way.
-    //
-    // Between them the path is a dolly, not an orbit: push IN toward the
-    // shared hinge H (a detail of A the viewer is drawn into), through
-    // the shard cloud, and back OUT to B's null. B has already been
-    // fading up through the chaos; backing out simply lets it coalesce.
-    const aPosVec = new THREE.Vector3(
-      current.position[0], current.position[1], current.position[2]);
-    const aNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(qA);
-    const startPoint = aPosVec.clone()
-      .addScaledVector(aNormal, NULL_DISTANCE)
-      .add(nullOffsetLocal(current.id).applyQuaternion(qA));
-
-    const bPosVec = new THREE.Vector3(bPos[0], bPos[1], bPos[2]);
-    const bNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(qB);
-    const endPoint = bPosVec.clone()
-      .addScaledVector(bNormal, NULL_DISTANCE)
-      .add(nullOffsetLocal(tid).applyQuaternion(qB));
-
-    // The hinge focus — where both paintings' shared patches sit in
-    // world space (H, marching down the chain). The camera LOOKS at H
-    // throughout the dive so the fulcrum stays centred.
-    const focus = H.clone();
-
-    // But it dives to a point just IN FRONT of the hinge (along the mean
-    // of the two paintings' normals), not onto it — otherwise the camera
-    // embeds in the backdrop plane and one magnified texture washes the
-    // frame. A few units out keeps it immersed in the shards, looking at
-    // the fulcrum, without clipping through the flat.
-    const avgNormal = aNormal.clone().add(bNormal).normalize();
-    const diveTarget = H.clone().addScaledVector(avgNormal, 3.2);
-
-    // A's plane centre in world (look target at r=0) and B's (at r=1).
-    const startLook = aPosVec.clone();
-    const endLook   = bPosVec.clone();
-
-    const path = divePath(startPoint, endPoint, diveTarget, 11);
-
-    const newSegment = {
-      path,
-      startId: current.id,
-      endId: tid,
-      focus,
-      startLook,
-      endLook,
-      // Fulcrum patch uvs: the outgoing painting's matched patch (sUv)
-      // and the incoming painting's matched patch (tUv). The renderer
-      // uses these to keep the shared spot occupied and to unfurl the
-      // incoming painting outward from it.
-      sUv: aSuv,
-      tUv: edge.t_uv || [0.5, 0.5],
-      // pareidolia_index.py bakes the matched patch's real edge length
-      // (as a fraction of the painting's min dimension) per edge — pass it
-      // through so the fulcrum-reveal circle's radius reflects the actual
-      // match size instead of a fixed guess. Null for edges without one
-      // (the degenerate/no-graph-edge fallbacks), so the renderer can fall
-      // back to its own default.
-      patchScale: typeof edge.scale === 'number' ? edge.scale : null,
-    };
+    const { nextCluster, newSegment } = computeSegmentPlacement(current, tid, edge, nodes);
 
     set({
       activeClusters: [...activeClusters, nextCluster],
       segments: [...segments, newSegment],
     });
+  },
+
+  // Bumped every time recomputePlacements (below) rewrites the world-space
+  // chain, so consumers that cache anything derived from a segment's path
+  // (AnamorphicCam's CatmullRomCurve3) know to rebuild it even when the
+  // segment INDEX they're looking at hasn't changed.
+  placementGeneration: 0,
+
+  // computeFitScale (via uvToLocal) reads window.innerWidth/innerHeight at
+  // the moment a segment is built, but TheaterPainting's own fitScale is a
+  // live useMemo reacting to the real, current R3F canvas size. A window
+  // resize between building a segment and the camera actually reaching it
+  // — or even just a resize while a segment is currently on screen — means
+  // the world coordinates baked into activeClusters/segments no longer
+  // match where the renderer will actually draw that painting. Re-derives
+  // the ENTIRE chain from the root using the CURRENT fitScale, replaying
+  // the exact same sequence of painting ids and hinge edges already chosen
+  // (from each segment's own stored sUv/tUv) — nothing about the walk
+  // itself changes, only the scale-dependent world coordinates.
+  recomputePlacements: () => {
+    const { activeClusters, segments, nodes } = get();
+    if (activeClusters.length === 0) return;
+
+    const root = activeClusters[0];
+    const rootAspect = getAspect(nodes, root.id);
+    const identity = new THREE.Quaternion();
+    const rootSuv = root.hingeUvOut || [0.5, 0.5];
+    const { position: rootPos, rotation: rootRot } = placeAtHingeWorld(
+      rootSuv, rootAspect, identity, new THREE.Vector3(0, 0, 0));
+
+    const newClusters = [{
+      ...root,
+      position: rootPos,
+      rotation: rootRot,
+      quat: [identity.x, identity.y, identity.z, identity.w],
+    }];
+    const newSegments = [];
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const current = newClusters[i];
+      const tid = activeClusters[i + 1]?.id;
+      if (!tid) break;
+      const edge = { source: current.id, target: tid, s_uv: seg.sUv, t_uv: seg.tUv, scale: seg.patchScale };
+      const { nextCluster, newSegment } = computeSegmentPlacement(current, tid, edge, nodes);
+      newClusters.push(nextCluster);
+      newSegments.push(newSegment);
+    }
+
+    set(state => ({
+      activeClusters: newClusters,
+      segments: newSegments,
+      placementGeneration: state.placementGeneration + 1,
+    }));
   },
 
   // Atomic per-frame update: AnamorphicCam calls this ONCE per frame with

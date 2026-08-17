@@ -87,12 +87,16 @@ export default function AnamorphicCam() {
   const segments = useStore(state => state.segments);
   const updateFrame = useStore(state => state.updateFrame);
 
-  // Cache of {index, curve} — CatmullRomCurve3 (and the arc-length LUT it
-  // builds internally on first sample) is only rebuilt when the segment
+  // Cache of {index, gen, curve} — CatmullRomCurve3 (and the arc-length LUT
+  // it builds internally on first sample) is only rebuilt when the segment
   // actually changes, not every frame. This also means a segment's curve
-  // is built exactly once from a stable, fully-formed points array,
-  // rather than freshly re-parametrized every tick.
-  const curveCache = useRef({ index: -1, curve: null });
+  // is built exactly once from a stable, fully-formed points array, rather
+  // than freshly re-parametrized every tick. `gen` also invalidates it:
+  // useStore's recomputePlacements (fired on window resize) can rewrite a
+  // segment's path IN PLACE at the same index, which an index-only check
+  // would miss until the next transition — bumping placementGeneration
+  // forces a rebuild from the fresh path on the very next frame instead.
+  const curveCache = useRef({ index: -1, gen: -1, curve: null });
 
   // Once segments exist, jump the scroll to the painting we open ON —
   // which sits a few segments IN, above the backward buffer — so the
@@ -193,9 +197,11 @@ export default function AnamorphicCam() {
     // trust every upstream path to land inside range.
     const rSafe = Math.min(1, Math.max(0, r));
 
-    if (curveCache.current.index !== segmentIndex) {
+    const placementGen = useStore.getState().placementGeneration;
+    if (curveCache.current.index !== segmentIndex || curveCache.current.gen !== placementGen) {
       curveCache.current = {
         index: segmentIndex,
+        gen: placementGen,
         curve: new THREE.CatmullRomCurve3(currentSegment.path),
       };
     }
