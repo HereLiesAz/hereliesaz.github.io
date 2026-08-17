@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import useStore from '../store/useStore';
+import { bgSweepLevel } from './TheaterPainting';
 
 /**
  * The thin ink layer over the closet — see AESTHETIC §3, §6.
@@ -28,6 +29,17 @@ const STYLES = `
   inset: 0;
   pointer-events: none;
   z-index: 5;
+  /* Driven per-frame from JS (see the apply() subscription below) with
+     how far the site background has swept from black toward white
+     (TheaterPainting's bgSweepLevel()). The signature/caption text colour
+     (#f4f0e6, near-white) reads fine on black but drops to ~1.1:1
+     contrast against a fully white background with nothing else to help
+     it — text-shadow alone can't fix that since it's a glow, not a solid
+     backing. --ink-scrim drives a dark backing panel behind that text
+     (see .ink-signature::before / .ink-caption::before) that fades in as
+     the background lightens, the same "scrim under text" trick the vellum
+     modal already uses (.ink-modal-backdrop) for the same reason. */
+  --ink-scrim: 0;
 }
 
 /* --- Signature -------------------------------------------------------- */
@@ -42,6 +54,16 @@ const STYLES = `
   padding: 0;
   display: block;
   filter: drop-shadow(0 0 12px rgba(0, 0, 0, 0.85));
+}
+.ink-signature::before,
+.ink-caption::before {
+  content: '';
+  position: absolute;
+  inset: -0.5em -0.7em;
+  background: #000;
+  opacity: var(--ink-scrim);
+  border-radius: 3px;
+  pointer-events: none;
 }
 .ink-signature svg {
   display: block;
@@ -77,6 +99,12 @@ const STYLES = `
   letter-spacing: 0.18em;
   text-shadow: 0 0 16px rgba(0, 0, 0, 0.95);
   pointer-events: none;
+  /* Real painting ids are long, unbroken, punctuation-joined filename
+     stems (e.g. "PXL_20250508_213441321.RAW-01.COVER~9") with no natural
+     line-breaking opportunity, so without this a long id can overflow past
+     max-width instead of wrapping inside it. */
+  overflow-wrap: break-word;
+  word-break: break-word;
   /* Initial state lives here, not on the JSX style prop, so a React
      re-render (e.g. showMenu toggling) doesn't stomp the per-frame
      ref-driven opacity / visibility updates. */
@@ -232,6 +260,7 @@ const Overlay = () => {
 
   // Caption refs. We bypass React reconciliation for the per-frame
   // opacity / title updates and write straight to the DOM.
+  const overlayRef = useRef(null);
   const captionRef = useRef(null);
   const titleRef   = useRef(null);
   const lastIdRef  = useRef(null);
@@ -252,14 +281,66 @@ const Overlay = () => {
         titleRef.current.textContent = id || '';
         lastIdRef.current = id;
       }
+      // bgSweepLevel() isn't store state (it lives in TheaterPainting's
+      // module-level bgSweep map) but this subscription already fires at
+      // scroll-frame frequency, so it's a convenient place to piggyback
+      // this per-frame DOM write too, matching the pattern above. Capped
+      // at 0.78: comfortably clears 4.5:1 contrast for this text colour
+      // even against a fully white swept background, without going fully
+      // opaque (the ink aesthetic elsewhere is deliberately translucent —
+      // see .ink-modal-backdrop's 0.86).
+      if (overlayRef.current) {
+        overlayRef.current.style.setProperty('--ink-scrim', String(Math.min(0.78, bgSweepLevel())));
+      }
     };
     apply(useStore.getState());
     return useStore.subscribe(apply);
   }, []);
 
+  // Focus management for the menu modal: move focus into it on open and
+  // restore it to the signature button on close, so a keyboard user isn't
+  // dropped back at the top of an unfocused document. Skips the initial
+  // mount (prevShowMenu starts false, showMenu starts false) so the page
+  // doesn't yank focus onto the signature button unprompted on load.
+  const signatureRef   = useRef(null);
+  const closeButtonRef = useRef(null);
+  const prevShowMenu   = useRef(false);
+  useEffect(() => {
+    if (showMenu) {
+      closeButtonRef.current?.focus();
+    } else if (prevShowMenu.current) {
+      signatureRef.current?.focus();
+    }
+    prevShowMenu.current = showMenu;
+  }, [showMenu]);
+
+  // Escape closes the modal — the conventional dialog-dismissal key, and
+  // otherwise the only way out is a mouse click (the backdrop) or tabbing
+  // all the way to the close button.
+  useEffect(() => {
+    if (!showMenu) return;
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') toggleMenu();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showMenu, toggleMenu]);
+
   return (
-    <div className="ink-overlay">
-      <button type="button" className="ink-signature" onClick={toggleMenu} aria-label="open menu">
+    <div className="ink-overlay" ref={overlayRef}>
+      <button
+        type="button"
+        className="ink-signature"
+        onClick={toggleMenu}
+        aria-label="open menu"
+        ref={signatureRef}
+        // Excluded from the tab order while the modal is open, rather than
+        // left reachable underneath it — the modal has no separate focus
+        // trap, so without this Tab could walk focus out of the dialog and
+        // onto a button visually hidden behind the backdrop.
+        tabIndex={showMenu ? -1 : 0}
+        aria-hidden={showMenu}
+      >
         <svg width="160" height="40" viewBox="0 0 160 40">
           <text x="0" y="28" className="ink-signature__stroke">HereLiesAz</text>
         </svg>
@@ -275,10 +356,16 @@ const Overlay = () => {
 
       {showMenu && (
         <div className="ink-modal-backdrop" onClick={toggleMenu}>
-          <div className="ink-modal" onClick={e => e.stopPropagation()}>
+          <div
+            className="ink-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ink-modal-title"
+            onClick={e => e.stopPropagation()}
+          >
             <VellumFrame />
-            <button type="button" className="ink-modal__close" onClick={toggleMenu} aria-label="close">×</button>
-            <h2>here lies az</h2>
+            <button type="button" className="ink-modal__close" onClick={toggleMenu} aria-label="close" ref={closeButtonRef}>×</button>
+            <h2 id="ink-modal-title">here lies az</h2>
             <p>The canvas is a closet. The paint is light. You navigate the dark by following what your eye almost-recognises.</p>
             <ul>
               <li><a href="https://github.com/HereLiesAz" target="_blank" rel="noreferrer noopener">github</a></li>

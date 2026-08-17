@@ -30,16 +30,23 @@ const App = () => {
   const nodes = useStore((state) => state.nodes);
   const activeClusters = useStore((state) => state.activeClusters);
   const ready = nodes.length > 0 && activeClusters.length > 0;
+  // On total data loss, Scene.jsx sets this within roughly one fetch
+  // round-trip — far sooner than BOOT_MAX_MS below. Without reacting to it
+  // here too, the opaque boot screen (z-index 8000) sat in front of
+  // Overlay's already-rendered error message for the full 20s, showing a
+  // false "still loading" signal over an error that was ready almost
+  // instantly.
+  const loadError = useStore((state) => state.loadError);
 
   const [bootVisible, setBootVisible] = useState(true);
   const [bootFading, setBootFading] = useState(false);
 
   useEffect(() => {
-    if (!ready) return undefined;
+    if (!ready && !loadError) return undefined;
     setBootFading(true);
     const hideTimer = setTimeout(() => setBootVisible(false), BOOT_FADE_MS);
     return () => clearTimeout(hideTimer);
-  }, [ready]);
+  }, [ready, loadError]);
 
   useEffect(() => {
     const maxTimer = setTimeout(() => {
@@ -110,9 +117,44 @@ const App = () => {
         <Scene />
       </div>
 
-      {/* Loading Screen (drei's texture-load progress bar — only becomes
-          visible once THREE.DefaultLoadingManager-tracked loads start) */}
-      <Loader />
+      {/* Loading Screen: drei's texture-load progress bar, restyled from
+          its default full-screen opaque block into a small, non-blocking
+          corner readout. THREE.DefaultLoadingManager-tracked loads fire for
+          every painting's texture fetch, not just the first — the default
+          styling would otherwise blank the entire scene (camera dive,
+          overlay, everything) for as long as ANY subsequent painting's
+          texture takes over ~300ms to arrive, which is a normal occurrence
+          mid-scroll, not just at boot. */}
+      <Loader
+        containerStyles={{
+          position: 'fixed',
+          top: 'auto',
+          left: 'auto',
+          bottom: '1.6rem',
+          right: '1.8rem',
+          width: 'auto',
+          height: 'auto',
+          background: 'transparent',
+          pointerEvents: 'none',
+          zIndex: 6000,
+        }}
+        innerStyles={{
+          width: 80,
+          height: 2,
+          background: 'rgba(244, 240, 230, 0.15)',
+        }}
+        barStyles={{
+          background: '#f4f0e6',
+        }}
+        dataStyles={{
+          color: '#f4f0e6',
+          fontSize: '0.6rem',
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+          marginTop: '0.5rem',
+          fontFamily: 'monospace',
+        }}
+      />
 
       {/* Boot indicator: covers the black window between first paint and
           the scene reporting real data, which the Loader above can't see. */}
