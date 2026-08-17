@@ -143,3 +143,11 @@ public/data/theater/_manifest.json
 
 *.example
 *.local
+
+# Claude Code's per-session local settings (permission allowlist cache,
+# etc.) — the "local" in the filename is the tool's own convention for
+# "personal, machine/session-specific, never shared". It was previously
+# committed by mistake, so every session that runs here re-drifts it
+# (new permission grants get appended) and shows up as a permanent dirty
+# working tree. See the untracking commit for how this was cleaned up.
+.claude/settings.local.json
