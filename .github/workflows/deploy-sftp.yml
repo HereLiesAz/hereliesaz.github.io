@@ -47,6 +47,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_run:
+    # This workflow previously had no workflow_run trigger at all: it only
+    # fired on a push to main or a manual dispatch, so a "Theater Bake" (or
+    # "Process Art (Turbo 56)") run publishing fresh data to the art-data
+    # branch never mirrored to the SFTP host on its own — main and the SFTP
+    # mirror could silently diverge from GitHub Pages (deploy.yml, which
+    # does watch these) until someone happened to push to main. Names must
+    # exactly match the target workflows' `name:` fields.
+    workflows: ["Process Art (Turbo 56)", "Theater Bake"]
+    types:
+      - completed
 
 concurrency:
   group: sftp-deploy

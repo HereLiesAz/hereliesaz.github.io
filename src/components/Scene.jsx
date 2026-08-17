@@ -6,6 +6,7 @@ import { useStore } from '../store/useStore';
 import AnamorphicCam, { PAGES_PER_SEGMENT } from './AnamorphicCam';
 import TheaterPainting, { bgSweepLevel } from './TheaterPainting';
 import TexturePreloader from './TexturePreloader';
+import { CAMERA_FOV_DEG } from '../sceneConstants';
 
 // Drives the whole-site background from black to white as a light-background
 // (paper) piece coalesces, and back as it leaves. Rather than a uniform level,
@@ -71,6 +72,27 @@ export default function Scene() {
   const setStartNode = useStore(state => state.setStartNode);
   const setLoadError = useStore(state => state.setLoadError);
   const nodeCount = useStore(state => state.nodes.length);
+
+  // A window resize changes computeFitScale's result (see useStore.jsx),
+  // which the already-built activeClusters/segments chain baked in at
+  // build time — so without this, a resize (or device rotation) leaves
+  // the camera's dive path and the paintings' world positions pointing at
+  // where they USED to belong instead of where TheaterPainting's own live
+  // fitScale actually draws them. Debounced since 'resize' fires
+  // continuously during a drag-resize and recomputing the whole chain on
+  // every single event would be wasted work.
+  useEffect(() => {
+    let t = null;
+    const onResize = () => {
+      clearTimeout(t);
+      t = setTimeout(() => useStore.getState().recomputePlacements(), 200);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      clearTimeout(t);
+    };
+  }, []);
 
   // Primary path: the walker reads /data/theater/_manifest.json for the list
   // of baked paintings, plus /data/theater/graph.theater.json — the
@@ -180,7 +202,7 @@ export default function Scene() {
       <color attach="background" args={['#000000']} />
       <BackgroundSweep />
 
-      <PerspectiveCamera makeDefault position={[0, 0, 0]} fov={50} near={0.01} />
+      <PerspectiveCamera makeDefault position={[0, 0, 0]} fov={CAMERA_FOV_DEG} near={0.01} />
       
       <ambientLight intensity={0.5} />
       <pointLight position={[10, 10, 10]} intensity={1} />

@@ -19,6 +19,14 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v3
+        with:
+          # peaceiris/actions-gh-pages (the "Deploy Data" step below)
+          # authenticates its own push via its `github_token:` input, not
+          # git's persisted credential helper — so the untrusted work in
+          # between (pip install, running the bootstrap script) doesn't
+          # need a live write-scoped credential sitting in the git config
+          # the whole time.
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v4

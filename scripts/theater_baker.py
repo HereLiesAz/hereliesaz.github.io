@@ -7,8 +7,9 @@ CI note: .github/workflows/process_art.yml invokes this with an explicit
 
 The paper-theater data model is exactly two textures per painting plus a
 small metadata file. The renderer builds the diorama at runtime from the
-depth texture: a full-painting backdrop plane plus a handful of cutout
-flats, each showing only the pixels inside its depth band.
+depth texture alone: a dense stack of cutout flats (no separate backdrop
+plane — see TheaterPainting.jsx), each showing only the pixels inside its
+depth band.
 
 Per input image the bake runs four cacheable stages — each stage is
 skipped when its output already exists (use --force to redo), so the
@@ -26,8 +27,9 @@ is fully offline:
                back to the original painting (the photo shares the
                painting's composition, so the map aligns 1:1).
                                               -> {id}.depth.png (16-bit)
-  D. meta      k-means the depth histogram into ~6 bands whose edges
-               snap to objects rather than quantiles.
+  D. meta      k-means the depth histogram into N_BANDS bands (see the
+               constant below), merged down where too thin/sparse, whose
+               edges snap to objects rather than quantiles.
                                               -> {id}.theater.json
 
 Depth provenance is recorded in theater.json as depth.source:
@@ -269,15 +271,25 @@ def align_to(photo: np.ndarray, rgb: np.ndarray) -> np.ndarray:
     return photo
 
 
-def photorealize(rgb: np.ndarray, cache_path: Path) -> np.ndarray | None:
+def photorealize(rgb: np.ndarray, cache_path: Path, force: bool = False) -> np.ndarray | None:
     """Return a photorealistic rendering of the painting, registered to it.
 
-    Cached at cache_path; the network is only touched on a cache miss.
-    Tries the HF Inference API when HF_TOKEN is set, then the public
-    FLUX.1-Kontext Space anonymously. Returns None when both fail — the
-    caller then falls back to estimating depth on the painting itself.
+    Cached at cache_path; the network is only touched on a cache miss (or
+    when force=True). Tries the HF Inference API when HF_TOKEN is set, then
+    the public FLUX.1-Kontext Space anonymously. Returns None when both
+    fail — the caller then falls back to estimating depth on the painting
+    itself.
+
+    force must be set by the caller whenever `rgb` may no longer match what
+    produced the cached file — a crop-box change, or a hand-authored
+    --force — since this cache check has no way to know that on its own.
+    Without it, a crop edit would silently keep serving photo content
+    registered to the OLD crop (merely resized to fit the new one, not
+    re-registered), and estimate_depth_local()/estimate_depth() downstream
+    would then derive depth from a composition that doesn't match the
+    painting.png actually being shipped.
     """
-    if cache_path.exists():
+    if cache_path.exists() and not force:
         photo = np.array(ImageOps.exif_transpose(Image.open(cache_path)).convert("RGB"))
         if photo.shape[:2] != rgb.shape[:2]:
             photo = cv2.resize(photo, (rgb.shape[1], rgb.shape[0]),
@@ -644,7 +656,12 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
             source = cached_source
 
     if depth is None:
-        photo = photorealize(rgb, out_photo)
+        # force here covers BOTH a hand-authored --force AND a detected
+        # crop change: crop_changed already invalidated the out_painting/
+        # out_depth caches above, so `rgb` may be a different composition
+        # than whatever produced a stale out_photo — photorealize's own
+        # cache check must be told that explicitly (see its docstring).
+        photo = photorealize(rgb, out_photo, force=force or crop_changed)
         src_img = photo if photo is not None else rgb
         # Local Depth-Anything first (reliable), Space second, synth last.
         depth = estimate_depth_local(src_img)

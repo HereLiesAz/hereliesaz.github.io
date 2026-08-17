@@ -65,12 +65,21 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          # peaceiris/actions-gh-pages (the "Deploy to art-data" step below)
+          # authenticates its own push via its `github_token:` input, not
+          # git's persisted credential helper — so the untrusted work in
+          # between (pip install, running the bake scripts) doesn't need a
+          # live write-scoped credential sitting in the git config the
+          # whole time.
+          persist-credentials: false
 
       - name: Seed existing bakes from art-data (cache the expensive stages)
         uses: actions/checkout@v4
         with:
           ref: art-data
           path: _artdata
+          persist-credentials: false
         continue-on-error: true
 
       - name: Stage cached bakes into public/data

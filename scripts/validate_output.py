@@ -103,6 +103,26 @@ def validate_theater_json(path: Path) -> None:
             centers = bands.get("centers")
             check(isinstance(centers, list) and len(centers) > 0,
                   f"{name}: depth.bands.centers is empty or missing")
+            # bandMin/bandMax below (TheaterPainting.jsx's uBandMin/uBandMax)
+            # gate each depth-band flat directly off these edges via a
+            # texture2D sample compared against [0,1]-range depth values —
+            # an out-of-range or non-monotonic edge either shows nothing
+            # (an empty/inverted band) or lets one band's cutout bleed into
+            # a neighbour's, silently, since nothing else in the pipeline
+            # checks this before it ships.
+            edges_ = bands.get("edges")
+            if isinstance(edges_, list) and len(edges_) > 0:
+                check(all(isinstance(e, (int, float)) and e == e for e in edges_),
+                      f"{name}: depth.bands.edges contains a non-numeric or NaN value")
+                check(all(0.0 <= e <= 1.0 for e in edges_ if isinstance(e, (int, float))),
+                      f"{name}: depth.bands.edges has a value outside [0, 1]")
+                check(all(edges_[i] <= edges_[i + 1] for i in range(len(edges_) - 1)),
+                      f"{name}: depth.bands.edges is not monotonically non-decreasing")
+                check(len(edges_) == len(centers) + 1 if isinstance(centers, list) else True,
+                      f"{name}: depth.bands.edges has {len(edges_)} entries, expected "
+                      f"len(centers)+1 = {len(centers) + 1 if isinstance(centers, list) else '?'}")
+            else:
+                check(False, f"{name}: depth.bands.edges is empty or missing")
         # The hard gate: a synthetic (flat-gradient emergency stand-in)
         # depth map must never ship. theater_baker.py's own docstring
         # calls this "emergency only ... re-bake with network access".
@@ -179,6 +199,30 @@ def validate_graph(dir_: Path) -> None:
         w = edge.get("weight")
         check(isinstance(w, (int, float)) and w == w and abs(w) != float("inf") and -1.0 <= w <= 1.0,
               f"graph.theater.json: edges[{i}].weight {w!r} is not a sane float in [-1, 1]")
+
+        # s_uv/t_uv are the exact fields useStore.jsx's uvToLocal() uses to
+        # place every painting in world space (see hingeWorld/
+        # placeAtHingeWorld) — an out-of-range or malformed value here
+        # doesn't fail loudly in the frontend, it silently misplaces (or,
+        # via a NaN, permanently freezes) the camera dive for that edge.
+        # This CLI gate previously validated everything about an edge
+        # EXCEPT these, despite them being the ones that actually control
+        # placement.
+        for key in ("s_uv", "t_uv"):
+            uv = edge.get(key)
+            valid_uv = (
+                isinstance(uv, list) and len(uv) == 2
+                and all(isinstance(c, (int, float)) and c == c and 0.0 <= c <= 1.0 for c in uv)
+            )
+            check(valid_uv,
+                  f"graph.theater.json: edges[{i}].{key} {uv!r} is not a 2-element "
+                  f"[0,1]-range [u, v] pair")
+
+        scale = edge.get("scale")
+        if scale is not None:
+            check(isinstance(scale, (int, float)) and scale == scale and 0.0 < scale <= 1.0,
+                  f"graph.theater.json: edges[{i}].scale {scale!r} is not a positive "
+                  f"float in (0, 1] (a fraction of the painting's min dimension)")
 
     # Sanity check that pareidolia_index.py's acceptance bar (MIN_SIM /
     # scale-bias correction) is actually rejecting weak matches, not

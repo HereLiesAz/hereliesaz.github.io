@@ -5,10 +5,14 @@ on:
     branches: ["main"]
   workflow_dispatch:
   workflow_run:
-    # Must exactly match process_art.yml's `name:` field. Verified by
-    # reading that file directly — it is "Process Art (Turbo 56)", not
-    # the never-existent "Process Art & Index" this used to reference.
-    workflows: ["Process Art (Turbo 56)"]
+    # Must exactly match the target workflows' `name:` fields. Watching
+    # only "Process Art (Turbo 56)" (that workflow's stroke/grind output,
+    # which the frontend doesn't even read) meant a "Theater Bake" run —
+    # the ACTUAL publisher of the painting/depth/hinge-graph data the site
+    # renders — never triggered a redeploy: new theater data could land on
+    # art-data and sit there until something else happened to push to main
+    # or someone noticed and dispatched this workflow by hand.
+    workflows: ["Process Art (Turbo 56)", "Theater Bake"]
     types:
       - completed
 

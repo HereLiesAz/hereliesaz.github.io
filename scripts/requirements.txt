@@ -1,3 +1,16 @@
+# NOTE: numpy/opencv-python(-headless)/Pillow/pillow-heif/scipy/transformers/
+# timm/huggingface_hub/gradio_client/torch/torchvision/imagehash are
+# intentionally left version-floating here rather than pinned to exact
+# versions: this pipeline runs under CI jobs with `contents: write` and
+# persisted git credentials (see the workflows in .github/workflows/), so
+# floating installs are a real supply-chain exposure, but pinning this
+# ML-heavy chain blind — without running the actual bake end-to-end (needs
+# a GPU-class runner, HF_TOKEN, and real painting input to exercise
+# theater_baker.py's depth/photorealize stages) — risks silently locking in
+# an incompatible combination that's worse than the status quo. Pin these
+# properly in a follow-up once verified against a real bake run, or wire up
+# Dependabot/Renovate for reviewable, one-at-a-time version-bump PRs instead
+# of a hand-picked snapshot.
 numpy
 opencv-python-headless
 Pillow
@@ -7,7 +20,14 @@ transformers>=4.45.0
 timm
 huggingface_hub
 gradio_client
-git+https://github.com/facebookresearch/segment-anything.git
+# Pinned to a specific commit, not a floating branch HEAD: this repo is
+# installed (and its setup.py executed) directly from git on every CI run
+# in the write-scoped jobs above. An unpinned `git+https://...git` install
+# re-fetches and runs whatever is at the default branch's tip on every run
+# — a malicious commit landing there would execute with this job's
+# write-scoped, credential-persisting GITHUB_TOKEN. Bump this SHA
+# deliberately (verified via `git ls-remote`) rather than letting it float.
+git+https://github.com/facebookresearch/segment-anything.git@dca509fe793f601edb92606367a655c15ac00fdf
 # Torch/Torchvision for local dev (CI uses command line for CPU)
 torch
 torchvision

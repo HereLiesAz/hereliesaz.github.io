@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
+import { NULL_DISTANCE, PAINTING_HEIGHT } from '../sceneConstants';
 
 // Each painting group is positioned so its shared hinge point lands at a
 // world location marched forward down the pareidolia hinge chain (see
@@ -20,9 +21,7 @@ import { useStore } from '../store/useStore';
 // painting exactly. Off-axis the flats part with real parallax; as the
 // camera passes through local z = 0, the mirrored back-side layers become
 // the near ones.
-const PAINTING_HEIGHT   = 10.0;
 const SHELL_HALF_DEPTH  = 5.0;      // layers occupy z ∈ [-SHELL_HALF_DEPTH, +SHELL_HALF_DEPTH]
-const NULL_DISTANCE     = 11.0;     // camera radius that reads a painting head-on
 const CHROMA_L          = 0.045;    // luminance below this counts as "black" → discard
 
 // Cross-fade when the camera crosses a flat in local z: flat fades to
@@ -127,6 +126,15 @@ uniform float uRole;
 uniform vec2  uPatchUv;
 uniform float uPatchR;
 uniform float uReveal;
+// The plane is planeWidth x planeHeight = (PAINTING_HEIGHT * aspect) x
+// PAINTING_HEIGHT, so a unit step in vUv.x and vUv.y cover DIFFERENT
+// physical distances for any non-square painting. distance(vUv, uPatchUv)
+// below is computed in raw uv space, unaware of that -- so the "reveal
+// circle" it draws is actually an ellipse, stretched by the painting's
+// aspect ratio (visibly so: the corpus spans ~0.45 to ~1.86). uAspect
+// corrects the x term so it reads as a true circle in physical/screen
+// space regardless of the painting's proportions.
+uniform float uAspect;
 // Shard-wipe reveal. uWipe (0..1) is how much of the painting is currently
 // revealed. The painting is wiped in from one edge as uWipe climbs 0->1 and
 // wiped back out as it falls 1->0 — full-strength where revealed, void
@@ -153,6 +161,14 @@ float vnoise(vec2 p) {
     mix(hash(i),                  hash(i + vec2(1.0, 0.0)), u.x),
     mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
     u.y);
+}
+
+// Aspect-corrected distance to the fulcrum patch (see uAspect above) — a
+// true circle in physical space, not an uv-space one.
+float patchDist(vec2 uv, vec2 patchUv) {
+  vec2 d = uv - patchUv;
+  d.x *= uAspect;
+  return length(d);
 }
 
 void main() {
@@ -234,7 +250,7 @@ void main() {
     // Incoming painting. Hold the fulcrum patch present (camouflaged as part
     // of the outgoing image) even before the wipe reaches it, unfurling
     // outward from that patch as uReveal climbs.
-    float dp = distance(vUv, uPatchUv);
+    float dp = patchDist(vUv, uPatchUv);
     float front = mix(uPatchR, 1.6, uReveal);
     float revealed = 1.0 - smoothstep(front - 0.14, front, dp);
     float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
@@ -247,7 +263,7 @@ void main() {
   } else if (uRole > 0.5) {
     // Outgoing painting: hold the fulcrum patch a beat longer than the rest
     // so the shared spot stays occupied as it hands off to the incoming one.
-    float dp = distance(vUv, uPatchUv);
+    float dp = patchDist(vUv, uPatchUv);
     float inPatch = 1.0 - smoothstep(uPatchR * 0.55, uPatchR, dp);
     op = max(op, uFade * inPatch * (1.0 - uReveal) * bandAlpha);
   }
@@ -455,34 +471,41 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
 
   const planeGeom = useMemo(() => new THREE.PlaneGeometry(1, 1), []);
 
-  const flatMaterials = useMemo(() => flats.map(flat => new THREE.ShaderMaterial({
-    vertexShader:   flatVS,
-    fragmentShader: flatFS,
-    transparent:    false,
-    depthWrite:     true,
-    side:           THREE.DoubleSide,
-    // fwidth() in the depth-band antialiasing needs derivatives; a no-op
-    // under WebGL2 (always available there) but required for a WebGL1
-    // fallback context.
-    extensions:     { derivatives: true },
-    uniforms: {
-      uPainting:      { value: null },
-      uDepth:         { value: null },
-      uMode:          { value: flat.mode },
-      uBandMin:       { value: flat.bandMin },
-      uBandMax:       { value: flat.bandMax },
-      uFade:          { value: 0 },
-      uRole:          { value: 0 },
-      uPatchUv:       { value: new THREE.Vector2(0.5, 0.5) },
-      uPatchR:        { value: DEFAULT_PATCH_R },
-      uReveal:        { value: 0 },
-      uWipe:          { value: 1 },
-      uBgLight:       { value: 0 },
-      // A THREE.Color so we can convert the sampled sRGB paper colour into the
-      // linear space the shader sees the (sRGB-decoded) painting texture in.
-      uBgColor:       { value: new THREE.Color(1, 1, 1) },
-    },
-  })), [flats]);
+  const flatMaterials = useMemo(() => {
+    const aspect = (meta?.src?.width || 1) / (meta?.src?.height || 1);
+    return flats.map(flat => new THREE.ShaderMaterial({
+      vertexShader:   flatVS,
+      fragmentShader: flatFS,
+      transparent:    false,
+      depthWrite:     true,
+      side:           THREE.DoubleSide,
+      // fwidth() in the depth-band antialiasing needs derivatives; a no-op
+      // under WebGL2 (always available there) but required for a WebGL1
+      // fallback context.
+      extensions:     { derivatives: true },
+      uniforms: {
+        uPainting:      { value: null },
+        uDepth:         { value: null },
+        uMode:          { value: flat.mode },
+        uBandMin:       { value: flat.bandMin },
+        uBandMax:       { value: flat.bandMax },
+        uFade:          { value: 0 },
+        uRole:          { value: 0 },
+        uPatchUv:       { value: new THREE.Vector2(0.5, 0.5) },
+        uPatchR:        { value: DEFAULT_PATCH_R },
+        uReveal:        { value: 0 },
+        uWipe:          { value: 1 },
+        uBgLight:       { value: 0 },
+        // A THREE.Color so we can convert the sampled sRGB paper colour into the
+        // linear space the shader sees the (sRGB-decoded) painting texture in.
+        uBgColor:       { value: new THREE.Color(1, 1, 1) },
+        // Painting-level constant (same for every flat of this painting) —
+        // see the uAspect comment in flatFS for why the fulcrum-reveal
+        // circle needs it.
+        uAspect:        { value: aspect },
+      },
+    }));
+  }, [flats, meta]);
 
   // Load painting + depth textures once meta is known. Pass them into
   // every flat's material.
@@ -497,7 +520,12 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       new Promise((res, rej) => loader.load(paintingUrl, res, undefined, rej)),
       new Promise((res, rej) => loader.load(depthUrl,    res, undefined, rej)),
     ]).then(([painting, depth]) => {
-      if (cancelled) return;
+      // Mirrors the flatTex fallback loader's cancelled-branch dispose
+      // above: a fast scroll can unmount this painting (Scene.jsx only
+      // keeps a 3-segment window) while its full-res textures are still in
+      // flight. Without disposing them here, a resolution arriving after
+      // unmount decoded real GPU/CPU texture data that nothing ever frees.
+      if (cancelled) { painting.dispose(); depth.dispose(); return; }
       painting.colorSpace = THREE.SRGBColorSpace;
       painting.anisotropy = 4;
       depth.colorSpace = THREE.NoColorSpace;

@@ -18,12 +18,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: write
+# No workflow-level `permissions:` block: each job below declares only
+# what it actually needs (least privilege). The `grind` job never writes
+# to git — it only checks out, runs pip/python, and uploads a build
+# artifact — so it does not get `contents: write`. Previously a
+# workflow-level `contents: write` gave that scope, plus a persisted
+# git credential, to all 56 parallel grind shards simultaneously (56x the
+# blast radius of anything a compromised pip dependency or the unpinned
+# git+https install in requirements.txt could do with it) even though
+# none of them needed it.
 
 jobs:
   grind:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -33,9 +42,11 @@ jobs:
           32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
           48, 49, 50, 51, 52, 53, 54, 55
         ]
-    
+
     steps:
       - uses: actions/checkout@v3
+        with:
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -76,6 +87,11 @@ jobs:
   consolidate:
     needs: grind
     runs-on: ubuntu-latest
+    # The only job in this workflow that actually pushes to git (via
+    # peaceiris/actions-gh-pages below) — write access is scoped to just
+    # this job, not the whole workflow. See the note above `grind`.
+    permissions:
+      contents: write
     # Shared with bootstrap.yml's `bootstrap` job and theater_bake.yml's
     # `bake` job: all three push to the same art-data branch via a plain,
     # non-force git push (peaceiris/actions-gh-pages) with no retry on
@@ -85,6 +101,13 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v3
+        with:
+          # peaceiris/actions-gh-pages authenticates its own push via the
+          # `github_token:` input below, not git's persisted credential
+          # helper — so the untrusted work in between (pip install,
+          # running scripts) doesn't need a live write-scoped credential
+          # sitting in the git config the whole time.
+          persist-credentials: false
 
       - name: Download Output
         uses: actions/download-artifact@v4
