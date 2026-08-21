@@ -1,8 +1,14 @@
 import { useEffect, useState } from 'react';
 
 const STYLES = `
-.projects-shell { min-height: 100vh; background: #0a0a0a; color: #f4f0e6; font-family: monospace;
-  padding: 2rem 1.5rem 4rem; }
+.projects-shell {
+  /* Same fix as AdminApp.jsx's .admin-shell: index.css's body {overflow:
+     hidden} isn't scoped to "/", so this needs its own scroll context. */
+  height: 100vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
+  background: #0a0a0a; color: #f4f0e6; font-family: monospace;
+  padding: 2rem 1.5rem 4rem;
+}
 .projects-shell a { color: #f4f0e6; }
 .projects-header { max-width: 48rem; margin: 0 auto 2rem; }
 .projects-header h1 { font-size: 1.3rem; letter-spacing: 0.1em; text-transform: lowercase; margin: 0 0 0.4em; }
