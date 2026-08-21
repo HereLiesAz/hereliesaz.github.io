@@ -4,7 +4,7 @@ import { loadMeta, removePainting, saveMetaEntry } from './data.js';
 const BLANK = { title: '', description: '', tags: '', forSale: false, price: '', currency: 'USD' };
 
 /** Metadata form for one painting id, plus its delete action. Reads/writes
- * public/assets/meta.json as a whole (see data.js) — small enough at this
+ * public/meta.json as a whole (see data.js) — small enough at this
  * corpus size that a full read-modify-write per edit is simpler and safer
  * (no partial-update races) than a per-field patch API. */
 export default function PaintingEditor({ id, onClose, onRemoved }) {

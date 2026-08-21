@@ -4,7 +4,10 @@
 // client with no knowledge of this site's specific file layout.
 import { deleteFile, dispatchWorkflow, getFile, putFile, textToBase64 } from './github.js';
 
-const META_PATH = 'public/assets/meta.json';
+// Deliberately NOT under public/assets/ — process_art.yml's legacy
+// 56-shard grinder triggers on any push touching public/assets/**, and a
+// metadata-only edit here has nothing to do with that pipeline.
+const META_PATH = 'public/meta.json';
 const SITE_PATH = 'public/site-content.json';
 
 export async function loadMeta() {

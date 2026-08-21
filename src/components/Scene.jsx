@@ -79,7 +79,7 @@ export default function Scene() {
   // raw-id fallback (see Overlay.jsx), same as before this existed.
   useEffect(() => {
     let cancelled = false;
-    fetch('/assets/meta.json')
+    fetch('/meta.json')
       .then(r => (r.ok ? r.json() : {}))
       .catch(() => ({}))
       .then(meta => { if (!cancelled) setMeta(meta); });

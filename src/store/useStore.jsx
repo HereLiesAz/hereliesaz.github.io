@@ -346,7 +346,7 @@ const useStore = create((set, get) => ({
   setLoadError: (msg) => set({ loadError: msg }),
 
   // Hand-authored, keyed by painting id: { title, description, tags,
-  // forSale, price, currency }. Lives at /assets/meta.json (main branch,
+  // forSale, price, currency }. Lives at /meta.json (main branch,
   // edited via the /admin app's GitHub Contents API calls — never
   // touched by the Python bake pipeline). Empty object until Scene.jsx's
   // best-effort fetch resolves (or forever, if it 404s — every consumer
