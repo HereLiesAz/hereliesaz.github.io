@@ -61,6 +61,8 @@ import json
 import sys
 from pathlib import Path
 
+from PIL import Image
+
 errors: list[str] = []
 
 
@@ -85,13 +87,39 @@ def validate_theater_json(path: Path) -> None:
 
     src = data.get("src")
     check(isinstance(src, dict), f"{name}: missing/invalid 'src'")
+    valid_dims = False
     if isinstance(src, dict):
         check("width" in src and "height" in src,
               f"{name}: src missing width/height")
-        check(isinstance(src.get("width"), (int, float)) and src.get("width", 0) > 0,
-              f"{name}: src.width is not a positive number")
-        check(isinstance(src.get("height"), (int, float)) and src.get("height", 0) > 0,
-              f"{name}: src.height is not a positive number")
+        valid_dims = (isinstance(src.get("width"), (int, float)) and src.get("width", 0) > 0
+                      and isinstance(src.get("height"), (int, float)) and src.get("height", 0) > 0)
+        check(valid_dims, f"{name}: src.width/height is not a positive number")
+
+    # {id}.painting.webp is saved directly at (src.height, src.width) by
+    # theater_baker.py's bake_image() — no resize happens after that save,
+    # so its actual pixel dimensions must exactly match src.width/height.
+    # A mismatch means this theater.json's provenance doesn't match the
+    # image it's shipping alongside — the exact shape a stale cache-reuse
+    # bug (an id/filename collision reusing an old painting.webp while
+    # recording a new photo's filename) would take. Not checked against
+    # {id}.depth.png: theater_baker.py's load_depth_png() legitimately
+    # resizes a cached depth map to match the current painting's shape, so
+    # a differing on-disk depth.png resolution is expected, not an error.
+    if valid_dims:
+        painting_path = path.parent / f"{path.name[:-len('.theater.json')]}.painting.webp"
+        if painting_path.exists():
+            try:
+                with Image.open(painting_path) as im:
+                    actual_w, actual_h = im.size
+            except Exception as e:
+                check(False, f"{name}: could not read {painting_path.name} to verify "
+                              f"dimensions ({type(e).__name__}: {e})")
+            else:
+                check(actual_w == src["width"] and actual_h == src["height"],
+                      f"{name}: src says {src['width']}x{src['height']} but "
+                      f"{painting_path.name} is actually {actual_w}x{actual_h} — "
+                      f"provenance doesn't match the baked pixels (stale cache reuse "
+                      f"under an id/filename collision?)")
 
     depth = data.get("depth")
     check(isinstance(depth, dict), f"{name}: missing/invalid 'depth'")
