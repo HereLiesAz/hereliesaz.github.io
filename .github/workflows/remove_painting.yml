@@ -61,9 +61,20 @@ jobs:
           rsync -a --exclude='.git' _artdata/ public/data/
 
       - name: Delete baked artifacts for this id
+        env:
+          # Passed via env, not spliced directly into the script as
+          # `${{ github.event.inputs.id }}` — see theater_bake.yml's "Bake
+          # theater layers" step for why direct interpolation into a run:
+          # script is a shell-injection primitive. This job has
+          # contents:write, so an unescaped id is a real risk, not just
+          # theoretical.
+          ID_INPUT: ${{ github.event.inputs.id }}
         run: |
-          ID="${{ github.event.inputs.id }}"
+          ID="$ID_INPUT"
           if [ -z "$ID" ]; then echo "::error::id input is required"; exit 1; fi
+          case "$ID" in
+            */*|*..*) echo "::error::id must not contain path separators or '..'"; exit 1 ;;
+          esac
           DIR="public/data/theater"
           FOUND=0
           for suffix in painting.webp depth.png theater.json; do

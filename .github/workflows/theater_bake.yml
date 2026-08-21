@@ -104,8 +104,18 @@ jobs:
       - name: Bake theater layers
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # Passed via env, not spliced directly into the script below as
+          # `${{ github.event.inputs.ids }}` — GitHub Actions substitutes
+          # `${{ }}` expressions into the run script's TEXT before the
+          # shell ever parses it, so a filename-derived id containing shell
+          # metacharacters (quotes, semicolons, backticks) would otherwise
+          # be able to break out and run arbitrary commands in a job that
+          # has contents:write and HF_TOKEN in scope. Referencing $IDS_INPUT
+          # below is a normal bash variable expansion instead — no
+          # pre-parse substitution, no injection.
+          IDS_INPUT: ${{ github.event.inputs.ids }}
         run: |
-          IDS="${{ github.event.inputs.ids }}"
+          IDS="$IDS_INPUT"
           if [ -z "$IDS" ]; then IDS="$DEFAULT_IDS"; fi
           echo "Baking: $IDS"
           python scripts/theater_baker.py \

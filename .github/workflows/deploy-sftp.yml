@@ -54,8 +54,11 @@ on:
     # branch never mirrored to the SFTP host on its own — main and the SFTP
     # mirror could silently diverge from GitHub Pages (deploy.yml, which
     # does watch these) until someone happened to push to main. Names must
-    # exactly match the target workflows' `name:` fields.
-    workflows: ["Process Art (Turbo 56)", "Theater Bake"]
+    # exactly match the target workflows' `name:` fields. "Remove Painting"
+    # and "Bootstrap Art (5 Images)" both publish to art-data the same way
+    # and were originally missing here too — this list must stay in sync
+    # with deploy.yml's own workflow_run list.
+    workflows: ["Process Art (Turbo 56)", "Theater Bake", "Remove Painting", "Bootstrap Art (5 Images)"]
     types:
       - completed
 
