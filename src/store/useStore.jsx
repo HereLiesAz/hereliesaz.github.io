@@ -2,18 +2,22 @@ import { create } from 'zustand';
 import * as THREE from 'three';
 import { NULL_DISTANCE, PAINTING_HEIGHT, CAMERA_FOV_DEG } from '../sceneConstants';
 
-// How far off the painting's normal the null viewpoint sits, as a
-// fraction of NULL_DISTANCE. Nonzero so the flats NEVER fully close up:
-// even at coalescence there's a whisper of parallax — the painting is
-// never shown as the flat original.
-// Off-axis fraction of the null viewpoint. This is what keeps the
-// painting from EVER re-closing perfectly flat — but it also sets how
-// far the depth bands slide apart at the null, so it must stay a
-// whisper: enough that the flats never quite click shut, not so much
-// that the flat background regions visibly separate into panels. The
-// big shard explosion during a transition comes from the camera's full
-// swing off the axis, not from this, so shrinking it doesn't cost drama.
-const OFF_AXIS = 0.045;
+// Off-axis fraction of the null viewpoint, as a fraction of NULL_DISTANCE.
+// Was 0.045 (a deliberate "whisper of parallax" so the painting never
+// closes up perfectly flat) — but the depth-band flats are hard-discard
+// cutouts with zero overlap between bands (see TheaterPainting.jsx), so
+// ANY camera offset at the null introduces real parallax between flats at
+// different depths, and with no blend to absorb it, that parallax punches
+// straight through as visible gaps between bands. Invisible on smooth
+// content, glaring on high-detail content — confirmed live: paintings
+// photographed at the mathematically exact coalescence point (
+// transitionProgress bisected to ~0) still showed scattered perforation
+// holes, because the camera was never actually looking straight down the
+// painting's normal even there. Zeroed so the null is truly axis-aligned;
+// the dramatic mid-transition parallax/shard-explosion comes entirely
+// from the camera's dive path swinging through the shared hinge (see
+// divePath below), not from this, so this costs no drama.
+const OFF_AXIS = 0.0;
 
 // Reproduces TheaterPainting.jsx's fitScale useMemo EXACTLY (same
 // NULL_DISTANCE, same FOV, same 0.85/0.90 fit margins, same

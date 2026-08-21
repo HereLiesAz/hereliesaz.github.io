@@ -118,6 +118,20 @@ coalesces, and back as it leaves — driven by `bgSweepLevel()`, the max
 across all currently-mounted light-background paintings' individual
 pulls on it.
 
+A related pitfall, but in the camera math rather than the shader:
+`useStore.jsx`'s `computeSegmentPlacement()` used to offset the camera's
+"null" viewpoint laterally off the painting's true normal (`OFF_AXIS`,
+originally 0.045 × `NULL_DISTANCE`), on purpose, so the flats would never
+click fully flat. Because the depth-band flats are hard-discard cutouts
+with zero overlap between bands, that offset introduced real parallax
+between flats at different depths even at the mathematically exact
+coalescence point — confirmed live via screenshots at a bisected
+`transitionProgress ≈ 0`, which showed scattered perforation holes on
+high-detail paintings. `OFF_AXIS` is now `0`: the null is truly
+axis-aligned, and the mid-transition parallax/shard-explosion still comes
+entirely from the camera's dive path swinging through the shared hinge
+(`divePath()`), so nothing about the drama of a transition was lost.
+
 ### 5. State: Zustand, one atomic per-frame update
 
 `src/store/useStore.jsx` holds the loaded graph, the walked sequence of
