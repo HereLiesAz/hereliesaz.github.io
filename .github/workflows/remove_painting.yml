@@ -1,0 +1,108 @@
+name: Remove Painting
+
+# Deletes one painting's baked artifacts from art-data and rebuilds the
+# manifest + pareidolia hinge graph so nothing dangles a reference to it.
+# Dispatched by the /admin app (src/admin/data.js's removePainting()) after
+# it deletes the source photo from main via the Contents API — this
+# workflow only ever touches art-data.
+#
+# IMPORTANT: unlike theater_bake.yml/process_art.yml/bootstrap.yml (which
+# all publish to art-data with keep_files:true, because each only adds/
+# updates a subset and relies on the others' prior output already being
+# present in their own rsync'd local tree), this workflow publishes with
+# keep_files:false. That's deliberate: keep_files:true would silently
+# UN-DELETE the very files this workflow exists to remove, since it skips
+# the clean-before-copy step. Correctness here instead comes from mirroring
+# the ENTIRE art-data branch into public/data first (same rsync theater_
+# bake.yml uses), so the local tree is a complete, faithful copy of
+# art-data with only the intended 3 files missing — safe to publish as a
+# full replacement.
+
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: "Painting id (filename stem) to remove."
+        required: true
+
+concurrency:
+  group: remove-painting
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Shared with theater_bake.yml/process_art.yml's `consolidate` job/
+    # bootstrap.yml: all publish to the same art-data branch via a plain,
+    # non-force git push, so overlapping runs must queue rather than race.
+    concurrency:
+      group: art-data-publish
+      cancel-in-progress: false
+    steps:
+      - name: Checkout source (for scripts/)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout art-data
+        uses: actions/checkout@v4
+        with:
+          ref: art-data
+          path: _artdata
+          persist-credentials: false
+
+      - name: Mirror art-data into public/data
+        run: |
+          mkdir -p public/data
+          rsync -a --exclude='.git' _artdata/ public/data/
+
+      - name: Delete baked artifacts for this id
+        run: |
+          ID="${{ github.event.inputs.id }}"
+          if [ -z "$ID" ]; then echo "::error::id input is required"; exit 1; fi
+          DIR="public/data/theater"
+          FOUND=0
+          for suffix in painting.webp depth.png theater.json; do
+            f="$DIR/$ID.$suffix"
+            if [ -f "$f" ]; then rm -f "$f"; FOUND=1; fi
+          done
+          if [ "$FOUND" -eq 0 ]; then
+            echo "::warning::no baked files found for id '$ID' — it may already be removed, or never finished baking. Continuing so the manifest/graph still get rebuilt clean."
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Rebuild manifest
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, 'scripts')
+          from pathlib import Path
+          from theater_baker import write_manifest
+          write_manifest(Path('public/data/theater'))
+          "
+
+      - name: Rebuild hinge graph (no dangling edges into the removed id)
+        run: python scripts/pareidolia_index.py --data public/data/theater/
+
+      - name: Validate output
+        run: python scripts/validate_output.py --dir public/data/theater
+
+      - name: Deploy to art-data
+        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3.9.3 (pinned commit for the v3 tag)
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public/data
+          publish_branch: art-data
+          keep_files: false
+          commit_message: "Remove painting: ${{ github.event.inputs.id }}"

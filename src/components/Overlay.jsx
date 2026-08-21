@@ -1,6 +1,20 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import useStore from '../store/useStore';
 import { bgSweepLevel } from './TheaterPainting';
+
+// Fallback matches /public/site-content.json exactly, so a missing or
+// malformed fetch (offline, 404 on a stale deploy) never blanks the menu
+// — it just silently keeps whatever shipped in this bundle. Edited via
+// the /admin app's "Site" tab, not by hand.
+const DEFAULT_SITE_CONTENT = {
+  about: 'The canvas is a closet. The paint is light. You navigate the dark by following what your eye almost-recognises.',
+  menuLinks: [
+    { label: 'github', href: 'https://github.com/HereLiesAz', external: true },
+    { label: 'instagram', href: 'https://instagram.com/hereliesaz', external: true },
+    { label: 'email', href: 'mailto:hereliesaz@gmail.com', external: false },
+    { label: 'projects', href: '/projects', external: false },
+  ],
+};
 
 /**
  * The thin ink layer over the closet — see AESTHETIC §3, §6.
@@ -115,6 +129,8 @@ const STYLES = `
   transition: none;
 }
 .ink-caption__title { font-size: 0.95rem; letter-spacing: 0.22em; }
+.ink-caption__price { font-size: 0.7rem; opacity: 0.85; margin-top: 0.2em; }
+.ink-caption__price:empty { display: none; }
 
 /* --- Vellum modal ----------------------------------------------------- */
 .ink-modal-backdrop {
@@ -249,6 +265,20 @@ const Overlay = () => {
   const toggleMenu = useStore(s => s.toggleMenu);
   const loadError  = useStore(s => s.loadError);
 
+  // Hand-authored menu copy/links, edited via /admin — see DEFAULT_SITE_CONTENT.
+  const [siteContent, setSiteContent] = useState(DEFAULT_SITE_CONTENT);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/site-content.json')
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then(c => {
+        if (cancelled || !c || !Array.isArray(c.menuLinks)) return;
+        setSiteContent(c);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   // Inject styles once.
   useEffect(() => {
     const sheet = document.createElement('style');
@@ -263,6 +293,7 @@ const Overlay = () => {
   const overlayRef = useRef(null);
   const captionRef = useRef(null);
   const titleRef   = useRef(null);
+  const priceRef   = useRef(null);
   const lastIdRef  = useRef(null);
 
   useEffect(() => {
@@ -277,8 +308,14 @@ const Overlay = () => {
         captionRef.current.style.opacity = String(opacity);
         captionRef.current.style.visibility = id ? 'visible' : 'hidden';
       }
-      if (titleRef.current && id !== lastIdRef.current) {
-        titleRef.current.textContent = id || '';
+      if (id !== lastIdRef.current) {
+        const info = id ? state.meta?.[id] : null;
+        if (titleRef.current) titleRef.current.textContent = info?.title || id || '';
+        if (priceRef.current) {
+          priceRef.current.textContent = (info?.forSale && info?.price != null)
+            ? `${info.currency === 'USD' || !info.currency ? '$' : ''}${info.price}${info.currency && info.currency !== 'USD' ? ` ${info.currency}` : ''} — for sale`
+            : '';
+        }
         lastIdRef.current = id;
       }
       // bgSweepLevel() isn't store state (it lives in TheaterPainting's
@@ -348,6 +385,7 @@ const Overlay = () => {
 
       <div ref={captionRef} className="ink-caption">
         <div ref={titleRef} className="ink-caption__title" />
+        <div ref={priceRef} className="ink-caption__price" />
       </div>
 
       {loadError && (
@@ -366,11 +404,15 @@ const Overlay = () => {
             <VellumFrame />
             <button type="button" className="ink-modal__close" onClick={toggleMenu} aria-label="close" ref={closeButtonRef}>×</button>
             <h2 id="ink-modal-title">here lies az</h2>
-            <p>The canvas is a closet. The paint is light. You navigate the dark by following what your eye almost-recognises.</p>
+            <p>{siteContent.about}</p>
             <ul>
-              <li><a href="https://github.com/HereLiesAz" target="_blank" rel="noreferrer noopener">github</a></li>
-              <li><a href="https://instagram.com/hereliesaz" target="_blank" rel="noreferrer noopener">instagram</a></li>
-              <li><a href="mailto:hereliesaz@gmail.com">email</a></li>
+              {siteContent.menuLinks.map(link => (
+                <li key={link.href}>
+                  {link.external
+                    ? <a href={link.href} target="_blank" rel="noreferrer noopener">{link.label}</a>
+                    : <a href={link.href}>{link.label}</a>}
+                </li>
+              ))}
             </ul>
           </div>
         </div>
