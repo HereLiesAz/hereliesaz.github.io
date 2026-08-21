@@ -54,7 +54,13 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
     setStatus('removing');
     try {
       await removePainting(id);
-      onRemoved?.(id);
+      // Deliberately NOT calling onRemoved() here — that would close this
+      // panel and reload the list immediately, which still shows the
+      // painting (the removal workflow takes a few minutes to actually
+      // run and redeploy), reading as "nothing happened". Show confirmation
+      // + a link to watch it instead; the list catches up whenever the
+      // user next hits refresh.
+      setStatus('removed');
     } catch (e) {
       setStatus({ error: e.message });
     }
@@ -90,12 +96,21 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
       )}
 
       <div className="admin-row">
-        <button type="button" onClick={save} disabled={status === 'saving'}>{status === 'saving' ? 'saving…' : 'save'}</button>
-        <button type="button" onClick={remove} disabled={status === 'removing'} className="admin-btn-danger">
-          {status === 'removing' ? 'removing…' : 'remove from site'}
+        <button type="button" onClick={save} disabled={status === 'saving' || status === 'removed'}>{status === 'saving' ? 'saving…' : 'save'}</button>
+        <button type="button" onClick={remove} disabled={status === 'removing' || status === 'removed'} className="admin-btn-danger">
+          {status === 'removing' ? 'removing…' : status === 'removed' ? 'removal dispatched' : 'remove from site'}
         </button>
       </div>
       {status === 'saved' && <p className="admin-ok">Saved — live after the next deploy (usually under a minute).</p>}
+      {status === 'removed' && (
+        <p className="admin-ok">
+          Removal dispatched — this takes a few minutes to actually run (delete the baked files, rebuild the
+          hinge graph, redeploy).{' '}
+          <a href="https://github.com/HereLiesAz/hereliesaz.github.io/actions/workflows/remove_painting.yml" target="_blank" rel="noreferrer noopener">
+            watch the run
+          </a>, then <button type="button" className="admin-btn-plain" onClick={() => onRemoved?.(id)}>back to the list</button>.
+        </p>
+      )}
       {status?.error && <p className="admin-error">{status.error}</p>}
     </div>
   );

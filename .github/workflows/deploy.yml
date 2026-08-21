@@ -11,8 +11,12 @@ on:
     # the ACTUAL publisher of the painting/depth/hinge-graph data the site
     # renders — never triggered a redeploy: new theater data could land on
     # art-data and sit there until something else happened to push to main
-    # or someone noticed and dispatched this workflow by hand.
-    workflows: ["Process Art (Turbo 56)", "Theater Bake"]
+    # or someone noticed and dispatched this workflow by hand. "Remove
+    # Painting" publishes to art-data the same way and was missing here
+    # for the same reason — a removal from /admin updated art-data but the
+    # live site never redeployed to pick it up, so it looked like nothing
+    # had happened.
+    workflows: ["Process Art (Turbo 56)", "Theater Bake", "Remove Painting"]
     types:
       - completed
 
