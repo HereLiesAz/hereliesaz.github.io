@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'wouter';
 
 const STYLES = `
 .projects-shell {
@@ -54,7 +55,11 @@ export default function ProjectsPage() {
             `https://api.github.com/users/${USER}/repos?per_page=100&page=${page}&type=owner`,
             { headers: { Accept: 'application/vnd.github+json' } },
           );
-          if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+          if (!res.ok) {
+            throw new Error(res.status === 403
+              ? 'GitHub is rate-limiting this page right now (too many people on your network hit the GitHub API recently) — try again in a bit.'
+              : `GitHub API returned ${res.status}`);
+          }
           const batch = await res.json();
           all.push(...batch);
           if (batch.length < 100) break;
@@ -81,7 +86,7 @@ export default function ProjectsPage() {
   return (
     <div className="projects-shell">
       <div className="projects-header">
-        <a href="/" className="back">← back to the gallery</a>
+        <Link href="/" className="back">← back to the gallery</Link>
         <h1>projects</h1>
         <p>Other things I've built, live wherever they live.</p>
       </div>

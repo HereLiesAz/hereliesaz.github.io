@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'wouter';
 import { hasToken } from './github.js';
 import TokenSetup from './TokenSetup.jsx';
 import PaintingsList from './PaintingsList.jsx';
@@ -24,7 +25,7 @@ const STYLES = `
 .admin-nav button {
   background: transparent; border: 1px solid rgba(244,240,230,0.3); color: #f4f0e6;
   padding: 0.4em 0.9em; font-family: inherit; text-transform: lowercase; letter-spacing: 0.08em;
-  cursor: pointer; font-size: 0.8rem;
+  cursor: pointer; font-size: 0.8rem; min-height: 44px;
 }
 .admin-nav button[data-active="true"] { background: #f4f0e6; color: #0a0a0a; }
 .admin-panel { max-width: 42rem; }
@@ -36,10 +37,10 @@ const STYLES = `
   width: 100%; box-sizing: border-box; background: #141414; border: 1px solid rgba(244,240,230,0.25);
   color: #f4f0e6; font-family: inherit; font-size: 0.85rem; padding: 0.5em 0.6em; margin-top: 0.2em;
 }
-.admin-row { display: flex; gap: 0.6em; align-items: center; margin: 0.6em 0; flex-wrap: wrap; }
+.admin-row { display: flex; gap: 0.8em; align-items: center; margin: 0.6em 0; flex-wrap: wrap; }
 .admin-row--between { justify-content: space-between; }
 button { background: #f4f0e6; color: #0a0a0a; border: none; padding: 0.5em 1em; font-family: inherit;
-  text-transform: lowercase; letter-spacing: 0.06em; cursor: pointer; font-size: 0.8rem; }
+  text-transform: lowercase; letter-spacing: 0.06em; cursor: pointer; font-size: 0.8rem; min-height: 44px; }
 button:disabled { opacity: 0.5; cursor: default; }
 .admin-btn-danger { background: #3a1414; color: #f4b0b0; }
 .admin-btn-plain { background: transparent; color: #f4f0e6; border: 1px solid rgba(244,240,230,0.3); }
@@ -82,16 +83,27 @@ export default function AdminApp() {
 
   return (
     <div className="admin-shell">
-      <nav className="admin-nav">
+      <nav className="admin-nav" role="tablist">
         {TABS.map(t => (
-          <button type="button" key={t} data-active={tab === t} onClick={() => setTab(t)}>{t}</button>
+          <button
+            type="button"
+            key={t}
+            role="tab"
+            id={`admin-tab-${t}`}
+            aria-selected={tab === t}
+            aria-controls={`admin-tabpanel-${t}`}
+            data-active={tab === t}
+            onClick={() => setTab(t)}
+          >{t}</button>
         ))}
-        <a href="/" className="admin-btn-plain" style={{ marginLeft: 'auto', textDecoration: 'none', padding: '0.4em 0.9em', fontSize: '0.8rem' }}>← gallery</a>
+        <Link href="/" className="admin-btn-plain" style={{ marginLeft: 'auto', textDecoration: 'none', padding: '0.4em 0.9em', fontSize: '0.8rem' }}>← gallery</Link>
       </nav>
-      {tab === 'paintings' && <PaintingsList />}
-      {tab === 'add' && <AddPainting />}
-      {tab === 'site' && <SiteContentEditor />}
-      {tab === 'settings' && <TokenSetup onVerified={() => setAuthed(true)} />}
+      <div role="tabpanel" id={`admin-tabpanel-${tab}`} aria-labelledby={`admin-tab-${tab}`}>
+        {tab === 'paintings' && <PaintingsList />}
+        {tab === 'add' && <AddPainting />}
+        {tab === 'site' && <SiteContentEditor />}
+        {tab === 'settings' && <TokenSetup onVerified={() => setAuthed(true)} />}
+      </div>
     </div>
   );
 }

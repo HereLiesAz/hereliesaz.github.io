@@ -10,7 +10,9 @@
   // deploy target already has. Stash the intended path and bounce to the
   // real app shell, which restores it before the router mounts (see
   // main.jsx). Standard technique: https://github.com/rafgraph/spa-github-pages
-  sessionStorage.setItem('spaRedirect', location.pathname + location.search + location.hash);
+  try {
+    sessionStorage.setItem('spaRedirect', location.pathname + location.search + location.hash);
+  } catch (e) { /* storage unavailable — redirect to "/" anyway, just without restoring the path */ }
   location.replace('/');
 </script>
 </body>
