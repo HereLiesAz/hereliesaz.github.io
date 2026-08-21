@@ -31,7 +31,16 @@ export default function PaintingsList() {
 
   return (
     <div className="admin-panel">
-      <h2>Paintings ({ids ? ids.length : '…'})</h2>
+      <div className="admin-row admin-row--between">
+        <h2>Paintings ({ids ? ids.length : '…'})</h2>
+        <button type="button" onClick={reload} className="admin-btn-plain" disabled={ids === null}>
+          {ids === null ? 'refreshing…' : 'refresh'}
+        </button>
+      </div>
+      <p style={{ fontSize: '0.75rem', opacity: 0.6 }}>
+        This list is the live, deployed site's data — adding or removing a painting runs in the
+        background (usually a few minutes) before it shows up here, even after refreshing.
+      </p>
       <input
         className="admin-input"
         placeholder="filter…"
