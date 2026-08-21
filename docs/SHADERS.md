@@ -49,10 +49,12 @@ void main() {
 
 Per flat, in order:
 
-1. **Depth-band cutout.** Sample `uDepth` at `vUv`, jitter it by a coarse
-   value-noise term (`vnoise(vUv * 48.0)`) so the band boundary reads as a
-   torn-paper edge instead of a razor line, and discard if the jittered
-   depth falls outside `[uBandMin, uBandMax)`.
+1. **Depth-band cutout.** Sample `uDepth` at `vUv`, jitter it by two
+   stacked value-noise terms — a coarse `vnoise(vUv * 48.0)` for the big
+   organic tears and a finer `vnoise(vUv * 320.0)` for paper-fiber grain —
+   so the band boundary reads as a torn-paper edge instead of a razor
+   line, and discard if the jittered depth falls outside
+   `[uBandMin, uBandMax)`.
 2. **Background matte.** Dark-background paintings chroma-key: luminance
    below `CHROMA_L` (0.045, plus a little noise jitter) discards, so black
    regions dissolve into the black void. Light-background ("paper")
@@ -90,14 +92,23 @@ gl_FragColor = vec4(painting * op, 1.0);
 This was tried and reverted; the reasoning is preserved as an in-shader
 comment so it survives future edits, but the short version:
 
-- The original bug (visible sparkle/flicker as paintings coalesced) was
-  overwhelmingly caused by a very-high-frequency `hash(vUv * 1024.0)` term
-  in the tear noise aliasing badly as the camera's sub-pixel position
-  shifted between frames. Removing that term (the coarser
-  `vnoise(vUv * 48.0)` alone is enough to keep the edge organic) fixed the
-  actual problem.
-- The first attempted fix instead added an `fwidth()`-based `bandAlpha`
-  ramp that faded opacity near the boundary, to antialias it. This
+- The original flicker bug (visible sparkle as paintings coalesced) was
+  driven by a raw `hash(vUv * 1024.0)` fine-grain term in the tear noise:
+  `hash()` is a discontinuous per-cell lookup, not band-limited, so a
+  sub-texel shift in `vUv` (from the camera's sub-pixel position moving
+  frame to frame) could flip its output entirely, aliasing badly.
+- A first pass fixed the flicker by deleting that term outright, leaving
+  only the coarse `vnoise(vUv * 48.0)` wave. That killed the flicker, but
+  the fine grain was also what made the torn edge read as fibrous ripped
+  paper — losing it left only smooth, blobby regions, which (compounded by
+  the `bandAlpha` regression below) read as a topographic contour map
+  instead of torn paper. The fix that stuck: a *second* fine-grain term
+  built from `vnoise(vUv * 320.0)` instead of raw `hash`. `vnoise()`
+  interpolates smoothly between its grid corners, so a sub-texel `vUv`
+  shift only nudges its output a little instead of jumping randomly —
+  getting the paper-fiber texture back without reintroducing the alias.
+- Separately, one attempted fix along the way added an `fwidth()`-based
+  `bandAlpha` ramp that faded opacity near the boundary, to antialias it. This
   *reduced* the flicker but introduced a new, worse, static defect: every
   one of the ~18 band boundaries per painting drew as a permanent
   darkened contour line, so a fully-coalesced painting looked like a
