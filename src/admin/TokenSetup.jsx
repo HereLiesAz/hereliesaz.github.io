@@ -14,8 +14,14 @@ export default function TokenSetup({ onVerified }) {
     try {
       const info = await verifyToken();
       const canWrite = !!info.permissions?.push;
-      setStatus(canWrite ? 'ok' : { error: `Token works but has no write access to this repo (logged in as ${info.login}). Check the token's repository permissions.` });
-      if (canWrite) onVerified?.();
+      if (!canWrite) {
+        setStatus({ error: `Token works but has no write access to this repo (logged in as ${info.login}). Check the token's repository permissions.` });
+      } else if (!info.actionsOk) {
+        setStatus({ error: `Token has Contents write access but no Actions permission (logged in as ${info.login}) — adding or removing a painting dispatches a workflow, which needs Actions: Read and write too. Edit the token's permissions on GitHub and try again.` });
+      } else {
+        setStatus('ok');
+        onVerified?.();
+      }
     } catch (e) {
       setStatus({ error: e.message });
     }
@@ -42,6 +48,7 @@ export default function TokenSetup({ onVerified }) {
         autoComplete="off"
         spellCheck={false}
         placeholder="github_pat_…"
+        aria-label="GitHub personal access token"
         value={value}
         onChange={e => setValue(e.target.value)}
         className="admin-input"
@@ -52,8 +59,8 @@ export default function TokenSetup({ onVerified }) {
         </button>
         {getToken() && <button type="button" onClick={clear} className="admin-btn-danger">clear token</button>}
       </div>
-      {status === 'ok' && <p className="admin-ok">Verified — write access confirmed.</p>}
-      {status?.error && <p className="admin-error">{status.error}</p>}
+      {status === 'ok' && <p className="admin-ok" role="status" aria-live="polite">Verified — write access confirmed.</p>}
+      {status?.error && <p className="admin-error" role="alert">{status.error}</p>}
     </div>
   );
 }
