@@ -197,16 +197,25 @@ void main() {
   //
   // A plain hard discard has no such line: two adjacent bands show the
   // exact SAME painting pixel at full, undimmed brightness right up to
-  // their shared boundary, so there's nothing to see a seam in. What
-  // actually drove most of the original flicker was a since-removed
-  // very-high-frequency hash(vUv*1024.0) term in the tear noise, which
-  // aliased badly as the camera's sub-pixel position shifted frame to
-  // frame; the coarser vnoise(vUv*48.0) term alone already keeps that
-  // under control without needing to fake antialiasing here.
+  // their shared boundary, so there's nothing to see a seam in.
+  //
+  // The original flicker was driven by a raw hash(vUv*1024.0) fine-grain
+  // term in the tear noise: hash() is a discontinuous per-cell lookup, not
+  // band-limited, so a sub-texel shift in vUv (from the camera's sub-pixel
+  // position moving frame to frame) could flip its output entirely,
+  // aliasing badly. A first pass fixed the flicker by deleting that term
+  // outright — but the fine grain was also what made the torn edge read as
+  // fibrous ripped paper; losing it left only the coarse vnoise(48) wave,
+  // which reads as smooth blobby regions (a "topographic map") instead.
+  // vnoise() interpolates smoothly between its grid corners (unlike raw
+  // hash), so a SECOND fine-grain term built from vnoise at high frequency
+  // gets the paper-fiber texture back without the aliasing: a sub-texel vUv
+  // shift now only nudges the output a little, not a full random jump.
   bool bandDiscard = false;
   if (uMode > 0.5 && uMode < 1.5) {
     float d = texture2D(uDepth, vUv).r;
-    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05;
+    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05
+               + (vnoise(vUv * 320.0) - 0.5) * 0.012;
     float dj = d + tear;
     bandDiscard = dj < uBandMin || dj >= uBandMax;
   }
