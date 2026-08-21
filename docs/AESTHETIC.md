@@ -137,126 +137,164 @@ reference).
 - Hover styles that change color. Hover may add a stroke or thicken
   one; it may not introduce hue.
 
-## 8. The paper-theater primitive
+## 8. The paper-theater primitive (as built)
 
-**Polygons are out.** The SAM-mask pipeline produces one unique
-sharp-edged polygon per region, which gives a stained-glass look — the
-opposite of what is wanted. The painting primitive is replaced with two
-things that compose:
+**Polygons are out; so, in the end, are the blotch and stroke
+libraries** described in earlier drafts of this section. What actually
+shipped (`scripts/theater_baker.py`, `src/components/TheaterPainting.jsx`
+— see [`PIPELINE.md`](./PIPELINE.md) and [`SHADERS.md`](./SHADERS.md))
+is simpler and closer to the toy-theater idea than the vocabulary-library
+plan ever got: **the painting's own real pixels**, cut into a dense stack
+of depth-band flats, with no synthesized mark-making layered on top.
 
 ### 8.1 Depth layers (the paper theater)
 
-Each painting decomposes into a **small, fixed number of flat planes**
-(~3–7), like the cardboard cutouts in a Victorian toy theater or a
-pop-up book. Each plane carries a portion of the painting and sits at
-its own discrete Z-depth in the 3D scene. Depth is *measured*, then
-*staged*: the preprocessor estimates a real per-pixel depth map for the
-painting — treating the painting as if it were a photograph — and then
-quantizes it into the few discrete stops the flats sit at. The
-continuous field never reaches the renderer; what shows on screen is
-still cardboard at ~3–7 depths.
+Each painting decomposes into **~18 flat planes**, like the cardboard
+cutouts in a Victorian toy theater — denser than the "~3–7" originally
+imagined, because a coarser stack read as visibly steppy at the reveal
+edges. Each plane carries the *same painting*, cut to show only the
+pixels whose measured depth falls in that plane's band; there is **no
+separate backdrop plane** behind the cutouts. An early build had one, and
+it was removed — a full-painting backdrop under the cutouts means the
+whole image reads as "already assembled" from any angle, including well
+off the null, which is exactly the premature reveal this whole system
+exists to avoid. Without it, the painting only coheres when the bands
+actually line up.
 
-The measurement chain matters. Monocular depth models are photo-trained
-and flatten stylised paint, so the baker first converts the cropped
-painting into a **photorealistic rendering of the same scene**
-(composition-preserving img2img), estimates depth on *that*, and applies
-the resulting map back to the original painting's pixels. The synthetic
-gradient fallback exists only so a bake never hard-fails; it is not an
-acceptable delivered result.
+Depth is *measured*, then *staged*, per the original plan: the baker
+first converts the cropped painting into a **photorealistic rendering of
+the same scene** (composition-preserving img2img — monocular depth models
+are photo-trained and flatten stylised paint), estimates depth on *that*,
+and applies the resulting map back to the original painting's pixels.
+k-means then buckets the depth histogram into the ~18 band edges, merging
+any band too thin or too sparse to matter. The synthetic gradient
+fallback exists only so a bake never hard-fails; it is not an acceptable
+delivered result, and CI (`validate_output.py`) rejects it before deploy.
 
-For murals, the same primitive carries the world the mural lives in:
-the wall plane, the sidewalk in front, the building across the street.
-The camera moving through the layers is moving through the place.
+For murals, the same primitive still carries the world the mural lives
+in: depth is measured across the whole photographed scene (wall, street,
+sky), not just the painted surface, so the camera moving through the
+layers is moving through the place.
 
-The per-painting data model is deliberately minimal — **the painting and
-its depth map**, nothing else:
+The per-painting data model is exactly what was originally planned —
+**the painting and its depth map**, nothing else:
 
 - `{id}.painting.webp` — the cropped painting,
 - `{id}.depth.png` — its depth map, aligned pixel-for-pixel,
-- `{id}.theater.json` — src dims, depth provenance, and the staged band
-  edges (k-means on the depth histogram, so stops snap to objects).
+- `{id}.theater.json` — src dims, depth provenance, the staged band edges
+  (k-means on the depth histogram, so stops snap to objects), and a
+  color-cluster palette (see below).
 
-The renderer builds the theater at runtime: a full-painting **backdrop**
-plane at the rear (a toy theater's printed scenery) plus one **cutout
-flat** per depth band in front, each flat discarding pixels outside its
-band. The backdrop always fills what the cutouts don't cover, so
-parallax never exposes holes; head-on at the null the flats reassemble
-into the original painting exactly.
+Each front flat is mirrored by a twin behind local `z = 0`, at a
+deterministically shuffled depth — "same layers, jumbled" — so mid-transit
+chaos looks intentional rather than a boring reflection, and so the
+back-half layers become the near ones once the camera passes through the
+painting's own local origin.
 
-### 8.2 Color-matching blotches (the body of each layer)
+### 8.2 What replaced the blotch library
 
-A layer is filled by **soft-edged color blotches** — irregular,
-watercolor-like patches of similar hue and value, placed where the
-source image has matching color clusters. Edges are organic, not
-polygonal. Blotches **may repeat**: the same blotch shape can recur
-across a layer, across a painting, across the whole library. Repetition
-is part of the hand-built feel and is not a bug.
+The blotch-shape library (§8.2 of earlier drafts) was never built. What
+carries a layer's body is the source photograph's own pixels for that
+band, full stop — no stamped, repeating watercolor shapes standing in for
+color regions. Two things survive from the original idea in reduced form:
 
-This means the preprocessor maintains a small **library of blotch
-shapes** (sampled or hand-authored), and per-painting layer assembly is
-mostly: pick a shape, pick a color from the painting's accent palette,
-stamp it where the source image has that color in that depth band. Many
-paintings will share blotch geometry; that is the point.
+- **Color clusters.** `theater.json` still records an 8-step dark→light
+  k-means palette (`color.centers`) and a small saturated-accent set —
+  used by the UI for palette flashes, not by the renderer to reconstruct
+  the painting's body.
+- **Organic edges.** Band boundaries are jittered by a cheap value-noise
+  term (`vnoise`, in the shader — see [`SHADERS.md`](./SHADERS.md)) so a
+  cutout's edge tears like paper rather than snapping to a razor line.
+  This is the entire surviving trace of "soft-edged, organic, non-
+  polygonal" from the original blotch idea — achieved procedurally in the
+  shader, not authored as a shape library.
 
-### 8.3 Strokes still apply
+### 8.3 Strokes did not survive as a separate mark system
 
-Strokes (§3) are the mark vocabulary used **on top of** layer bodies —
-white ink that draws form into the blotch field, black ink that carves
-form back out. Strokes are per-layer — they sit in front of their
-layer's blotches and behind whatever layer is in front. Strokes can also
-recur across paintings; a fixed scribble stamp reused as hatching is
-acceptable.
+Synthesized ink marks — white strokes drawing form in, black strokes
+carving it back out, hatching, scribbles — were never implemented as a
+layer drawn on top of the painting body. What the renderer actually shows
+is the source photograph itself, unmodified except for the depth-band cut
+and a chroma-key/paper-matte pass that removes near-black (dark-bg
+paintings) or near-paper-color (light-bg paintings) pixels so the
+painting's own background dissolves into the site's void instead of
+showing as a rectangle. Any "stroke" or "ink" the viewer sees is real
+brushwork or drawn linework that was already in the photographed
+artwork — never a generated mark.
 
-### 8.4 Updated `baked.json`
+### 8.4 The real per-painting metadata (`{id}.theater.json`)
 
 ```jsonc
 {
+  "schema": 2,
   "id": "...",
-  "layers": [
-    {
-      "z": -120,                    // discrete depth stop
-      "alpha":   "<png ref>",       // where this layer carries content
-      "blotches": [
-        { "shape": "blotch_07",     // id into blotch library
-          "color": "#1a1a1a",       // hue (often near-black for closet feel)
-          "x": 0.34, "y": 0.71,
-          "scale": 0.42, "rot": 0.18 }
-        // ...
-      ],
-      "strokes": [
-        { "path": "stroke_42",      // id into stroke library OR inline polyline
-          "x": 0.36, "y": 0.69,
-          "scale": 0.20, "rot": 0.05,
-          "ink": "white", "weight": 0.6 }
-        // ...
-      ]
+  "src": { "image": "....jpg", "width": 3024, "height": 4032 },
+  "crop": "heuristic",               // or a hand-authored [x0,y0,x1,y1] box
+  "depth": {
+    "source": "photo+depth-anything-v2",
+    "file": "....depth.png",
+    "bands": {
+      "count": 18,
+      "edges":   [0.0, 0.06, 0.13, /* ... */ 1.0],   // len = count + 1
+      "centers": [0.03, 0.09, /* ... */ 0.97]
     }
-    // ... 2–6 more layers
-  ],
-  "accents": {                      // per-painting color palette
-    "swatches": ["#a31818", "#e8b400"],
-    "weights":  [0.08, 0.03]
   },
-  "fulcrum": {                      // where the camera "sits" for this painting
-    "z": 0,
-    "fov": 35
-  }
+  "color": {                          // dark -> light k-means palette
+    "count": 8,
+    "centers": [[0.02, 0.02, 0.03], /* ... */ [0.94, 0.91, 0.88]]
+  },
+  "accents": { "swatches": ["#a31818", "#e8b400"] }   // optional
 }
 ```
 
-The existing `aOffset` SAM output is now **legacy** — kept on disk for
-reference, ignored by the new renderer. The new preprocessor
-(`scripts/stroke_extractor.py`, despite the name, will be renamed to
-something like `scripts/theater_baker.py`) writes the layered format
-above. Library files (`public/data/blotches/`, `public/data/strokes/`)
-hold the shared shape banks.
+No `layers[]`, no `blotches[]`, no `strokes[]`, no `fulcrum` block in this
+file — the flat stack is *built* at runtime from `depth.bands` (see
+`buildFlats()` in `TheaterPainting.jsx`), and the fulcrum/hinge placement
+lives in the separate hinge graph below, not per-painting.
 
 ### 8.5 Pareidolia under this model
 
-The pareidolia hinge from §5 still works — but the shared piece is now
-a **blotch placement** or **stroke placement** rather than a polygon.
-Two paintings share a transition edge if a same-id blotch sits at
-similar (x, y, scale, rot) on a comparable depth layer. Repetition of
-blotch geometry across the library is what *makes* these matches
-abundant; the pareidolia graph is computed over (shape-id, position,
-rotation) tuples, not over per-image features.
+The pareidolia hinge from §5 still works, and is closer to the original
+"shared piece" idea than §8.5 of earlier drafts guessed: the shared piece
+is a **matched image patch**, found by direct multi-scale template
+matching (color + gradient structure + depth) between every pair of
+baked paintings — not a blotch-id lookup into a shared shape library,
+since that library was never built. `scripts/pareidolia_index.py` writes
+one hinge patch per accepted (source, target) pair
+(`graph.theater.json`); most candidate pairs get **no** edge at all (see
+[`PIPELINE.md`](./PIPELINE.md) for the acceptance bar) — a curated, sparse
+match set, not a complete graph.
+
+### 8.6 The fulcrum reveal — "it was already there"
+
+Not in any earlier draft of this document: the incoming painting of the
+active transition is not simply faded up. At the start of the transition
+it is visible **only inside its matched hinge patch** — camouflaged,
+already sitting in the frame as if it had always been part of the
+outgoing painting — and unfurls outward from that patch as the transition
+progresses, fully assembled by the time the camera arrives at its null.
+The outgoing painting holds its own half of the same patch present a beat
+longer as the rest of it dissolves, so the shared spot never goes empty
+during the handoff. This is the literal mechanism behind §5's "how long
+was that sitting there... before you finally saw it" — realized with a
+real patch match instead of shared stroke placements.
+
+### 8.7 Shard-wipe reveal
+
+A painting's *lifespan* (as opposed to its fly-through cross-fade) is
+driven by a wipe, not a dim. A noisy, torn boundary sweeps across the
+painting as it's born, revealing it left-to-right, and sweeps back the
+other way as it dies — so a painting **assembles into place** rather than
+fading up from nothing, and disassembles the same way it arrived. See
+`uWipe` in [`SHADERS.md`](./SHADERS.md).
+
+### 8.8 Background sweep
+
+There being no backdrop plane (§8.1), a light-background ("paper") piece
+has nothing to serve as its ground once it starts coalescing. Instead the
+entire site void sweeps from black toward white as such a piece nears its
+null, and back to black as it leaves — itself rendered as a torn,
+shard-like screen-space wipe rather than a flat fade, so the background's
+own transition reads consistently with everything else on screen. Dark-
+background pieces never trigger this; the closet stays the closet for
+them. See `BackgroundSweep` in [`SHADERS.md`](./SHADERS.md).
