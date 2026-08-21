@@ -71,7 +71,20 @@ export default function Scene() {
   const setGraph = useStore(state => state.setGraph);
   const setStartNode = useStore(state => state.setStartNode);
   const setLoadError = useStore(state => state.setLoadError);
+  const setMeta = useStore(state => state.setMeta);
   const nodeCount = useStore(state => state.nodes.length);
+
+  // Hand-authored title/description/tags/price, edited via /admin. Best
+  // effort: a missing or malformed file just leaves every painting on its
+  // raw-id fallback (see Overlay.jsx), same as before this existed.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/assets/meta.json')
+      .then(r => (r.ok ? r.json() : {}))
+      .catch(() => ({}))
+      .then(meta => { if (!cancelled) setMeta(meta); });
+    return () => { cancelled = true; };
+  }, [setMeta]);
 
   // A window resize changes computeFitScale's result (see useStore.jsx),
   // which the already-built activeClusters/segments chain baked in at

@@ -1,8 +1,26 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { Route, Switch } from 'wouter';
 import Scene from './components/Scene';
 import Overlay from './components/Overlay';
 import { Loader } from '@react-three/drei';
 import { useStore } from './store/useStore';
+
+// Lazy: a normal gallery visitor never pulls either of these bundles in.
+// /admin is intentionally not linked anywhere in the gallery UI — reached
+// only by navigating to it directly (see docs/FRONTEND.md).
+const AdminApp = lazy(() => import('./admin/AdminApp.jsx'));
+const ProjectsPage = lazy(() => import('./projects/ProjectsPage.jsx'));
+
+const RouteFallback = () => (
+  <div style={{
+    position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
+    justifyContent: 'center', background: '#000', color: '#f4f0e6',
+    fontFamily: 'monospace', letterSpacing: '2px', fontSize: '0.8rem',
+    textTransform: 'uppercase',
+  }}>
+    loading…
+  </div>
+);
 
 // How long to keep the boot indicator mounted after the store reports
 // itself ready, so the opacity transition below actually gets to play
@@ -14,7 +32,9 @@ const BOOT_FADE_MS = 500;
 // logged an error to the console; the indicator just gets out of the way.
 const BOOT_MAX_MS = 20000;
 
-const App = () => {
+// The gallery experience, unchanged from before routing was added — this
+// is still what mounts at "/".
+const Gallery = () => {
   const sceneContainerRef = useRef(null);
   const [contextLost, setContextLost] = useState(false);
 
@@ -221,5 +241,20 @@ const App = () => {
     </div>
   );
 };
+
+const App = () => (
+  <Switch>
+    <Route path="/projects">
+      <Suspense fallback={<RouteFallback />}><ProjectsPage /></Suspense>
+    </Route>
+    <Route path="/admin">
+      <Suspense fallback={<RouteFallback />}><AdminApp /></Suspense>
+    </Route>
+    <Route path="/admin/:rest*">
+      <Suspense fallback={<RouteFallback />}><AdminApp /></Suspense>
+    </Route>
+    <Route><Gallery /></Route>
+  </Switch>
+);
 
 export default App;
