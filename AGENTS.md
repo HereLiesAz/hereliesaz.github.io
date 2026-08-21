@@ -32,3 +32,11 @@ I'm guessing I'll have to create the backend before the front end can take shape
 the interface needs to be secondary to the psychological experience of the "infinite canvas." The UI shouldn't feel like a website, but rather like a thin, ethereal layer over a deep, shifting world of paint.
 
 Some of my paintings are murals, taken out in the world. It'd be cool if part of what our painting processor did is create a depth map wherever it can find it, so the site wouldn't just take people through the paintings, but sometimes through the world they exist in.
+
+---
+
+*The above is the original creative brief and still describes the intended
+experience accurately. For how it was actually built — the paper-theater
+depth-band renderer, the pareidolia hinge graph, the bake pipeline, and
+current CI/CD — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and the
+rest of [`docs/`](docs/README.md).*

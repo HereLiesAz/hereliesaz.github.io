@@ -1,133 +1,97 @@
-# HANDOFF — Paper-Theater Rework (2026-07-03)
+# Handoff
 
-Session handoff for the rework on branch
-`claude/video-analysis-website-goals-j75jyd`. Read this top to bottom
-before touching anything.
+Snapshot of where things stand. For the previous handoff (superseded, kept
+for history) see [`archive/HANDOFF-2026-07-03.md`](./archive/HANDOFF-2026-07-03.md).
 
-> **Status update:** PR #37 (all code below) was MERGED to main by the
-> user on 2026-07-03. The branch was restarted from the merged main for
-> follow-up work; any further push needs a NEW pull request. The stale
-> tracked `_manifest.json` was untracked and gitignored along with the
-> other schema-2 bake outputs — the baker regenerates it locally and
-> deploys read the `art-data` branch, so no bake artifact is committed
-> on source branches. Remaining work when this note was written: finish
-> the 3 dark-painting bake (quota-retry loop), run
-> `pareidolia_index.py`, screenshot pass, show the user.
+## Current state
 
-## The brief (user directives, in order given)
+The paper-theater renderer (`TheaterPainting.jsx` + `theater_baker.py` +
+`pareidolia_index.py`) is the live, shipped gallery and matches
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) / [`FRONTEND.md`](./FRONTEND.md) /
+[`SHADERS.md`](./SHADERS.md) / [`PIPELINE.md`](./PIPELINE.md) as of this
+writing. Recently stabilized:
 
-1. A reference video (an artist finger-scrubbing a hand-drawn flipbook of
-   Saitama on an iPad — kinetic frames, staged depth) is the target
-   experience. The site's concept already matched; the delivery did not.
-2. **"We don't need linework. We need layers like a paper theater."**
-3. **Scope: get it right with 2-3 paintings before baking more.** No
-   corpus bake, no CI bake.
-4. Depth must be real: **crop the painting → convert it to a
-   photorealistic image (img2img) → run monocular depth on the photo →
-   apply the depth map to the original painting.**
-5. **Data model per painting: exactly the painting + its depth map.**
-   (Plus tiny band metadata. No masks, no per-layer textures.)
-6. The pareidolia graph IS needed — but "pareidolia" means a **shared
-   patch that reads as part of BOTH the previous and next paintings'
-   subjects at the same time**, not literally faces.
-7. Camera language from the video: aggressive push-ins, close sweeps,
-   pull-back reveals, and — key — **the camera always points at one
-   central point while moving, as if traveling the surfaces of nested
-   spheres ("bubbles") that share a core.**
-8. The three originally-baked images (sketchbook, park sculpture,
-   dumpster) are **out**. Bake 3 replacements **with darker backgrounds**
-   (chosen, see below).
-9. Show results (screenshots) to the user promptly whenever there's
-   something to see.
+- **Depth-band boundaries are a hard discard**, deliberately with no
+  opacity antialiasing. An antialiased ramp was tried and reverted — it
+  fixed sub-pixel flicker but introduced a static "topographic contour
+  map" artifact at every band boundary, because the flats are opaque and
+  depth-tested, not alpha-blended (two partial-opacity edges never
+  actually combine). See the in-shader comment in `TheaterPainting.jsx`'s
+  `flatFS` and [`SHADERS.md`](./SHADERS.md) before touching this again —
+  verify any change against real rendered frames at multiple actual
+  coalescence points, not a single crop that may not contain a boundary.
+- A batch of accessibility, CI-security, and PWA-hygiene fixes landed
+  together (keyboard navigation, modal dialog semantics, reduced-motion
+  wired into the camera/shader, least-privilege workflow permissions,
+  SSH host-key pinning on the SFTP deploy, PWA precache/manifest cleanup,
+  supply-chain pinning on the one `git+https` dependency).
+- Scene constants (`NULL_DISTANCE`, `PAINTING_HEIGHT`, `CAMERA_FOV_DEG`)
+  were deduplicated into `src/sceneConstants.js`; pre-built segment
+  placement now recomputes on resize/rotation instead of freezing at
+  whatever viewport built it.
+- Documentation across the repo was fully audited and rewritten against
+  the actual code (this pass) — see "What changed in this doc pass" below.
 
-## What's done (all on this branch)
+## Known drift / open threads
 
-- `scripts/theater_baker.py` — rewritten. Cacheable stages per id:
-  painting.webp (crop/resize, reuses existing file as canonical) →
-  photo.png (FLUX.1-Kontext img2img via HF Inference API if HF_TOKEN,
-  else the public Space `mcp-tools/FLUX.1-Kontext-Dev` anonymously; ECC
-  affine registration snaps the photo back onto the painting) →
-  depth.png (16-bit, Depth-Anything-V2 Space on the photo; falls back to
-  depth-on-painting, then synth gradient — provenance recorded in
-  theater.json `depth.source`) → schema-2 theater.json with ~3-6 k-means
-  depth bands (`depth_bands_kmeans`: merges bands closer than 0.08 depth
-  or under 2% coverage). `--ids 'a,b,c'` bakes only those stems.
-  masks.png is gone.
-- `scripts/pareidolia_index.py` — rewritten as the hinge matcher:
-  multi-scale LAB+depth template matching over all ordered pairs →
-  `public/data/theater/graph.theater.json` (schemaVersion 5) with edges
-  `{source, target, weight, s_uv, t_uv, scale}`.
-- `src/components/TheaterPainting.jsx` — rewritten: full-painting
-  backdrop plane (1.08 overscan) + one opaque cutout flat per depth band
-  (shader discards outside [uBandMin, uBandMax) with value-noise torn
-  edges), perspective-compensated scale (reassembles exactly at the
-  null), distance fade to black 18→34 units, fly-through cross-fade
-  (±1.2 units of camera z). Bone-white envelope deleted. Flat fallback
-  for un-baked ids retained.
-- `src/store/useStore.jsx` — hinge placement (painting B offset so its
-  t_uv coincides with A's s_uv in world xy; nominal painting height 10,
-  ignores viewport fitScale ≈0.9 — known small error) + orbital "bubble"
-  path: control points on spheres around `segment.focus` (the hinge, or
-  B's shell center when no edge), radius R0 → Rmin(4-8) → R1, horizontal-
-  biased sweep, per-segment `bank` roll.
-- `src/components/AnamorphicCam.jsx` — gaze locked on `segment.focus`,
-  hand-off to next segment's focus (fallback `segment.endLook`) over
-  r=0.6→0.95, bank roll applied as rotateZ, segment prebuild moved to
-  r>0.5 so the gaze target exists early.
-- `src/components/Scene.jsx` — loads `_manifest.json` +
-  `graph.theater.json` (nodes carry width/height needed for uv→local);
-  damping 0.12.
-- `docs/AESTHETIC.md` §8.1 updated: depth measured (photo chain) then
-  staged; painting+depth data model documented.
+- **`process_art.yml` and `bootstrap.yml` still run in CI but produce dead
+  output.** The 56-shard `grinder.py` stroke-cloud job and the manual
+  `bootstrap.py` job both run SAM-based pipelines from the abandoned
+  "shard cloud" design and deploy their output to `art-data` — nothing in
+  `src/` reads any of it (`Scene.jsx` only reads the theater tree, falling
+  back to the legacy flat `public/graph.json`, never the stroke JSON).
+  Turning these off (or deleting the scripts) is a real decision someone
+  should make deliberately, not a docs fix — see
+  [`PIPELINE.md`](./PIPELINE.md#legacy-scripts-that-still-execute-in-ci).
+- **A handful of fully dead scripts remain in `scripts/`** (`indexer.py`,
+  `pareidolia.py`, `curator.py`, `jules.py`, `3d_deconstructor.py`,
+  `prepare.py`, `repair_and_index.py`, `bake-shards.js`) — confirmed by
+  grep to have no live caller. Candidates for deletion in a future
+  cleanup, not touched here.
+- **`docs/SETUP.md` states "Node.js 18+"**; CI actually runs Node 20
+  (`deploy.yml`) and Node 22 (`deploy-sftp.yml`). Minor, worth a follow-up
+  fix.
+- The modal keyboard-focus behavior (`Overlay.jsx`) was verified correct
+  by code inspection but showed one inconclusive result in a dev-server
+  Tab-focus test, most likely a Vite HMR-injected-DOM artifact rather than
+  a real bug — not independently reproduced in a production build.
 
-## In flight / remaining
+## What changed in this doc pass
 
-1. **Bake of the 3 new dark paintings** (ids:
-   `PXL_20230527_000631951~2`, `2023-10-15(38)`, `20231129_043102~2`,
-   sources in `public/assets/`). A background retry loop was running:
-   bake → check every theater.json has
-   `depth.source == "photo+depth-anything-v2"` → reset+wait 300s on
-   quota failures. If unfinished, re-run:
-   `python3 scripts/theater_baker.py --input public/assets --output
-   public/data/theater --ids 'PXL_20230527_000631951~2,2023-10-15(38),20231129_043102~2'`
-   (delete an id's depth.png first to redo its depth). ZeroGPU anonymous
-   quota (~90s GPU per FLUX call) throttles; waiting ~5 min between
-   attempts works. An HF_TOKEN in `.env.local` removes the problem.
-2. **After the bake**: `python3 scripts/pareidolia_index.py` to rebuild
-   `graph.theater.json` for the new ids.
-3. **Verify + show the user** (they asked for results ASAP):
-   `npm run dev`, then the Playwright script pattern in
-   scratchpad `shoot.mjs`: find the scrollable div (drei ScrollControls),
-   set scrollTop fractions (~0 to 0.07 covers two segments), wait ~1.8s
-   each, screenshot. Check: head-on reassembly at nulls, orbital sweep
-   keeps gaze on a fixed point, flats part with parallax, hinge patch
-   holds screen position through a transition, no 404s (one untraced 404
-   appeared in the last run — likely favicon; check the network log).
-   Send screenshots with SendUserFile.
-4. **Commit/push/draft PR** if not already done (bake outputs are
-   gitignored — only code/docs commit; that is intentional, deployed
-   data lives on the `art-data` orphan branch, and CI rebake is out of
-   scope for now).
-5. Known rough edges to consider next iteration:
-   - Backdrop doubling: the printed-backdrop shows the whole painting,
-     so lifted flats double their content against it off-axis. Option:
-     dim the backdrop slightly, or inpaint (contradicts painting+depth
-     minimalism — ask the user first).
-   - The scroll-loop at offset>0.999 snaps to top; untouched.
-   - `Overlay.jsx` caption timing unchanged; still keyed to old segment
-     rhythm.
-   - `goBackward()` still dead code.
-   - fitScale vs nominal-height mismatch (~8%) slightly offsets hinge
-     alignment; fine at current patch scales.
+Every doc under `docs/` was checked against the actual code and rewritten
+where it had drifted from or never matched what was built:
 
-## Environment notes
+- `ARCHITECTURE.md`, `FRONTEND.md`, `SHADERS.md`, `PIPELINE.md` — full
+  rewrites; previously described an abandoned SAM/DINOv2/particle-cloud
+  design that was never implemented.
+- `README.md` (root) and `docs/README.md` — full rewrites for the same
+  reason, plus corrected doc links and quick-start commands.
+- `AESTHETIC.md` §8 — rewritten to describe the paper-theater primitive as
+  actually built (no backdrop plane, no blotch/stroke library, real
+  photograph pixels not synthesized marks), and extended with the
+  fulcrum-reveal, shard-wipe, and background-sweep mechanics that exist in
+  the shipped renderer but were undocumented anywhere. §1–7 (the closet
+  premise, palette law, mark vocabulary as UI chrome, type/signature) were
+  left as-is — still an accurate creative contract.
+- `WORKFLOW.md` and `SETUP.md` were reviewed and found largely accurate
+  already (a prior pass had fixed the worst of their drift); only the
+  Node-version note above remains open.
+- Eight early planning/spec documents describing designs that were
+  explored and abandoned before or during implementation (a shard-cloud
+  Next.js renderer, DINOv2/YOLO matching, an earlier "unified field"
+  design, a stale mid-rework session handoff) were moved to
+  `docs/archive/` with an explanatory index rather than deleted, so the
+  design history stays recoverable.
+- `AGENTS.md` — left untouched aside from a pointer to `ARCHITECTURE.md`;
+  it's the original creative brief and still describes the intended
+  experience accurately, just not the implementation mechanism.
 
-- No `gh` CLI — use GitHub MCP tools. Repo scope:
-  `hereliesaz/hereliesaz.github.io` only.
-- Python deps already installed in-container: opencv-python-headless,
-  numpy, Pillow, gradio_client, huggingface_hub, imageio.
-- Playwright: use `executablePath: '/opt/pw-browsers/chromium'`,
-  `playwright-core` installed in the scratchpad dir.
-- The public depth Space works anonymously; FLUX Space is
-  quota-throttled anonymously.
-- HF MCP `dynamic_space` invoke is disabled server-side (view-only).
+## Where to start
+
+- Rendering/shader work: [`SHADERS.md`](./SHADERS.md), then
+  `TheaterPainting.jsx`.
+- Camera/scroll/state work: [`FRONTEND.md`](./FRONTEND.md)'s
+  `AnamorphicCam.jsx` and `useStore.jsx` sections.
+- Pipeline/bake work: [`PIPELINE.md`](./PIPELINE.md), then
+  [`WORKFLOW.md`](./WORKFLOW.md) for how to run it.
+- CI/deploy work: [`ARCHITECTURE.md`](./ARCHITECTURE.md)'s CI/CD section.

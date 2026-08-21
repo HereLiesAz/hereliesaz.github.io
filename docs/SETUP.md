@@ -7,7 +7,8 @@ This guide will walk you through setting up the "Infinite Void" environment. The
 ## Prerequisites
 
 -   **Python 3.8+**: [Download](https://www.python.org/downloads/)
--   **Node.js 18+**: [Download](https://nodejs.org/)
+-   **Node.js 20+**: [Download](https://nodejs.org/) — CI runs Node 20
+    (`deploy.yml`) and Node 22 (`deploy-sftp.yml`); either works locally.
 -   **Git**: [Download](https://git-scm.com/)
 
 ---
