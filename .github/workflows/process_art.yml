@@ -31,6 +31,16 @@ concurrency:
 jobs:
   grind:
     runs-on: ubuntu-latest
+    # /admin's removePainting() (src/admin/data.js) deletes the source
+    # photo from public/assets/ as part of removing a painting — a real
+    # push touching this job's own path filter, since GitHub Actions path
+    # filters match files removed in the diff, not just added/modified.
+    # That would kick off this entire 56-shard grinder for a file being
+    # deleted, wastefully, and contend with the actual removal's publish
+    # via the shared art-data-publish concurrency group. removePainting()
+    # tags its commit message with [skip-grind] specifically so this job
+    # (and consolidate below, via needs:) can opt out.
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip-grind]')
     permissions:
       contents: read
     strategy:

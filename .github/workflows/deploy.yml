@@ -15,8 +15,11 @@ on:
     # Painting" publishes to art-data the same way and was missing here
     # for the same reason — a removal from /admin updated art-data but the
     # live site never redeployed to pick it up, so it looked like nothing
-    # had happened.
-    workflows: ["Process Art (Turbo 56)", "Theater Bake", "Remove Painting"]
+    # had happened. "Bootstrap Art (5 Images)" publishes to art-data too
+    # and is included for the same reason, even though it's a one-time
+    # seeding workflow unlikely to run again — nothing marks it retired,
+    # so leaving it off this list would be a live trap if it ever is.
+    workflows: ["Process Art (Turbo 56)", "Theater Bake", "Remove Painting", "Bootstrap Art (5 Images)"]
     types:
       - completed
 

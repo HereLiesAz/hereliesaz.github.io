@@ -69,8 +69,8 @@ export default function SiteContentEditor() {
       <div className="admin-row">
         <button type="button" onClick={save} disabled={status === 'saving'}>{status === 'saving' ? 'saving…' : 'save'}</button>
       </div>
-      {status === 'saved' && <p className="admin-ok">Saved — live after the next deploy (usually under a minute).</p>}
-      {status?.error && <p className="admin-error">{status.error}</p>}
+      {status === 'saved' && <p className="admin-ok" role="status" aria-live="polite">Saved — live after the next deploy (usually under a minute).</p>}
+      {status?.error && <p className="admin-error" role="alert">{status.error}</p>}
     </div>
   );
 }

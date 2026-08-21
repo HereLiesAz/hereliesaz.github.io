@@ -33,16 +33,27 @@ class GitHubApiError extends Error {
 async function api(path, options = {}) {
   const token = getToken();
   if (!token) throw new GitHubApiError('No GitHub token set — open Settings first.', 401);
-  const res = await fetch(`https://api.github.com${path}`, {
-    ...options,
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...options.headers,
-    },
-  });
+  let res;
+  try {
+    res = await fetch(`https://api.github.com${path}`, {
+      ...options,
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...options.headers,
+      },
+    });
+  } catch {
+    // fetch() itself throws (not an HTTP error response) on a network
+    // failure — offline, DNS, CORS-blocked, etc. — before any of the
+    // status-code handling below ever runs. Without this, every admin
+    // panel surfaces the bare browser string ("Failed to fetch",
+    // "NetworkError when attempting to fetch resource") with no
+    // indication of what to actually do about it.
+    throw new GitHubApiError('Could not reach GitHub — check your connection and try again.', 0);
+  }
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json())?.message || ''; } catch { /* non-JSON error body */ }
@@ -133,10 +144,29 @@ export async function listWorkflowRuns(workflowFile, perPage = 5) {
 
 /** Verifies the stored token actually works and can see this repo,
  * without requiring any specific scope up front — TokenSetup uses this
- * to give immediate, concrete feedback instead of a silent save. */
+ * to give immediate, concrete feedback instead of a silent save.
+ *
+ * Also probes Actions access via a read-only call (listing workflows) —
+ * `data.permissions` from the repo-info endpoint only reflects
+ * Contents/collaborator-level push access, never the separate Actions
+ * scope that dispatchWorkflow() actually needs. Without this, a token
+ * with only "Contents" checked (not "Actions") passes verification
+ * cleanly here and then fails with a 403 the first time the admin app
+ * tries to add or remove a painting — this catches that up front instead.
+ * This can only confirm Actions *read* access (listing workflows needs
+ * nothing more), not write — verifying dispatch itself would mean
+ * actually triggering a workflow just to check, which this deliberately
+ * doesn't do. */
 export async function verifyToken() {
   const data = await api(`/repos/${OWNER}/${REPO}`);
-  return { login: data.owner?.login, permissions: data.permissions };
+  let actionsOk = true;
+  try {
+    await api(`/repos/${OWNER}/${REPO}/actions/workflows`);
+  } catch (e) {
+    if (e.status === 403 || e.status === 404) actionsOk = false;
+    else throw e;
+  }
+  return { login: data.owner?.login, permissions: data.permissions, actionsOk };
 }
 
 export { OWNER, REPO, BRANCH, GitHubApiError };

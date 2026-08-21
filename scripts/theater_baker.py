@@ -590,17 +590,30 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     # ids whose box changed — no blanket --force when a few crops move.
     directive = crop_directive(pid)
     prev_directive = "MISSING"
+    prev_src_size = None
     crop_note = None  # carried over from a cached bake unless recomputed below
     if out_json.exists():
         try:
             prev_meta = json.loads(out_json.read_text())
             prev_directive = prev_meta.get("crop", "MISSING")
             crop_note = prev_meta.get("crop_note")
+            prev_src_size = prev_meta.get("src", {}).get("size")
         except Exception:
             pass
     crop_changed = prev_directive != directive
+    # A different photo uploaded under the same id (filename stem) — e.g.
+    # a generic camera name like "IMG_0232" recurring across devices —
+    # would otherwise pass crop_changed=False (same, usually-default
+    # directive) and silently reuse the OLD photo's cached painting/depth
+    # while meta["src"]["image"] below records the NEW filename: a
+    # theater.json whose pixels and provenance disagree. prev_src_size is
+    # None for a theater.json baked before this field existed, in which
+    # case there's nothing to compare against — that's a one-time gap for
+    # already-baked ids, not a reason to force a full corpus re-bake.
+    source_changed = prev_src_size is not None and prev_src_size != path.stat().st_size
+    cache_valid = not force and not crop_changed and not source_changed
 
-    if out_painting.exists() and not force and not crop_changed:
+    if out_painting.exists() and cache_valid:
         rgb = np.array(ImageOps.exif_transpose(Image.open(out_painting)).convert("RGB"))
     else:
         # The raw source photo — the one place in the pipeline where a
@@ -636,7 +649,7 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     # a reliable local depth model is the primary path.
     depth = None
     source = None
-    if out_depth.exists() and not force and not crop_changed:
+    if out_depth.exists() and cache_valid:
         # Default to UNTRUSTED ("synthetic") rather than "assume real". A
         # cache hit is only a fast-path when we can actually confirm the
         # cached depth.png came from a real model; any failure to read
@@ -656,12 +669,13 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
             source = cached_source
 
     if depth is None:
-        # force here covers BOTH a hand-authored --force AND a detected
-        # crop change: crop_changed already invalidated the out_painting/
-        # out_depth caches above, so `rgb` may be a different composition
-        # than whatever produced a stale out_photo — photorealize's own
-        # cache check must be told that explicitly (see its docstring).
-        photo = photorealize(rgb, out_photo, force=force or crop_changed)
+        # force here covers a hand-authored --force, a detected crop
+        # change, AND a detected source-photo change: any of the three
+        # already invalidated the out_painting/out_depth caches above, so
+        # `rgb` may be a different composition than whatever produced a
+        # stale out_photo — photorealize's own cache check must be told
+        # that explicitly (see its docstring).
+        photo = photorealize(rgb, out_photo, force=force or crop_changed or source_changed)
         src_img = photo if photo is not None else rgb
         # Local Depth-Anything first (reliable), Space second, synth last.
         depth = estimate_depth_local(src_img)
@@ -693,7 +707,10 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
     meta = {
         "schema": 2,
         "id":     pid,
-        "src":    {"image": path.name, "width": w, "height": h},
+        # "size" (source file bytes) lets a future bake detect a different
+        # photo uploaded under the same id (filename stem) even when the
+        # crop directive is unchanged — see cache_valid/source_changed above.
+        "src":    {"image": path.name, "width": w, "height": h, "size": path.stat().st_size},
         # The crop directive applied in stage A (normalized box, null for
         # keep-whole, or "heuristic"). Recorded so a re-bake can detect when a
         # box changed and re-crop + re-derive depth for just that id.

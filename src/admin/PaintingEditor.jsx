@@ -33,6 +33,14 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
   const set = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
 
   const save = async () => {
+    if (form.forSale && form.price === '') {
+      setStatus({ error: 'Marked "for sale" needs a price — the gallery caption has nothing to show without one.' });
+      return;
+    }
+    if (form.forSale && Number(form.price) < 0) {
+      setStatus({ error: 'Price can\'t be negative.' });
+      return;
+    }
     setStatus('saving');
     try {
       const entry = {
@@ -40,7 +48,7 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
         description: form.description.trim(),
         tags: form.tags.split(',').map(t => t.trim()).filter(Boolean),
         forSale: !!form.forSale,
-        ...(form.forSale && form.price !== '' ? { price: Number(form.price), currency: form.currency.trim() || 'USD' } : {}),
+        ...(form.forSale && form.price !== '' ? { price: Number(form.price), currency: form.currency.trim().toUpperCase() || 'USD' } : {}),
       };
       await saveMetaEntry(id, entry);
       setStatus('saved');
@@ -62,7 +70,13 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
       // user next hits refresh.
       setStatus('removed');
     } catch (e) {
-      setStatus({ error: e.message });
+      // removePainting() dispatches the actual removal first and only
+      // throws afterward (with `.dispatched = true`) if a secondary
+      // cleanup step (source photo delete, metadata strip) failed — the
+      // painting is still going away, just with loose ends. Show both:
+      // the removal confirmation AND the cleanup error, not just one.
+      if (e.dispatched) setStatus({ removedWithWarning: e.message });
+      else setStatus({ error: e.message });
     }
   };
 
@@ -90,20 +104,20 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
       </label>
       {form.forSale && (
         <div className="admin-row">
-          <input className="admin-input" style={{ maxWidth: '8rem' }} type="number" min="0" step="1" value={form.price} onChange={set('price')} placeholder="price" />
-          <input className="admin-input" style={{ maxWidth: '6rem' }} value={form.currency} onChange={set('currency')} placeholder="USD" />
+          <input className="admin-input" style={{ maxWidth: '8rem' }} type="number" min="0" step="1" value={form.price} onChange={set('price')} placeholder="price" aria-label="price" />
+          <input className="admin-input" style={{ maxWidth: '6rem' }} value={form.currency} onChange={set('currency')} placeholder="USD" aria-label="currency" />
         </div>
       )}
 
       <div className="admin-row">
-        <button type="button" onClick={save} disabled={status === 'saving' || status === 'removed'}>{status === 'saving' ? 'saving…' : 'save'}</button>
-        <button type="button" onClick={remove} disabled={status === 'removing' || status === 'removed'} className="admin-btn-danger">
-          {status === 'removing' ? 'removing…' : status === 'removed' ? 'removal dispatched' : 'remove from site'}
+        <button type="button" onClick={save} disabled={status === 'saving' || status === 'removed' || (status && status.removedWithWarning)}>{status === 'saving' ? 'saving…' : 'save'}</button>
+        <button type="button" onClick={remove} disabled={status === 'removing' || status === 'removed' || (status && status.removedWithWarning)} className="admin-btn-danger">
+          {status === 'removing' ? 'removing…' : (status === 'removed' || (status && status.removedWithWarning)) ? 'removal dispatched' : 'remove from site'}
         </button>
       </div>
-      {status === 'saved' && <p className="admin-ok">Saved — live after the next deploy (usually under a minute).</p>}
-      {status === 'removed' && (
-        <p className="admin-ok">
+      {status === 'saved' && <p className="admin-ok" role="status" aria-live="polite">Saved — live after the next deploy (usually under a minute).</p>}
+      {(status === 'removed' || (status && status.removedWithWarning)) && (
+        <p className="admin-ok" role="status" aria-live="polite">
           Removal dispatched — this takes a few minutes to actually run (delete the baked files, rebuild the
           hinge graph, redeploy).{' '}
           <a href="https://github.com/HereLiesAz/hereliesaz.github.io/actions/workflows/remove_painting.yml" target="_blank" rel="noreferrer noopener">
@@ -111,7 +125,8 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
           </a>, then <button type="button" className="admin-btn-plain" onClick={() => onRemoved?.(id)}>back to the list</button>.
         </p>
       )}
-      {status?.error && <p className="admin-error">{status.error}</p>}
+      {status?.removedWithWarning && <p className="admin-error" role="alert">{status.removedWithWarning}</p>}
+      {status?.error && <p className="admin-error" role="alert">{status.error}</p>}
     </div>
   );
 }

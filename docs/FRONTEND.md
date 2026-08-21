@@ -1,8 +1,16 @@
 # Frontend Architecture
 
-Plain **Vite + React 18**, no meta-framework (no Next.js, no router beyond
-the one unused `wouter` dependency — this is a single-route
-experience). 3D via **Three.js** through **@react-three/fiber** (R3F) and
+Plain **Vite + React 18**, no meta-framework (no Next.js). Routing is
+**wouter** (`src/App.jsx`'s `<Switch>`): `/` is the gallery (unchanged, and
+still what most visitors get — `/admin` and `/projects` are
+`React.lazy`-loaded so their code never reaches a gallery visitor's
+bundle), `/admin` is the content-management PWA (`src/admin/`, gated on a
+GitHub token, not linked from the gallery UI), `/projects` cross-links the
+owner's other GitHub Pages repos (`src/projects/ProjectsPage.jsx`). GitHub
+Pages has no server-side SPA fallback, so a direct load of `/admin` or
+`/projects` is caught by `public/404.html`, which stashes the path and
+bounces to `/`; `src/main.jsx` restores it before wouter reads
+`window.location`. 3D via **Three.js** through **@react-three/fiber** (R3F) and
 **@react-three/drei**'s helpers (`ScrollControls`, `useScroll`, `Loader`,
 `PerspectiveCamera`). State via **Zustand**. See
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) for how these pieces fit into the
@@ -20,13 +28,16 @@ src/
 │   └── useStore.jsx                Zustand: graph, segments, hinge placement, walk logic
 ├── utils/
 │   └── Logger.js                   console hijack + crash log ring buffer + GitHub issue URL
-└── components/
-    ├── JulesBoundary.jsx            top-level React error boundary
-    ├── Scene.jsx                    <Canvas>, data loading, background sweep mesh
-    ├── AnamorphicCam.jsx            scroll → camera position/gaze, keyboard nav, reduced motion
-    ├── TheaterPainting.jsx          per-painting depth-band renderer (the shader lives here)
-    ├── TexturePreloader.jsx         warms upcoming paintings' textures ahead of the scroll
-    └── Overlay.jsx                  2D DOM UI: signature, caption, menu modal, load-error text
+├── components/
+│   ├── JulesBoundary.jsx            top-level React error boundary
+│   ├── Scene.jsx                    <Canvas>, data loading, background sweep mesh
+│   ├── AnamorphicCam.jsx            scroll → camera position/gaze, keyboard nav, reduced motion
+│   ├── TheaterPainting.jsx          per-painting depth-band renderer (the shader lives here)
+│   ├── TexturePreloader.jsx         warms upcoming paintings' textures ahead of the scroll
+│   └── Overlay.jsx                  2D DOM UI: signature, caption, menu modal, load-error text
+├── admin/                          /admin — content-management PWA (see below)
+└── projects/
+    └── ProjectsPage.jsx             /projects — cross-links other GitHub Pages repos
 ```
 
 There is no `src/canvas/`, `src/shaders/`, or `src/ui/` — despite what
@@ -163,3 +174,31 @@ that have to agree between the camera, the world-placement math, and the
 rendered plane geometry for a painting to reassemble exactly at its
 null. Previously hand-duplicated across three files (correct only by
 discipline); now a single shared source of truth all three import.
+
+### `src/admin/` (`/admin`) and `src/projects/` (`/projects`)
+
+Two routes outside the gallery, both `React.lazy`-loaded from `App.jsx` so
+a normal gallery visitor's bundle never grows because of them.
+
+`/admin` is a mobile-first content-management PWA: paste a GitHub
+fine-grained personal access token once (`TokenSetup.jsx`, stored in
+`localStorage`, never sent anywhere but the GitHub REST API) and then
+add/remove paintings and edit their metadata, or edit
+`public/site-content.json` (the gallery menu's links/about text), all via
+direct browser calls to the Contents and Actions APIs (`github.js`) — no
+backend. Adding a painting commits the photo to `public/assets/` and
+dispatches `theater_bake.yml`; removing one deletes the source photo and
+dispatches `remove_painting.yml`. Neither workflow's completion is waited
+on synchronously — the admin UI reports "dispatched," and the actual
+bake/removal + redeploy runs in the background over the next few minutes
+(see `.github/workflows/`).
+
+`/admin` is deliberately not linked anywhere in the gallery UI or its
+menu — reached only by navigating to it directly. The token is the real
+access control; not advertising the URL is a cheap extra layer, not a
+security boundary on its own.
+
+`/projects` fetches `https://api.github.com/users/HereLiesAz/repos`
+directly and unauthenticated at page load, and lists every repo with
+GitHub Pages enabled as a card — no build step, no staleness, no token.
+It's linked from the gallery's menu modal (`Overlay.jsx`).

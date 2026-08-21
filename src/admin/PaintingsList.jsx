@@ -44,6 +44,7 @@ export default function PaintingsList() {
       <input
         className="admin-input"
         placeholder="filter…"
+        aria-label="filter paintings"
         value={filter}
         onChange={e => setFilter(e.target.value)}
       />

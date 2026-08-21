@@ -216,7 +216,14 @@ void main() {
     float d = texture2D(uDepth, vUv).r;
     float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05
                + (vnoise(vUv * 320.0) - 0.5) * 0.012;
-    float dj = d + tear;
+    // depth_bands_kmeans() pins the outermost band edges to exactly 0.0/1.0,
+    // and depth is min-max normalized, so real pixels sit right at those
+    // extremes. Without clamping, tear can push dj outside [0,1) for such a
+    // pixel, failing EVERY band's [bandMin, bandMax) test at once — a hole
+    // punched independent of camera position or band assignment. Clamp the
+    // upper end strictly below 1.0 since the last band's test is
+    // dj >= uBandMax with uBandMax == 1.0 exactly.
+    float dj = clamp(d + tear, 0.0, 0.999999);
     bandDiscard = dj < uBandMin || dj >= uBandMax;
   }
 

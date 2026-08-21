@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Link } from 'wouter';
 import useStore from '../store/useStore';
 import { bgSweepLevel } from './TheaterPainting';
 
@@ -312,8 +313,14 @@ const Overlay = () => {
         const info = id ? state.meta?.[id] : null;
         if (titleRef.current) titleRef.current.textContent = info?.title || id || '';
         if (priceRef.current) {
-          priceRef.current.textContent = (info?.forSale && info?.price != null)
-            ? `${info.currency === 'USD' || !info.currency ? '$' : ''}${info.price}${info.currency && info.currency !== 'USD' ? ` ${info.currency}` : ''} — for sale`
+          const price = info?.price;
+          // Case-insensitive on purpose: PaintingEditor.jsx normalizes to
+          // uppercase on save, but this also guards against stale
+          // lowercase entries written before that fix existed.
+          const currency = (info?.currency || 'USD').toUpperCase();
+          const valid = !!info?.forSale && typeof price === 'number' && price >= 0;
+          priceRef.current.textContent = valid
+            ? `${currency === 'USD' ? '$' : ''}${price.toLocaleString()}${currency !== 'USD' ? ` ${currency}` : ''} — for sale`
             : '';
         }
         lastIdRef.current = id;
@@ -410,7 +417,7 @@ const Overlay = () => {
                 <li key={link.href}>
                   {link.external
                     ? <a href={link.href} target="_blank" rel="noreferrer noopener">{link.label}</a>
-                    : <a href={link.href}>{link.label}</a>}
+                    : <Link href={link.href}>{link.label}</Link>}
                 </li>
               ))}
             </ul>

@@ -250,7 +250,7 @@ const App = () => (
     <Route path="/admin">
       <Suspense fallback={<RouteFallback />}><AdminApp /></Suspense>
     </Route>
-    <Route path="/admin/:rest*">
+    <Route path="/admin/*">
       <Suspense fallback={<RouteFallback />}><AdminApp /></Suspense>
     </Route>
     <Route><Gallery /></Route>

@@ -56,23 +56,52 @@ export async function fetchTheaterMeta(id) {
   return res.ok ? res.json() : null;
 }
 
-/** Full removal: delete the source photo from main (if we can find it —
- * a painting that failed to bake yet has no theater.json to read the
- * filename from, in which case this step is skipped rather than blocking
- * the rest of the cleanup), strip its metadata, then dispatch
- * remove_painting.yml to clean up the baked artifacts + hinge graph on
- * art-data. The workflow run is async — this only confirms dispatch, not
- * completion (see AdminApp's link to the Actions run). */
+/** Full removal: dispatch remove_painting.yml (cleans up the baked
+ * artifacts + hinge graph on art-data — the part that actually makes the
+ * painting disappear from the live site) FIRST, then attempt the two
+ * secondary cleanup steps (delete the source photo from main, strip its
+ * metadata entry) independently of each other. Ordering matters: if the
+ * dispatch itself fails, nothing has changed yet, so the whole thing is
+ * safely retryable. If a secondary step fails after a successful dispatch,
+ * the real removal still proceeds — a stale source photo or metadata
+ * entry is a nuisance, not a failed removal — and the failure is reported,
+ * not swallowed, so it doesn't look like a clean success.
+ *
+ * getFile() already distinguishes "file doesn't exist" (returns null) from
+ * a real error (throws) — do not wrap it in a blanket .catch(() => null)
+ * here, or an expired token / rate limit / 5xx gets misread as "no source
+ * photo to delete" and silently skipped. */
 export async function removePainting(id) {
-  const theaterMeta = await fetchTheaterMeta(id).catch(() => null);
-  const srcImage = theaterMeta?.src?.image;
-  if (srcImage) {
-    const path = `public/assets/${srcImage}`;
-    const file = await getFile(path).catch(() => null);
-    if (file) await deleteFile(path, `admin: remove source photo for ${id}`, file.sha);
-  }
-  await saveMetaEntry(id, null);
   await dispatchWorkflow('remove_painting.yml', { id });
+
+  const errors = [];
+
+  try {
+    const theaterMeta = await fetchTheaterMeta(id).catch(() => null);
+    const srcImage = theaterMeta?.src?.image;
+    if (srcImage) {
+      const path = `public/assets/${srcImage}`;
+      const file = await getFile(path);
+      // [skip-grind]: this is a real push to public/assets/**, which would
+      // otherwise also kick off process_art.yml's 56-shard legacy grinder
+      // for a file being deleted — see that workflow's job-level `if:`.
+      if (file) await deleteFile(path, `admin: remove source photo for ${id} [skip-grind]`, file.sha);
+    }
+  } catch (e) {
+    errors.push(`source photo: ${e.message}`);
+  }
+
+  try {
+    await saveMetaEntry(id, null);
+  } catch (e) {
+    errors.push(`metadata: ${e.message}`);
+  }
+
+  if (errors.length) {
+    const err = new Error(`Removal dispatched (the painting will still disappear from the site), but cleanup had errors — you may want to retry these by hand: ${errors.join('; ')}`);
+    err.dispatched = true;
+    throw err;
+  }
 }
 
 export { META_PATH, SITE_PATH };
