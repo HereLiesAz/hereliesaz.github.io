@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import { Route, Switch } from 'wouter';
+import { Route, Switch, useLocation } from 'wouter';
 import Scene from './components/Scene';
 import Overlay from './components/Overlay';
 import { Loader } from '@react-three/drei';
@@ -242,19 +242,47 @@ const Gallery = () => {
   );
 };
 
-const App = () => (
-  <Switch>
-    <Route path="/projects">
-      <Suspense fallback={<RouteFallback />}><ProjectsPage /></Suspense>
-    </Route>
-    <Route path="/admin">
-      <Suspense fallback={<RouteFallback />}><AdminApp /></Suspense>
-    </Route>
-    <Route path="/admin/*">
-      <Suspense fallback={<RouteFallback />}><AdminApp /></Suspense>
-    </Route>
-    <Route><Gallery /></Route>
-  </Switch>
-);
+// index.html links exactly one <link rel="manifest">, shared by every
+// route in this single-page app — without this, "Add to Home Screen"
+// from /admin would install a shortcut whose start_url is still "/"
+// (public/manifest.json's), always reopening the gallery instead of
+// /admin regardless of which page was open at install time. Browsers
+// re-evaluate the manifest link's current href at the moment of an
+// install action, not just once on first load, so swapping it here
+// (before the user opens the "install"/"add to home screen" menu) is
+// enough — no reload needed. public/admin-manifest.json has its own
+// start_url ("/admin") and name, but the same scope ("/") as the
+// gallery's manifest, so navigating between routes (e.g. AdminApp's
+// "← gallery" link) stays inside the installed standalone window
+// either way, instead of kicking out to the browser on an out-of-scope
+// navigation.
+function useRouteManifest(pathname) {
+  useEffect(() => {
+    const link = document.querySelector('link[rel="manifest"]');
+    if (!link) return;
+    const href = pathname.startsWith('/admin') ? '/admin-manifest.json' : '/manifest.json';
+    if (link.getAttribute('href') !== href) link.setAttribute('href', href);
+  }, [pathname]);
+}
+
+const App = () => {
+  const [location] = useLocation();
+  useRouteManifest(location);
+
+  return (
+    <Switch>
+      <Route path="/projects">
+        <Suspense fallback={<RouteFallback />}><ProjectsPage /></Suspense>
+      </Route>
+      <Route path="/admin">
+        <Suspense fallback={<RouteFallback />}><AdminApp /></Suspense>
+      </Route>
+      <Route path="/admin/*">
+        <Suspense fallback={<RouteFallback />}><AdminApp /></Suspense>
+      </Route>
+      <Route><Gallery /></Route>
+    </Switch>
+  );
+};
 
 export default App;

@@ -1,0 +1,17 @@
+{
+  "name": "HereLiesAz Admin",
+  "short_name": "HL Admin",
+  "description": "Manage paintings and site content for HereLiesAz.",
+  "start_url": "/admin",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "/pwa-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
