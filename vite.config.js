@@ -8,15 +8,17 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'pwa-icon-512.png'],
-      // index.html already links the real, hand-authored manifest at
-      // /manifest.json (name/colors matching the site's actual branding and
-      // its own <meta name="theme-color">). vite-plugin-pwa's `manifest`
-      // option would generate a SECOND, independent /manifest.webmanifest
-      // and inject a second <link rel="manifest"> unconditionally — it does
-      // not check for or merge with an existing one — leaving two
-      // conflicting manifests in the page with no defined rule for which a
-      // given browser honours. `manifest: false` disables that generation
-      // entirely so public/manifest.json stays the single source of truth.
+      // index.html already links a real, hand-authored manifest — either
+      // /manifest.json (gallery) or /admin-manifest.json (/admin), swapped
+      // at runtime by App.jsx's useRouteManifest() so each installs with
+      // its own start_url. vite-plugin-pwa's `manifest` option would
+      // generate a SEPARATE, independent /manifest.webmanifest and inject
+      // its own <link rel="manifest"> unconditionally — it does not check
+      // for or merge with the existing one — leaving conflicting manifests
+      // in the page with no defined rule for which a given browser
+      // honours. `manifest: false` disables that generation entirely so
+      // the two hand-authored public/*-manifest.json files stay the
+      // single source of truth.
       manifest: false,
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,json,bin,webp}'],
