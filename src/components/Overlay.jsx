@@ -186,6 +186,13 @@ const STYLES = `
   color: #f4f0e6;
   font-style: italic;
 }
+.ink-modal__signature {
+  display: block;
+  height: 2.6rem;
+  width: auto;
+  margin: 0 0 0.8rem;
+  opacity: 0.92;
+}
 .ink-modal h2 {
   margin: 0 0 1.2rem;
   font-size: 1.05rem;
@@ -410,6 +417,7 @@ const Overlay = () => {
           >
             <VellumFrame />
             <button type="button" className="ink-modal__close" onClick={toggleMenu} aria-label="close" ref={closeButtonRef}>×</button>
+            <img src="/az-signature.svg" alt="" aria-hidden="true" className="ink-modal__signature" />
             <h2 id="ink-modal-title">here lies az</h2>
             <p>{siteContent.about}</p>
             <ul>
