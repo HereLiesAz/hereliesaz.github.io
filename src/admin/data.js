@@ -1,7 +1,8 @@
-// Read-modify-write helpers for the two hand-authored JSON files
-// (painting metadata, site content) plus the painting-removal flow.
-// Kept separate from github.js so that file stays a pure, generic API
-// client with no knowledge of this site's specific file layout.
+// Read-modify-write helpers for the three hand-authored JSON files
+// (painting metadata, site content, per-painting depth-band overrides)
+// plus the painting-removal flow. Kept separate from github.js so that
+// file stays a pure, generic API client with no knowledge of this site's
+// specific file layout.
 import { deleteFile, dispatchWorkflow, getFile, listWorkflowRuns, putFile, textToBase64 } from './github.js';
 
 // Deliberately NOT under public/assets/ — process_art.yml's legacy
@@ -9,6 +10,7 @@ import { deleteFile, dispatchWorkflow, getFile, listWorkflowRuns, putFile, textT
 // metadata-only edit here has nothing to do with that pipeline.
 const META_PATH = 'public/meta.json';
 const SITE_PATH = 'public/site-content.json';
+const BAND_OVERRIDES_PATH = 'public/band-overrides.json';
 
 export async function loadMeta() {
   const file = await getFile(META_PATH);
@@ -27,6 +29,25 @@ export async function saveMetaEntry(id, entry) {
   else meta[id] = entry;
   const body = JSON.stringify(meta, null, 2) + '\n';
   return putFile(META_PATH, textToBase64(body), `admin: update metadata for ${id}`, file?.sha);
+}
+
+export async function loadBandOverrides() {
+  const file = await getFile(BAND_OVERRIDES_PATH);
+  if (!file) return {};
+  try { return JSON.parse(file.content); } catch { return {}; }
+}
+
+/** hidden === null (or empty) removes that id's override entirely — the
+ * painting just renders its full, un-curated band set again, same as
+ * before this file had an entry for it. */
+export async function saveBandOverrideEntry(id, hidden) {
+  const file = await getFile(BAND_OVERRIDES_PATH);
+  let overrides = {};
+  try { overrides = file ? JSON.parse(file.content) : {}; } catch { overrides = {}; }
+  if (!hidden || hidden.length === 0) delete overrides[id];
+  else overrides[id] = { hidden: [...hidden].sort((a, b) => a - b) };
+  const body = JSON.stringify(overrides, null, 2) + '\n';
+  return putFile(BAND_OVERRIDES_PATH, textToBase64(body), `admin: update band overrides for ${id}`, file?.sha);
 }
 
 export async function loadSiteContent() {
@@ -153,6 +174,12 @@ export async function removePainting(id) {
     errors.push(`metadata: ${e.message}`);
   }
 
+  try {
+    await saveBandOverrideEntry(id, null);
+  } catch (e) {
+    errors.push(`band overrides: ${e.message}`);
+  }
+
   pendingRemovalIds.push(id);
   let dispatched = false;
   try {
@@ -171,4 +198,4 @@ export async function removePainting(id) {
   }
 }
 
-export { META_PATH, SITE_PATH };
+export { META_PATH, SITE_PATH, BAND_OVERRIDES_PATH };

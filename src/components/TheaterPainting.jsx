@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import { NULL_DISTANCE, PAINTING_HEIGHT } from '../sceneConstants';
+import { applyHiddenBands } from '../utils/bandOverrides';
 
 // Each painting group is positioned so its shared hinge point lands at a
 // world location marched forward down the pareidolia hinge chain (see
@@ -402,6 +403,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   const [bgInfo, setBgInfo] = useState(null);
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
   const setCurrentResolution = useStore(s => s.setCurrentResolution);
+  const bandOverrides = useStore(s => s.bandOverrides);
   const tmpVec = useRef(new THREE.Vector3());
   // Unique key for this mount's bgSweep entry — see the comment on bgSweep
   // above. Assigned once per mount (a monotonic counter, not id or Math.random,
@@ -450,7 +452,19 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     );
   }, [rotation]);
 
-  const flats = useMemo(() => meta ? buildFlats(meta) : [], [meta]);
+  // Admin-curated depth bands to fold into a neighbor instead of
+  // rendering as their own cutout flat (see /admin's band editor and
+  // src/utils/bandOverrides.js). Applied here, not in the fetch effect
+  // above, so an override edit recomputes flats from the already-fetched
+  // theater.json instead of re-fetching it.
+  const effectiveMeta = useMemo(() => {
+    const hidden = meta && bandOverrides?.[id]?.hidden;
+    if (!meta || !hidden || hidden.length === 0) return meta;
+    const { edges, centers } = applyHiddenBands(meta.depth?.bands?.edges, meta.depth?.bands?.centers, hidden);
+    return { ...meta, depth: { ...meta.depth, bands: { ...meta.depth.bands, edges, centers } } };
+  }, [meta, bandOverrides, id]);
+
+  const flats = useMemo(() => effectiveMeta ? buildFlats(effectiveMeta) : [], [effectiveMeta]);
 
   // Dynamic scale so a painting at NULL_DISTANCE fills the frame. Camera
   // approaches from world origin along the painting's local +Z axis (after

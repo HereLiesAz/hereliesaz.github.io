@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { loadMeta, removePainting, saveMetaEntry } from './data.js';
+import BandEditor from './BandEditor.jsx';
 
 const BLANK = { title: '', description: '', tags: '', forSale: false, price: '', currency: 'USD' };
 
@@ -11,6 +12,10 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
   const [form, setForm] = useState(BLANK);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState(null); // null | 'saving' | 'saved' | 'removing' | { error }
+  // Lazy: BandEditor loads the full painting + depth images and does
+  // per-pixel canvas work to build previews — real cost, not worth paying
+  // just from opening a painting to edit its title.
+  const [showBands, setShowBands] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,6 +113,12 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
           <input className="admin-input" style={{ maxWidth: '6rem' }} value={form.currency} onChange={set('currency')} placeholder="USD" aria-label="currency" />
         </div>
       )}
+
+      <h3>Depth layers</h3>
+      <button type="button" className="admin-btn-plain" onClick={() => setShowBands(v => !v)} aria-expanded={showBands}>
+        {showBands ? 'hide layer editor' : 'edit layers'}
+      </button>
+      {showBands && <BandEditor id={id} />}
 
       <div className="admin-row">
         <button type="button" onClick={save} disabled={status === 'saving' || status === 'removed' || (status && status.removedWithWarning)}>{status === 'saving' ? 'saving…' : 'save'}</button>
