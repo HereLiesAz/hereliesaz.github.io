@@ -55,12 +55,18 @@ export default function BandEditor({ id }) {
   const [status, setStatus] = useState('loading'); // loading | ready | { error } | 'saving' | 'saved'
   const [bands, setBands] = useState([]); // [{ index, min, max, preview }]
   const [hidden, setHidden] = useState(() => new Set());
+  // The raw source images, for the reference preview above the band grid
+  // — not masked, just the two inputs the band cutouts are computed from,
+  // so a duplicate-looking pair of layers can be checked against what the
+  // depth map actually says is going on at that point in the painting.
+  const [sources, setSources] = useState(null); // { painting, depth }
 
   useEffect(() => {
     let cancelled = false;
     setStatus('loading');
     setBands([]);
     setHidden(new Set());
+    setSources(null);
 
     (async () => {
       const [theaterRes, overrides] = await Promise.all([
@@ -80,6 +86,7 @@ export default function BandEditor({ id }) {
         loadImage(`/data/theater/${encodeURIComponent(theater.depth.file || `${id}.depth.png`)}`),
       ]);
       if (cancelled) return;
+      setSources({ painting: paintingImg.src, depth: depthImg.src });
 
       const built = centers.map((_, i) => ({
         index: i,
@@ -123,6 +130,18 @@ export default function BandEditor({ id }) {
 
   return (
     <div>
+      {sources && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6em', margin: '0.6em 0' }}>
+          <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+            <img src={sources.painting} alt="painting" style={{ width: '100%', display: 'block', background: '#000' }} />
+            <span style={{ fontSize: '0.65rem', opacity: 0.6 }}>painting</span>
+          </div>
+          <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+            <img src={sources.depth} alt="depth map" style={{ width: '100%', display: 'block', background: '#000' }} />
+            <span style={{ fontSize: '0.65rem', opacity: 0.6 }}>depth map (brighter = closer to camera, darker = farther)</span>
+          </div>
+        </div>
+      )}
       <p style={{ fontSize: '0.75rem', opacity: 0.6 }}>
         Each tile is one depth layer, darkest/farthest first. Hide the ones that look like duplicates of a
         neighbor — hidden layers fold into whichever visible layer is next to them, so nothing goes missing,
