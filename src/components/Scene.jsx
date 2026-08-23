@@ -72,6 +72,7 @@ export default function Scene() {
   const setStartNode = useStore(state => state.setStartNode);
   const setLoadError = useStore(state => state.setLoadError);
   const setMeta = useStore(state => state.setMeta);
+  const setBandOverrides = useStore(state => state.setBandOverrides);
   const nodeCount = useStore(state => state.nodes.length);
 
   // Hand-authored title/description/tags/price, edited via /admin. Best
@@ -85,6 +86,20 @@ export default function Scene() {
       .then(meta => { if (!cancelled) setMeta(meta); });
     return () => { cancelled = true; };
   }, [setMeta]);
+
+  // Hand-authored, per-painting depth-band visibility, edited via /admin's
+  // band editor. Same best-effort fetch pattern as meta.json above — a
+  // missing/malformed file just means every painting renders its full,
+  // un-curated band set (TheaterPainting.jsx's applyHiddenBands() is a
+  // no-op with no override present).
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/band-overrides.json')
+      .then(r => (r.ok ? r.json() : {}))
+      .catch(() => ({}))
+      .then(overrides => { if (!cancelled) setBandOverrides(overrides); });
+    return () => { cancelled = true; };
+  }, [setBandOverrides]);
 
   // A window resize changes computeFitScale's result (see useStore.jsx),
   // which the already-built activeClusters/segments chain baked in at

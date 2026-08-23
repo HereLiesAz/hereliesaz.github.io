@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { loadMeta, removePainting, saveMetaEntry } from './data.js';
+import BandEditor from './BandEditor.jsx';
 
 const BLANK = { title: '', description: '', tags: '', forSale: false, price: '', currency: 'USD' };
 
@@ -11,6 +12,10 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
   const [form, setForm] = useState(BLANK);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState(null); // null | 'saving' | 'saved' | 'removing' | { error }
+  // Lazy: BandEditor loads the full painting + depth images and does
+  // per-pixel canvas work to build previews — real cost, not worth paying
+  // just from opening a painting to edit its title.
+  const [showBands, setShowBands] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,12 +114,24 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
         </div>
       )}
 
+      <h3>Depth layers</h3>
+      <button type="button" className="admin-btn-plain" onClick={() => setShowBands(v => !v)} aria-expanded={showBands}>
+        {showBands ? 'hide layer editor' : 'edit layers'}
+      </button>
+      {showBands && <BandEditor id={id} />}
+
       <div className="admin-row">
         <button type="button" onClick={save} disabled={status === 'saving' || status === 'removed' || (status && status.removedWithWarning)}>{status === 'saving' ? 'saving…' : 'save'}</button>
         <button type="button" onClick={remove} disabled={status === 'removing' || status === 'removed' || (status && status.removedWithWarning)} className="admin-btn-danger">
           {status === 'removing' ? 'removing…' : (status === 'removed' || (status && status.removedWithWarning)) ? 'removal dispatched' : 'remove from site'}
         </button>
       </div>
+      {status === 'removing' && (
+        <p role="status" aria-live="polite" style={{ fontSize: '0.75rem', opacity: 0.6 }}>
+          Waiting for it to be safe to dispatch — if another removal is still running, this can take a few minutes
+          rather than a few seconds. That's expected, not stuck.
+        </p>
+      )}
       {status === 'saved' && <p className="admin-ok" role="status" aria-live="polite">Saved — live after the next deploy (usually under a minute).</p>}
       {(status === 'removed' || (status && status.removedWithWarning)) && (
         <p className="admin-ok" role="status" aria-live="polite">

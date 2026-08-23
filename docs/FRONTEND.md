@@ -183,15 +183,29 @@ a normal gallery visitor's bundle never grows because of them.
 `/admin` is a mobile-first content-management PWA: paste a GitHub
 fine-grained personal access token once (`TokenSetup.jsx`, stored in
 `localStorage`, never sent anywhere but the GitHub REST API) and then
-add/remove paintings and edit their metadata, or edit
-`public/site-content.json` (the gallery menu's links/about text), all via
-direct browser calls to the Contents and Actions APIs (`github.js`) — no
-backend. Adding a painting commits the photo to `public/assets/` and
-dispatches `theater_bake.yml`; removing one deletes the source photo and
-dispatches `remove_painting.yml`. Neither workflow's completion is waited
-on synchronously — the admin UI reports "dispatched," and the actual
-bake/removal + redeploy runs in the background over the next few minutes
-(see `.github/workflows/`).
+add/remove paintings and edit their metadata, curate which depth bands a
+painting renders (`BandEditor.jsx`, writing `public/band-overrides.json`
+— see below), or edit `public/site-content.json` (the gallery menu's
+links/about text), all via direct browser calls to the Contents and
+Actions APIs (`github.js`) — no backend. Adding a painting commits the
+photo to `public/assets/` and dispatches `theater_bake.yml`; removing one
+deletes the source photo and dispatches `remove_painting.yml` (batched —
+see its own comments and `data.js`'s `flushRemovalQueue()` for why one
+dispatch per id isn't safe). Band-override and metadata edits need no
+dispatch at all — they're pure `main`-branch commits, live on the very
+next deploy. None of the workflow dispatches are waited on synchronously
+— the admin UI reports "dispatched," and the actual bake/removal +
+redeploy runs in the background over the next few minutes (see
+`.github/workflows/`).
+
+`public/band-overrides.json` (keyed by painting id: `{ hidden:
+[bandIndex, ...] }`) lets specific depth bands be folded into a
+neighboring band instead of rendered as their own cutout flat —
+`src/utils/bandOverrides.js`'s `applyHiddenBands()` does the folding,
+applied by `TheaterPainting.jsx` at render time against the id's
+already-baked `theater.json`. This is purely a rendering-time curation
+layer on top of the bake output, not a re-bake — the Python pipeline
+never sees it and never needs to.
 
 `/admin` is deliberately not linked anywhere in the gallery UI or its
 menu — reached only by navigating to it directly. The token is the real

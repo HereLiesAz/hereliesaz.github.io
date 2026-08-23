@@ -354,6 +354,16 @@ const useStore = create((set, get) => ({
   meta: {},
   setMeta: (meta) => set({ meta: meta && typeof meta === 'object' ? meta : {} }),
 
+  // Hand-authored, keyed by painting id: { hidden: [bandIndex, ...] } —
+  // depth bands to fold into a neighbor instead of rendering as their own
+  // cutout flat (see src/utils/bandOverrides.js and TheaterPainting.jsx's
+  // buildFlats()). Lives at /band-overrides.json (main branch, edited via
+  // /admin), same fetch/fallback pattern as `meta` above.
+  bandOverrides: {},
+  setBandOverrides: (bandOverrides) => set({
+    bandOverrides: bandOverrides && typeof bandOverrides === 'object' ? bandOverrides : {},
+  }),
+
   setGraph: (graphData) => {
     if (!graphData) return;
     set({
