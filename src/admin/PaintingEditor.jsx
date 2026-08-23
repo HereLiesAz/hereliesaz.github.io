@@ -115,6 +115,12 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
           {status === 'removing' ? 'removing…' : (status === 'removed' || (status && status.removedWithWarning)) ? 'removal dispatched' : 'remove from site'}
         </button>
       </div>
+      {status === 'removing' && (
+        <p role="status" aria-live="polite" style={{ fontSize: '0.75rem', opacity: 0.6 }}>
+          Waiting for it to be safe to dispatch — if another removal is still running, this can take a few minutes
+          rather than a few seconds. That's expected, not stuck.
+        </p>
+      )}
       {status === 'saved' && <p className="admin-ok" role="status" aria-live="polite">Saved — live after the next deploy (usually under a minute).</p>}
       {(status === 'removed' || (status && status.removedWithWarning)) && (
         <p className="admin-ok" role="status" aria-live="polite">

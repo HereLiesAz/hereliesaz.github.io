@@ -1,10 +1,25 @@
 name: Remove Painting
 
-# Deletes one painting's baked artifacts from art-data and rebuilds the
-# manifest + pareidolia hinge graph so nothing dangles a reference to it.
-# Dispatched by the /admin app (src/admin/data.js's removePainting()) after
-# it deletes the source photo from main via the Contents API — this
-# workflow only ever touches art-data.
+# Deletes one or more paintings' baked artifacts from art-data and rebuilds
+# the manifest + pareidolia hinge graph so nothing dangles a reference to
+# them. Dispatched by the /admin app (src/admin/data.js's
+# flushRemovalQueue()) after it deletes each source photo from main via the
+# Contents API — this workflow only ever touches art-data.
+#
+# Accepts a comma-separated `ids` batch (not one id per dispatch) — see
+# src/admin/data.js's flushRemovalQueue() for why: GitHub Actions'
+# `cancel-in-progress: false` concurrency only reserves ONE queued run
+# behind whatever's currently in progress; a THIRD dispatch while one is
+# running and one is already queued doesn't queue behind it, it CANCELS the
+# previously-queued run outright without ever running its steps. A user
+# rapid-fire-removing several paintings (faster than one run's ~30-90s
+# actual runtime, which is a normal clicking pace) silently dropped most of
+# those removals this way — main's source photo + metadata were already
+# gone, but art-data's baked files, manifest, and hinge graph never got
+# cleaned up for that id. The client now serializes itself (never more than
+# one run of this workflow in flight at a time) and batches whatever piled
+# up while a previous run was in progress into one `ids` dispatch instead
+# of firing one per id, which also sidesteps the eviction entirely.
 #
 # IMPORTANT: unlike theater_bake.yml/process_art.yml/bootstrap.yml (which
 # all publish to art-data with keep_files:true, because each only adds/
@@ -15,14 +30,14 @@ name: Remove Painting
 # the clean-before-copy step. Correctness here instead comes from mirroring
 # the ENTIRE art-data branch into public/data first (same rsync theater_
 # bake.yml uses), so the local tree is a complete, faithful copy of
-# art-data with only the intended 3 files missing — safe to publish as a
+# art-data with only the intended files missing — safe to publish as a
 # full replacement.
 
 on:
   workflow_dispatch:
     inputs:
-      id:
-        description: "Painting id (filename stem) to remove."
+      ids:
+        description: "Comma-separated painting ids (filename stems) to remove."
         required: true
 
 concurrency:
@@ -60,30 +75,33 @@ jobs:
           mkdir -p public/data
           rsync -a --exclude='.git' _artdata/ public/data/
 
-      - name: Delete baked artifacts for this id
+      - name: Delete baked artifacts for these ids
         env:
           # Passed via env, not spliced directly into the script as
-          # `${{ github.event.inputs.id }}` — see theater_bake.yml's "Bake
+          # `${{ github.event.inputs.ids }}` — see theater_bake.yml's "Bake
           # theater layers" step for why direct interpolation into a run:
           # script is a shell-injection primitive. This job has
           # contents:write, so an unescaped id is a real risk, not just
           # theoretical.
-          ID_INPUT: ${{ github.event.inputs.id }}
+          IDS_INPUT: ${{ github.event.inputs.ids }}
         run: |
-          ID="$ID_INPUT"
-          if [ -z "$ID" ]; then echo "::error::id input is required"; exit 1; fi
-          case "$ID" in
-            */*|*..*) echo "::error::id must not contain path separators or '..'"; exit 1 ;;
-          esac
+          if [ -z "$IDS_INPUT" ]; then echo "::error::ids input is required"; exit 1; fi
           DIR="public/data/theater"
-          FOUND=0
-          for suffix in painting.webp depth.png theater.json; do
-            f="$DIR/$ID.$suffix"
-            if [ -f "$f" ]; then rm -f "$f"; FOUND=1; fi
+          IFS=',' read -ra IDS <<< "$IDS_INPUT"
+          for ID in "${IDS[@]}"; do
+            if [ -z "$ID" ]; then continue; fi
+            case "$ID" in
+              */*|*..*) echo "::error::id '$ID' must not contain path separators or '..'"; exit 1 ;;
+            esac
+            FOUND=0
+            for suffix in painting.webp depth.png theater.json; do
+              f="$DIR/$ID.$suffix"
+              if [ -f "$f" ]; then rm -f "$f"; FOUND=1; fi
+            done
+            if [ "$FOUND" -eq 0 ]; then
+              echo "::warning::no baked files found for id '$ID' — it may already be removed, or never finished baking. Continuing so the manifest/graph still get rebuilt clean."
+            fi
           done
-          if [ "$FOUND" -eq 0 ]; then
-            echo "::warning::no baked files found for id '$ID' — it may already be removed, or never finished baking. Continuing so the manifest/graph still get rebuilt clean."
-          fi
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -116,4 +134,4 @@ jobs:
           publish_dir: ./public/data
           publish_branch: art-data
           keep_files: false
-          commit_message: "Remove painting: ${{ github.event.inputs.id }}"
+          commit_message: "Remove painting(s): ${{ github.event.inputs.ids }}"
