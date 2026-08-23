@@ -1,9 +1,25 @@
 {
-  "about": "The canvas is a closet. The paint is light. You navigate the dark by following what your eye almost-recognises.",
+  "about": "\"... the visual aesthetic of an inside joke told at a funeral.\"",
   "menuLinks": [
-    { "label": "github", "href": "https://github.com/HereLiesAz", "external": true },
-    { "label": "instagram", "href": "https://instagram.com/hereliesaz", "external": true },
-    { "label": "email", "href": "mailto:hereliesaz@gmail.com", "external": false },
-    { "label": "projects", "href": "/projects", "external": false }
+    {
+      "label": "github",
+      "href": "https://github.com/HereLiesAz",
+      "external": true
+    },
+    {
+      "label": "instagram",
+      "href": "https://instagram.com/hereliesaz",
+      "external": true
+    },
+    {
+      "label": "email",
+      "href": "mailto:hereliesaz@gmail.com",
+      "external": false
+    },
+    {
+      "label": "projects",
+      "href": "/projects",
+      "external": false
+    }
   ]
 }
