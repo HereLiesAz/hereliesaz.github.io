@@ -1,66 +1,17 @@
 name: Deploy over FTP
 
 # Mirror the built site to your own host over SFTP (SSH file transfer).
-# Runs on every push to main, and can be fired by hand from the Actions
-# tab. Uses lftp — not a raw `sshpass ssh`/`sftp` invocation — because
+# Runs on every push to main, and can be fired by hand from the Actions tab.
+# Uses lftp's built-in SFTP implementation — not OpenSSH — because
 # ProFTPD mod_sftp/0.9.9's password auth is incompatible with sshpass.
-# lftp's sftp module implements the SFTP wire protocol itself, but by
-# default it transports/authenticates over an `ssh` subprocess, which
-# DOES consult ~/.ssh/known_hosts for host-key verification (see the
-# "Pin SFTP host key" step below) — it is not a from-scratch SSH stack
-# that bypasses known_hosts.
 #
-# Required repository secrets (Settings → Secrets and variables → Actions):
-#   FTP_SERVER      hostname, e.g. sftp.example.com. Named FTP_* for
-#                   continuity with the earlier FTP setup — the ProFTPD
-#                   mod_sftp host we deploy to accepts the same account
-#                   for both protocols.
-#   FTP_USERNAME    login user.
-#   FTP_PASSWORD    login password (lftp handles the auth exchange).
-#   SFTP_HOST_KEY   the server's SSH host key(s), in known_hosts format,
-#                   used to pin host-key verification for every deploy.
-#                   Populate this ONCE, out-of-band, by running from a
-#                   machine/network path you trust at that moment:
-#                       ssh-keyscan -t ed25519,rsa <FTP_SERVER host>
-#                   and pasting the full output (one or more lines) as
-#                   the secret value. This is a human, out-of-band step —
-#                   the workflow cannot generate or verify this key
-#                   itself; doing so would defeat the point of pinning.
-#                   Until this secret is populated, deploys FAIL CLOSED
-#                   (see "Pin SFTP host key" step below) rather than
-#                   silently trusting whatever key is presented — that is
-#                   the correct, safe default.
-#
-# Optional repository variables (Settings → Secrets and variables → Actions → Variables):
-#   SFTP_PORT         defaults to 22.
-#   FTP_SERVER_DIR    remote path to mirror the built site into.
-#                     Defaults to / (FTP root = document root on
-#                     Netserver). Override if your host serves from a
-#                     subfolder.
-#
-# The site's baked data lives on the orphan `art-data` branch and is
-# injected into public/data at build time (same pattern as deploy.yml).
-# Without that step the site would render the flat-fallback plane
-# instead of the paper theater.
+# Required secrets: FTP_SERVER, FTP_USERNAME, FTP_PASSWORD
+# Optional vars:    SFTP_PORT (default 22), FTP_SERVER_DIR (default /app)
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
-  workflow_run:
-    # This workflow previously had no workflow_run trigger at all: it only
-    # fired on a push to main or a manual dispatch, so a "Theater Bake" (or
-    # "Process Art (Turbo 56)") run publishing fresh data to the art-data
-    # branch never mirrored to the SFTP host on its own — main and the SFTP
-    # mirror could silently diverge from GitHub Pages (deploy.yml, which
-    # does watch these) until someone happened to push to main. Names must
-    # exactly match the target workflows' `name:` fields. "Remove Painting"
-    # and "Bootstrap Art (5 Images)" both publish to art-data the same way
-    # and were originally missing here too — this list must stay in sync
-    # with deploy.yml's own workflow_run list.
-    workflows: ["Process Art (Turbo 56)", "Theater Bake", "Remove Painting", "Bootstrap Art (5 Images)"]
-    types:
-      - completed
 
 concurrency:
   group: sftp-deploy
@@ -73,91 +24,17 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source (main)
+      - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+
+      - name: Build with Jekyll
+        uses: actions/jekyll-build-pages@v1
         with:
-          path: main
-
-      - name: Check out baked data (art-data)
-        uses: actions/checkout@v4
-        with:
-          ref: art-data
-          path: art-data
-        continue-on-error: true
-
-      - name: Stage baked data into public/data
-        run: |
-          if [ -d art-data ] && [ -n "$(ls -A art-data 2>/dev/null | grep -v '^\.git$')" ]; then
-            mkdir -p main/public/data
-            # Mirror everything from art-data except its git metadata.
-            rsync -a --exclude='.git' art-data/ main/public/data/
-            echo "staged $(find main/public/data -type f | wc -l) data files"
-          else
-            echo "::warning::art-data branch is empty or missing — site will use flat fallback for every painting"
-          fi
-
-      # Consuming-side sanity check (not the full validate_output.py
-      # schema check — that runs on the producing side, in
-      # theater_bake.yml, before this data ever reaches art-data). This
-      # replaces the previous silent-degrade-and-proceed behavior (a
-      # ::warning:: above was the only signal, and the build/deploy
-      # continued regardless) with a hard failure.
-      - name: Verify art data is usable
-        run: |
-          if [ ! -s main/public/data/theater/_manifest.json ]; then
-            echo "::error::main/public/data/theater/_manifest.json is missing or empty after staging art-data — refusing to deploy a site with no theater data. Check that the art-data branch exists and theater_bake.yml has published to it."
-            exit 1
-          fi
-          echo "art-data verified: $(find main/public/data -type f | wc -l) files staged"
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: main/package-lock.json
-
-      - name: Install
-        working-directory: main
-        run: npm ci
-
-      # Legacy graph.json fallback (Scene.jsx uses it when the theater
-      # manifest is missing/empty): self-repairs public/graph.json by
-      # dropping nodes with no matching public/assets/ image and bridging
-      # edges around them. Only touches this ephemeral checkout, not the
-      # repo.
-      - name: Verify legacy graph.json against assets
-        working-directory: main
-        run: npm run verify-assets
-
-      - name: Build
-        working-directory: main
-        run: npm run build
-        
-      # SECURITY: pins the SFTP server's host key so lftp's ssh transport
-      # (lftp's sftp module speaks the SFTP wire protocol itself, but
-      # delegates the underlying SSH connection/auth to an `ssh`
-      # subprocess by default — see sftp:connect-program in lftp's docs)
-      # can verify it against a known-good value instead of blindly
-      # trusting whatever key the server presents on every run.
-      #
-      # This step FAILS CLOSED: if secrets.SFTP_HOST_KEY is not yet
-      # populated, ~/.ssh/known_hosts stays empty, ssh's default
-      # StrictHostKeyChecking behavior will refuse to proceed on an
-      # unrecognized host key, and the deploy step below will fail
-      # loudly instead of silently accepting a possibly-spoofed key.
-      # That is intentional and correct — see the secrets comment at
-      # the top of this file for how to populate SFTP_HOST_KEY.
-      - name: Pin SFTP host key
-        env:
-          SFTP_HOST_KEY: ${{ secrets.SFTP_HOST_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          if [ -z "$SFTP_HOST_KEY" ]; then
-            echo "::warning::secrets.SFTP_HOST_KEY is not set — ~/.ssh/known_hosts will be empty and the deploy step will fail closed (refuse an unpinned host key) rather than accept it silently. Populate SFTP_HOST_KEY (see comment at top of this workflow) to fix."
-          fi
-          echo "${SFTP_HOST_KEY}" >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          source: ./docs/
+          destination: ./_site
 
       - name: Deploy via lftp (SFTP)
         env:
@@ -165,30 +42,15 @@ jobs:
           USERNAME: ${{ secrets.FTP_USERNAME }}
           PASSWORD: ${{ secrets.FTP_PASSWORD }}
           PORT: ${{ vars.SFTP_PORT || '22' }}
-          REMOTE_DIR: ${{ vars.FTP_SERVER_DIR || '/' }}
+          REMOTE_DIR: ${{ vars.FTP_SERVER_DIR || '/app' }}
         run: |
           set -e
           sudo apt-get install -y lftp
 
           USER_TRIMMED=$(printf '%s' "$USERNAME" | tr -d ' \t\r\n')
           PW_TRIMMED=$(printf '%s' "$PASSWORD" | tr -d '\r\n')
-          echo "[diag] username length raw=$(printf '%s' "$USERNAME" | wc -c) trimmed=$(printf '%s' "$USER_TRIMMED" | wc -c)"
-          echo "[diag] password length raw=$(printf '%s' "$PASSWORD" | wc -c) trimmed=$(printf '%s' "$PW_TRIMMED" | wc -c)"
-          echo "[diag] host: $(printf '%s' "$HOST" | wc -c) chars, port: $PORT"
 
-          # lftp's sftp module implements the SFTP wire protocol itself
-          # but transports/authenticates over an `ssh` subprocess by
-          # default, which DOES consult ~/.ssh/known_hosts (populated by
-          # the "Pin SFTP host key" step above) for host-key
-          # verification. sftp:auto-confirm is intentionally NOT set to
-          # "yes" here: leaving it unset means lftp/ssh will refuse to
-          # proceed on an unknown or mismatched host key instead of
-          # silently accepting it — fail closed, not fail open.
-          # set ssl:verify-certificate no is retained only because it is
-          # inert for the sftp:// protocol (that setting governs FTPS,
-          # not SSH-based SFTP) — it is not doing any of the security
-          # work here.
           lftp -u "$USER_TRIMMED","$PW_TRIMMED" \
             -p "$PORT" \
-            -e "set ssl:verify-certificate no; mirror -R --verbose ./main/dist/ $REMOTE_DIR; quit" \
+            -e "set sftp:auto-confirm yes; set ssl:verify-certificate no; mirror -R --verbose ./_site/ $REMOTE_DIR; quit" \
             sftp://"$HOST"

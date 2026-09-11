@@ -1,182 +1,148 @@
-name: Backup
+name: "Context Backup (Universal Surgical)"
 
 on:
   workflow_dispatch:
-    inputs:
-      reason:
-        description: 'Justification for this digital hoarding'
-        required: false
-        default: 'Paranoia'
+
+permissions:
+  contents: read
 
 jobs:
-  backup:
-    runs-on: windows-latest
-    # This job only reads the checked-out tree and uploads a build
-    # artifact — no GitHub API calls anywhere in the script, so
-    # pull-requests: write (previously requested but unused) is dropped.
-    permissions:
-      contents: read
-    name: Execute Backup Protocol
-
+  surgical-extraction:
+    runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout Source
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Run Backup Script
-        id: run_backup
-        shell: pwsh
+      - name: Generate Surgical Context
+        shell: bash
         run: |
-          # --- Embedding User Script ---
+          TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+          OUTFILE="project_backup_surgical_${TIMESTAMP}.txt"
+          MANIFEST="skipped_files.tmp"
+
+          # --- CONFIGURATION ---
           
-          # Configuration
-          $ScriptName = "backup.ps1"
-          $BackupPrefix = "project_backup"
-          $Timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
-          $PSScriptRoot = Get-Location
-          $BackupFile = Join-Path -Path $PSScriptRoot -ChildPath "${BackupPrefix}_full_${Timestamp}.txt"
-          $FileSizeLimit = 500KB
+          # 1. TRASH (Dead to us. Never listed, never read.)
+          TRASH_DIRS="build out bin obj .gradle .idea .vscode .git node_modules captures captured .cxx generated build_test libs venv __pycache__ .dart_tool .next .nuxt dist site-packages .pytest_cache"
+          TRASH_FILES="package-lock.json yarn.lock local.properties .DS_Store Thumbs.db"
 
-          # Directories to exclude.
-          $excludeDirs = @(
-              ".git", ".gradle", ".idea", ".vscode", ".cxx", "build", "captures", "dist",
-              "node_modules", "out", "coverage", ".next", "bin", "obj", "__pycache__", "libs",
-              "opencv*", "*/absl", "*/eigen/Eigen", "*/libs/", 
-              "data" 
+          # 2. WHITELIST (We read the content of these.)
+          EXTENSIONS=(
+              # JVM / Android
+              "kt" "kts" "java" "xml" "gradle" "properties" "pro" "toml"
+              
+              # NDK / Native
+              "cpp" "c" "cc" "h" "hpp" "ld" "S" "cmake" "in"
+              
+              # Web (JS/TS/Frameworks)
+              "js" "jsx" "ts" "tsx" "html" "css" "vue" "svelte" "json"
+              
+              # Flutter / Dart
+              "dart" "arb"
+              
+              # Python
+              "py" "ipynb" "ini" "cfg"
+              
+              # Config / Data / Docs (UPDATED)
+              "yaml" "yml" "sql" "env"
+              "md" "markdown" "rst" "adoc" "txt"
           )
-
-          # File patterns to exclude.
-          $excludeFiles = @(
-              $ScriptName,
-              "${BackupPrefix}*.txt",
-              "local.properties", "gradlew", "gradlew.bat",
-              "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-              "*.iml", "*.log", "*.map",
-              "*.so", "lib*.so", "*.dylib", "*.dll", "*.obj", "*.o", "*.a", "*.lib",
-              "*.apk", "*.aar", "*.dex", "*.class",
-              "*.exe", "*.bin", "*.msi",
-              "*.zip", "*.tar", "*.gz", "*.rar", "*.7z", "*.jar",
-              "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.ico", "*.webp", "*.bmp", "*.tiff",
-              "*.HEIC", "*.heic",
-              "*.mp3", "*.mp4", "*.wav", "*.avi", "*.mov", "*.mkv",
-              "*.ttf", "*.otf", "*.woff", "*.woff2", "*.eot",
-              ".DS_Store", "Thumbs.db"
-          )
-
-          # --- Helper: Check if Item should be Excluded ---
-          function Test-IsExcluded {
-              param (
-                  [System.IO.FileInfo]$Item,
-                  [string]$RootPath
-              )
-
-              # 1. Name Check
-              foreach ($pattern in $excludeFiles) {
-                  if ($Item.Name -like $pattern) { return $true }
-              }
-
-              # 2. Path Check (Directories)
-              $normalizedPath = $Item.FullName.Replace($RootPath, "").TrimStart("\/")
-              $pathParts = $normalizedPath -split "[\\/]"
-
-              foreach ($part in $pathParts) {
-                  if ($excludeDirs -contains $part) { return $true }
-              }
-
-              return $false
-          }
-
-          # --- .gitignore Assimilation ---
-          if (Test-Path "$PSScriptRoot\.gitignore") {
-              Write-Host "Parsing .gitignore..." -ForegroundColor Cyan
-              $gitIgnoreContent = Get-Content "$PSScriptRoot\.gitignore"
-              foreach ($line in $gitIgnoreContent) {
-                  if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("#") -or $line.StartsWith("!")) { continue }
-                  $cleanLine = $line.Trim().Replace('/', [System.IO.Path]::DirectorySeparatorChar)
-
-                  if ($cleanLine.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-                      $dirName = $cleanLine.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
-                      if ($excludeDirs -notcontains $dirName) { $excludeDirs += $dirName }
-                  } else {
-                      if ($excludeFiles -notcontains $cleanLine) { $excludeFiles += $cleanLine }
-                  }
-              }
-          }
-
-          # --- Function: Generate File Tree ---
-          function Write-FileTree {
-              param (
-                  [string]$Path,
-                  [string]$Indent,
-                  [bool]$IsLast,
-                  [string]$RootPath
-              )
-
-              $g_last   = "$([char]0x2514)$([char]0x2500)$([char]0x2500) "
-              $g_branch = "$([char]0x251C)$([char]0x2500)$([char]0x2500) "
-              $g_vert   = "$([char]0x2502)   "
-              $g_empty  = "    "
-
-              $items = Get-ChildItem -Path $Path -Force | Where-Object {
-                  $isExcluded = $false
-                  if ($_.PSIsContainer) {
-                      if ($excludeDirs -contains $_.Name) { $isExcluded = $true }
-                  } else {
-                      foreach ($pattern in $excludeFiles) {
-                          if ($_.Name -like $pattern) { $isExcluded = $true; break }
-                      }
-                  }
-                  return -not $isExcluded
-              }
-
-              $count = $items.Count
-              $i = 0
-
-              foreach ($item in $items) {
-                  $i++
-                  $isLastItem = ($i -eq $count)
-                  if ($isLastItem) { $marker = $g_last } else { $marker = $g_branch }
-                  $line = "$Indent$marker$($item.Name)"
-                  Add-Content -Path $BackupFile -Value $line
-
-                  if ($item.PSIsContainer) {
-                      if ($isLastItem) { $nextIndent = $g_empty } else { $nextIndent = $g_vert }
-                      $newIndent = $Indent + $nextIndent
-                      Write-FileTree -Path $item.FullName -Indent $newIndent -IsLast $isLastItem -RootPath $RootPath
-                  }
-              }
-          }
-
-          # --- Execution ---
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          Write-Host "Initializing Backup..." -ForegroundColor Green
-          Set-Content -Path $BackupFile -Value "# PROJECT BACKUP: $Timestamp"
-          Add-Content -Path $BackupFile -Value "# NOTE: Binary files and 'libs' directory excluded."
-          Add-Content -Path $BackupFile -Value "`n# --- PROJECT STRUCTURE ---"
-          Write-FileTree -Path $PSScriptRoot -Indent "" -IsLast $true -RootPath $PSScriptRoot
-          Add-Content -Path $BackupFile -Value "`n# --- FILE CONTENTS ---"
-
-          Get-ChildItem -Path $PSScriptRoot -Recurse -File | ForEach-Object {
-              $file = $_
-              if (Test-IsExcluded -Item $file -RootPath $PSScriptRoot) { return }
-              if ($file.Length -gt $FileSizeLimit) {
-                  Add-Content -Path $BackupFile -Value "`n## FILE: $($file.FullName.Replace($PSScriptRoot, '.')) [SKIPPED - TOO LARGE]"
-                  return
-              }
-              try { $content = Get-Content $file.FullName -Raw } catch { return }
-              if (-not [string]::IsNullOrWhiteSpace($content)) {
-                  if ($content.Contains("`0")) { return }
-                  $relativePath = $file.FullName.Replace($PSScriptRoot, '.')
-                  Add-Content -Path $BackupFile -Value "`n## FILE: $relativePath"
-                  Add-Content -Path $BackupFile -Value $content.Trim()
-              }
-          }
           
-          echo "BACKUP_PATH=$BackupFile" >> $env:GITHUB_ENV
-          Write-Host "✅ Backup complete." -ForegroundColor Green
+          # Specific critical filenames
+          CRITICAL_FILES=("CMakeLists.txt" "Android.mk" "Application.mk" "Makefile" "Dockerfile" "docker-compose.yml" "requirements.txt" "Gemfile" "Rakefile" "LICENSE" "README")
+
+          echo -e "\033[36m[+] Starting Universal Surgical Extraction...\033[0m"
+
+          # Helper: Check for binary content
+          is_binary() {
+              if head -c 512 "$1" | grep -qP '\x00'; then return 0; else return 1; fi
+          }
+
+          # 1. FIND ALL "ALIVE" FILES (Everything except Trash Dirs)
+          if [ -d ".git" ]; then
+              # Git is smarter about ignoring trash, so we use it if possible
+              FILES=$(git ls-files -c -o --exclude-standard)
+          else
+              FILES=$(find . -type f)
+          fi
+
+          touch "$OUTFILE"
+          touch "$MANIFEST"
+
+          echo "$FILES" > filelist.tmp
+          
+          while IFS= read -r file; do
+              # A. TRASH FILTER (Double Check)
+              SKIP=0
+              for trash in $TRASH_DIRS; do
+                  if [[ "$file" == *"/$trash/"* ]] || [[ "$file" == "$trash/"* ]] || [[ "$file" == *"/$trash" ]]; then
+                      SKIP=1; break
+                  fi
+              done
+              basename=$(basename "$file")
+              for trash in $TRASH_FILES; do
+                  if [[ "$basename" == "$trash" ]]; then SKIP=1; break; fi
+              done
+              if [[ "$SKIP" -eq 1 ]]; then continue; fi
+
+              # B. WHITELIST CHECK
+              IS_WHITELISTED=0
+              ext="${file##*.}"
+              
+              # Check extension
+              for valid_ext in "${EXTENSIONS[@]}"; do
+                  if [[ "$ext" == "$valid_ext" ]]; then IS_WHITELISTED=1; break; fi
+              done
+              
+              # Check filename
+              if [[ "$IS_WHITELISTED" -eq 0 ]]; then
+                  for valid_name in "${CRITICAL_FILES[@]}"; do
+                      if [[ "$basename" == "$valid_name" ]]; then IS_WHITELISTED=1; break; fi
+                  done
+              fi
+
+              # C. ACTION
+              if [[ "$IS_WHITELISTED" -eq 1 ]]; then
+                  # It's on the list. Add CONTENT.
+                  echo ">>> $file" >> "$OUTFILE"
+                  if is_binary "$file"; then
+                      echo "[BINARY CONTENT REDACTED]" >> "$OUTFILE"
+                  else
+                      cat "$file" >> "$OUTFILE" 2>>/dev/null || echo "[READ ERROR]" >> "$OUTFILE"
+                  fi
+                  echo -e "\n\n" >> "$OUTFILE"
+              else
+                  # It's not trash, but not whitelisted. Add to MANIFEST.
+                  echo "$file" >> "$MANIFEST"
+              fi
+
+          done < filelist.tmp
+          rm filelist.tmp
+
+          # D. APPEND MANIFEST
+          echo -e "\n\n==================================================================" >> "$OUTFILE"
+          echo "       SKIPPED FILES REPORT (The Grey Zone)" >> "$OUTFILE"
+          echo "       (Files present in repo but extensions not whitelisted)" >> "$OUTFILE"
+          echo "==================================================================" >> "$OUTFILE"
+          
+          if [ -s "$MANIFEST" ]; then
+              cat "$MANIFEST" >> "$OUTFILE"
+          else
+              echo "(None)" >> "$OUTFILE"
+          fi
+          rm "$MANIFEST"
+
+          # STATS
+          SIZE_KB=$(du -k "$OUTFILE" | cut -f1)
+          echo -e "\033[32m[+] Final Payload Size: ${SIZE_KB} KB\033[0m"
+          echo "BACKUP_FILE=$OUTFILE" >> $GITHUB_ENV
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: project-backup
-          path: ${{ env.BACKUP_PATH }}
-          retention-days: 5
+          name: surgical-backup
+          path: ${{ env.BACKUP_FILE }}
+          retention-days: 1
