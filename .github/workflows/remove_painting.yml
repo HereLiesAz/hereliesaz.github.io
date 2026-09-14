@@ -1,38 +1,8 @@
-name: Remove Painting
-
-# Deletes one or more paintings' baked artifacts from art-data and rebuilds
-# the manifest + pareidolia hinge graph so nothing dangles a reference to
-# them. Dispatched by the /admin app (src/admin/data.js's
-# flushRemovalQueue()) after it deletes each source photo from main via the
-# Contents API — this workflow only ever touches art-data.
-#
-# Accepts a comma-separated `ids` batch (not one id per dispatch) — see
-# src/admin/data.js's flushRemovalQueue() for why: GitHub Actions'
-# `cancel-in-progress: false` concurrency only reserves ONE queued run
-# behind whatever's currently in progress; a THIRD dispatch while one is
-# running and one is already queued doesn't queue behind it, it CANCELS the
-# previously-queued run outright without ever running its steps. A user
-# rapid-fire-removing several paintings (faster than one run's ~30-90s
-# actual runtime, which is a normal clicking pace) silently dropped most of
-# those removals this way — main's source photo + metadata were already
-# gone, but art-data's baked files, manifest, and hinge graph never got
-# cleaned up for that id. The client now serializes itself (never more than
-# one run of this workflow in flight at a time) and batches whatever piled
-# up while a previous run was in progress into one `ids` dispatch instead
-# of firing one per id, which also sidesteps the eviction entirely.
-#
-# IMPORTANT: unlike theater_bake.yml/process_art.yml/bootstrap.yml (which
-# all publish to art-data with keep_files:true, because each only adds/
-# updates a subset and relies on the others' prior output already being
-# present in their own rsync'd local tree), this workflow publishes with
-# keep_files:false. That's deliberate: keep_files:true would silently
-# UN-DELETE the very files this workflow exists to remove, since it skips
-# the clean-before-copy step. Correctness here instead comes from mirroring
-# the ENTIRE art-data branch into public/data first (same rsync theater_
-# bake.yml uses), so the local tree is a complete, faithful copy of
-# art-data with only the intended files missing — safe to publish as a
-# full replacement.
-
+# centralized-by: HereLiesAz/workflows
+# central-source-path: .github/workflows/remove_painting.yml
+# central-source-sha256: 7a7b1b4c069c90d543d5c264ede087427fec305f152c02207c4dc7fc7bbaf0e0
+# This file intentionally contains no repository secrets.
+name: Remove Painting [central proxy]
 on:
   workflow_dispatch:
     inputs:
@@ -40,98 +10,20 @@ on:
         description: "Comma-separated painting ids (filename stems) to remove."
         required: true
 
-concurrency:
-  group: remove-painting
-  cancel-in-progress: false
-
 permissions:
-  contents: write
-
+  contents: read
+  id-token: write
 jobs:
-  remove:
+  central-dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # Shared with theater_bake.yml/process_art.yml's `consolidate` job/
-    # bootstrap.yml: all publish to the same art-data branch via a plain,
-    # non-force git push, so overlapping runs must queue rather than race.
-    concurrency:
-      group: art-data-publish
-      cancel-in-progress: false
     steps:
-      - name: Checkout source (for scripts/)
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Checkout art-data
-        uses: actions/checkout@v4
-        with:
-          ref: art-data
-          path: _artdata
-          persist-credentials: false
-
-      - name: Mirror art-data into public/data
-        run: |
-          mkdir -p public/data
-          rsync -a --exclude='.git' _artdata/ public/data/
-
-      - name: Delete baked artifacts for these ids
+      - name: Dispatch to HereLiesAz/workflows
         env:
-          # Passed via env, not spliced directly into the script as
-          # `${{ github.event.inputs.ids }}` — see theater_bake.yml's "Bake
-          # theater layers" step for why direct interpolation into a run:
-          # script is a shell-injection primitive. This job has
-          # contents:write, so an unescaped id is a real risk, not just
-          # theoretical.
-          IDS_INPUT: ${{ github.event.inputs.ids }}
-        run: |
-          if [ -z "$IDS_INPUT" ]; then echo "::error::ids input is required"; exit 1; fi
-          DIR="public/data/theater"
-          IFS=',' read -ra IDS <<< "$IDS_INPUT"
-          for ID in "${IDS[@]}"; do
-            if [ -z "$ID" ]; then continue; fi
-            case "$ID" in
-              */*|*..*) echo "::error::id '$ID' must not contain path separators or '..'"; exit 1 ;;
-            esac
-            FOUND=0
-            for suffix in painting.webp depth.png theater.json; do
-              f="$DIR/$ID.$suffix"
-              if [ -f "$f" ]; then rm -f "$f"; FOUND=1; fi
-            done
-            if [ "$FOUND" -eq 0 ]; then
-              echo "::warning::no baked files found for id '$ID' — it may already be removed, or never finished baking. Continuing so the manifest/graph still get rebuilt clean."
-            fi
-          done
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: pip install -r scripts/requirements.txt
-
-      - name: Rebuild manifest
-        run: |
-          python -c "
-          import sys; sys.path.insert(0, 'scripts')
-          from pathlib import Path
-          from theater_baker import write_manifest
-          write_manifest(Path('public/data/theater'))
-          "
-
-      - name: Rebuild hinge graph (no dangling edges into the removed id)
-        run: python scripts/pareidolia_index.py --data public/data/theater/
-
-      - name: Validate output
-        run: python scripts/validate_output.py --dir public/data/theater
-
-      - name: Deploy to art-data
-        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3.9.3 (pinned commit for the v3 tag)
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public/data
-          publish_branch: art-data
-          keep_files: false
-          commit_message: "Remove painting(s): ${{ github.event.inputs.ids }}"
+          WORKFLOWS_GATEWAY_URL: ${{ vars.WORKFLOWS_GATEWAY_URL }}
+          EVENT_JSON: ${{ toJSON(github.event) }}
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          VARS_JSON: ${{ toJSON(vars) }}
+          SOURCE_WORKFLOW_PATH: .github/workflows/remove_painting.yml
+          SOURCE_SHA256: 7a7b1b4c069c90d543d5c264ede087427fec305f152c02207c4dc7fc7bbaf0e0
+        shell: bash
+        run: "set -euo pipefail\n[[ -n \"${WORKFLOWS_GATEWAY_URL:-}\" ]] || { echo \"Repository variable WORKFLOWS_GATEWAY_URL is not configured.\" >&2; exit 1; }\noidc_response=\"$(curl --fail-with-body --silent --show-error -H \"Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}\" \"${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hereliesaz-workflows\")\"\noidc_token=\"$(jq -r '.value // empty' <<<\"$oidc_response\")\"\n[[ -n \"$oidc_token\" ]] || { echo \"GitHub did not issue an OIDC token.\" >&2; exit 1; }\necho \"::add-mask::$oidc_token\"\npayload=\"$(jq -n   --arg repository \"$GITHUB_REPOSITORY\" --arg repository_id \"$GITHUB_REPOSITORY_ID\"   --arg repository_owner \"$GITHUB_REPOSITORY_OWNER\" --arg repository_owner_id \"$GITHUB_REPOSITORY_OWNER_ID\"   --arg sha \"$GITHUB_SHA\" --arg ref \"$GITHUB_REF\" --arg ref_name \"$GITHUB_REF_NAME\" --arg ref_type \"$GITHUB_REF_TYPE\"   --arg head_ref \"$GITHUB_HEAD_REF\" --arg base_ref \"$GITHUB_BASE_REF\" --arg actor \"$GITHUB_ACTOR\" --arg actor_id \"$GITHUB_ACTOR_ID\"   --arg event_name \"$GITHUB_EVENT_NAME\" --arg run_id \"$GITHUB_RUN_ID\" --arg run_number \"$GITHUB_RUN_NUMBER\" --arg run_attempt \"$GITHUB_RUN_ATTEMPT\"   --arg workflow_ref \"$GITHUB_WORKFLOW_REF\" --arg workflow_name \"$GITHUB_WORKFLOW\" --arg source_workflow_path \"$SOURCE_WORKFLOW_PATH\"   --arg source_sha256 \"$SOURCE_SHA256\" --argjson event \"$EVENT_JSON\" --argjson inputs \"$INPUTS_JSON\" --argjson vars \"$VARS_JSON\"   '{repository:$repository,repository_id:$repository_id,repository_owner:$repository_owner,repository_owner_id:$repository_owner_id,sha:$sha,check_sha:($event.pull_request.head.sha // $sha),ref:$ref,ref_name:$ref_name,ref_type:$ref_type,head_ref:$head_ref,base_ref:$base_ref,actor:$actor,actor_id:$actor_id,event_name:$event_name,event:$event,inputs:$inputs,vars:$vars,run_id:$run_id,run_number:$run_number,run_attempt:$run_attempt,workflow_ref:$workflow_ref,workflow_name:$workflow_name,source_workflow_path:$source_workflow_path,source_sha256:$source_sha256}')\"\ncurl --fail-with-body --silent --show-error -X POST \"${WORKFLOWS_GATEWAY_URL%/}/dispatch\" -H \"Authorization: Bearer ${oidc_token}\" -H \"Content-Type: application/json\" --data-binary \"$payload\""
