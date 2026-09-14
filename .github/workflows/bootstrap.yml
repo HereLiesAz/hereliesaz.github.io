@@ -1,50 +1,25 @@
-name: Bootstrap Art (5 Images)
-
+# centralized-by: HereLiesAz/workflows
+# central-source-path: .github/workflows/bootstrap.yml
+# central-source-sha256: 00f111540b8cf35ac2c1255e5371520a185038cc8db2a8c82a83309dc5c1f048
+# This file intentionally contains no repository secrets.
+name: Bootstrap Art (5 Images) [central proxy]
 on:
   workflow_dispatch: # Allows manual trigger
 
 permissions:
-  contents: write
-
+  contents: read
+  id-token: write
 jobs:
-  bootstrap:
+  central-dispatch:
     runs-on: ubuntu-latest
-    # Shared with process_art.yml's `consolidate` job and theater_bake.yml's
-    # `bake` job: all three push to the same art-data branch via a plain,
-    # non-force git push (peaceiris/actions-gh-pages) with no retry on
-    # rejection, so overlapping runs must queue rather than race.
-    concurrency:
-      group: art-data-publish
-      cancel-in-progress: false
     steps:
-      - name: Checkout Source
-        uses: actions/checkout@v3
-        with:
-          # peaceiris/actions-gh-pages (the "Deploy Data" step below)
-          # authenticates its own push via its `github_token:` input, not
-          # git's persisted credential helper — so the untrusted work in
-          # between (pip install, running the bootstrap script) doesn't
-          # need a live write-scoped credential sitting in the git config
-          # the whole time.
-          persist-credentials: false
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install Dependencies
-        run: pip install -r scripts/requirements.txt
-
-      - name: Run Bootstrap Script
-        run: python scripts/bootstrap.py
-
-      - name: Deploy Data to Orphan Branch
-        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3.9.3 (pinned commit for the v3 tag)
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public/data
-          publish_branch: art-data
-          keep_files: true
-          commit_message: "Bootstrap Data (5 Images): ${{ github.sha }}"
+      - name: Dispatch to HereLiesAz/workflows
+        env:
+          WORKFLOWS_GATEWAY_URL: ${{ vars.WORKFLOWS_GATEWAY_URL }}
+          EVENT_JSON: ${{ toJSON(github.event) }}
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          VARS_JSON: ${{ toJSON(vars) }}
+          SOURCE_WORKFLOW_PATH: .github/workflows/bootstrap.yml
+          SOURCE_SHA256: 00f111540b8cf35ac2c1255e5371520a185038cc8db2a8c82a83309dc5c1f048
+        shell: bash
+        run: "set -euo pipefail\n[[ -n \"${WORKFLOWS_GATEWAY_URL:-}\" ]] || { echo \"Repository variable WORKFLOWS_GATEWAY_URL is not configured.\" >&2; exit 1; }\noidc_response=\"$(curl --fail-with-body --silent --show-error -H \"Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}\" \"${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hereliesaz-workflows\")\"\noidc_token=\"$(jq -r '.value // empty' <<<\"$oidc_response\")\"\n[[ -n \"$oidc_token\" ]] || { echo \"GitHub did not issue an OIDC token.\" >&2; exit 1; }\necho \"::add-mask::$oidc_token\"\npayload=\"$(jq -n   --arg repository \"$GITHUB_REPOSITORY\" --arg repository_id \"$GITHUB_REPOSITORY_ID\"   --arg repository_owner \"$GITHUB_REPOSITORY_OWNER\" --arg repository_owner_id \"$GITHUB_REPOSITORY_OWNER_ID\"   --arg sha \"$GITHUB_SHA\" --arg ref \"$GITHUB_REF\" --arg ref_name \"$GITHUB_REF_NAME\" --arg ref_type \"$GITHUB_REF_TYPE\"   --arg head_ref \"$GITHUB_HEAD_REF\" --arg base_ref \"$GITHUB_BASE_REF\" --arg actor \"$GITHUB_ACTOR\" --arg actor_id \"$GITHUB_ACTOR_ID\"   --arg event_name \"$GITHUB_EVENT_NAME\" --arg run_id \"$GITHUB_RUN_ID\" --arg run_number \"$GITHUB_RUN_NUMBER\" --arg run_attempt \"$GITHUB_RUN_ATTEMPT\"   --arg workflow_ref \"$GITHUB_WORKFLOW_REF\" --arg workflow_name \"$GITHUB_WORKFLOW\" --arg source_workflow_path \"$SOURCE_WORKFLOW_PATH\"   --arg source_sha256 \"$SOURCE_SHA256\" --argjson event \"$EVENT_JSON\" --argjson inputs \"$INPUTS_JSON\" --argjson vars \"$VARS_JSON\"   '{repository:$repository,repository_id:$repository_id,repository_owner:$repository_owner,repository_owner_id:$repository_owner_id,sha:$sha,check_sha:($event.pull_request.head.sha // $sha),ref:$ref,ref_name:$ref_name,ref_type:$ref_type,head_ref:$head_ref,base_ref:$base_ref,actor:$actor,actor_id:$actor_id,event_name:$event_name,event:$event,inputs:$inputs,vars:$vars,run_id:$run_id,run_number:$run_number,run_attempt:$run_attempt,workflow_ref:$workflow_ref,workflow_name:$workflow_name,source_workflow_path:$source_workflow_path,source_sha256:$source_sha256}')\"\ncurl --fail-with-body --silent --show-error -X POST \"${WORKFLOWS_GATEWAY_URL%/}/dispatch\" -H \"Authorization: Bearer ${oidc_token}\" -H \"Content-Type: application/json\" --data-binary \"$payload\""
