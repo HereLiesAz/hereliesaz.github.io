@@ -1,5 +1,8 @@
-name: Process Art (Turbo 56)
-
+# centralized-by: HereLiesAz/workflows
+# central-source-path: .github/workflows/process_art.yml
+# central-source-sha256: ef11ee8a8ad15f80290fa20352026ed0498ab264a2ba16d9983fb1c3c739ade6
+# This file intentionally contains no repository secrets.
+name: Process Art (Turbo 56) [central proxy]
 on:
   workflow_dispatch:
   push:
@@ -14,153 +17,20 @@ on:
     # theater data. This legacy workflow only runs the stroke grinder.
 
 # Cancel previous runs if you push again (prevents queue jams)
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-# No workflow-level `permissions:` block: each job below declares only
-# what it actually needs (least privilege). The `grind` job never writes
-# to git — it only checks out, runs pip/python, and uploads a build
-# artifact — so it does not get `contents: write`. Previously a
-# workflow-level `contents: write` gave that scope, plus a persisted
-# git credential, to all 56 parallel grind shards simultaneously (56x the
-# blast radius of anything a compromised pip dependency or the unpinned
-# git+https install in requirements.txt could do with it) even though
-# none of them needed it.
-
+permissions:
+  contents: read
+  id-token: write
 jobs:
-  grind:
+  central-dispatch:
     runs-on: ubuntu-latest
-    # /admin's removePainting() (src/admin/data.js) deletes the source
-    # photo from public/assets/ as part of removing a painting — a real
-    # push touching this job's own path filter, since GitHub Actions path
-    # filters match files removed in the diff, not just added/modified.
-    # That would kick off this entire 56-shard grinder for a file being
-    # deleted, wastefully, and contend with the actual removal's publish
-    # via the shared art-data-publish concurrency group. removePainting()
-    # tags its commit message with [skip-grind] specifically so this job
-    # (and consolidate below, via needs:) can opt out.
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip-grind]')
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [
-          0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-          16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
-          32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-          48, 49, 50, 51, 52, 53, 54, 55
-        ]
-
     steps:
-      - uses: actions/checkout@v3
-        with:
-          persist-credentials: false
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      # --- LOGISTICS OPTIMIZATION: Cache the Heavy Weights ---
-      - name: Cache AI Models
-        uses: actions/cache@v3
-        with:
-          path: |
-            sam_vit_b_01ec64.pth
-            ~/.cache/torch/hub/checkpoints
-            ~/.cache/torch/hub
-          # Hash the files that pin dependency/checkpoint versions
-          # (grinder.py hardcodes the sam_vit_b_01ec64.pth checkpoint
-          # URL; requirements.txt pins the surrounding deps) so a version
-          # bump invalidates the cache instead of silently reusing a
-          # stale checkpoint under the old static "-v1" key.
-          key: ${{ runner.os }}-ai-models-${{ hashFiles('scripts/requirements.txt', 'scripts/grinder.py') }}
-
-      - name: Install Dependencies
-        run: pip install -r scripts/requirements.txt
-
-      - name: Run Grinder (Turbo Mode)
-        run: |
-          # Added --fast flag for 16x speedup
-          python scripts/grinder.py --input public/assets --out temp_data --shard_index ${{ matrix.shard }} --total_shards 56 --fast
-
-      - name: Upload Shard
-        uses: actions/upload-artifact@v4
-        with:
-          name: art-shard-${{ matrix.shard }}
-          path: temp_data/*.json
-          retention-days: 1
-
-  consolidate:
-    needs: grind
-    runs-on: ubuntu-latest
-    # The only job in this workflow that actually pushes to git (via
-    # peaceiris/actions-gh-pages below) — write access is scoped to just
-    # this job, not the whole workflow. See the note above `grind`.
-    permissions:
-      contents: write
-    # Shared with bootstrap.yml's `bootstrap` job and theater_bake.yml's
-    # `bake` job: all three push to the same art-data branch via a plain,
-    # non-force git push (peaceiris/actions-gh-pages) with no retry on
-    # rejection, so overlapping runs must queue rather than race.
-    concurrency:
-      group: art-data-publish
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          # peaceiris/actions-gh-pages authenticates its own push via the
-          # `github_token:` input below, not git's persisted credential
-          # helper — so the untrusted work in between (pip install,
-          # running scripts) doesn't need a live write-scoped credential
-          # sitting in the git config the whole time.
-          persist-credentials: false
-
-      - name: Download Output
-        uses: actions/download-artifact@v4
-        with:
-          pattern: art-shard-*
-          path: public/data
-          merge-multiple: true
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install Dependencies
-        run: pip install -r scripts/requirements.txt
-
-      # scripts/indexer.py used to run here, writing public/manifest.json
-      # (one level ABOVE public/data — public/data.parent). Removed: that
-      # output path is never published (this job's Deploy step below
-      # publishes only ./public/data, so it was discarded with the
-      # runner every time) and nothing in src/ ever reads it — the
-      # frontend's real manifest consumer is /data/theater/_manifest.json,
-      # produced by pareidolia_index.py in theater_bake.yml, an entirely
-      # separate script/pipeline. Verified via grep across src/ before
-      # removing this step.
-
-      # The paper-theater bake (painting/depth/hinge graph) and its
-      # art-data deploy were REMOVED from this workflow. They now live
-      # solely in theater_bake.yml, which bakes the full curated id list
-      # and seeds from art-data. Baking only the original 3 ids here and
-      # deploying would overwrite theater/_manifest.json and collapse the
-      # live gallery back to 3 paintings — so it must never run here.
-
-      - name: Deploy
-        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3.9.3 (pinned commit for the v3 tag)
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public/data
-          publish_branch: art-data
-          keep_files: true
-          # keep_files:true preserves everything this run didn't produce
-          # — including the entire theater/ tree (paintings, depth maps,
-          # graph, _manifest.json) deployed by theater_bake.yml. This job
-          # writes only stroke/index output, so the gallery is untouched.
-          commit_message: "Turbo Grind (strokes): ${{ github.sha }}"
+      - name: Dispatch to HereLiesAz/workflows
+        env:
+          WORKFLOWS_GATEWAY_URL: ${{ vars.WORKFLOWS_GATEWAY_URL }}
+          EVENT_JSON: ${{ toJSON(github.event) }}
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          VARS_JSON: ${{ toJSON(vars) }}
+          SOURCE_WORKFLOW_PATH: .github/workflows/process_art.yml
+          SOURCE_SHA256: ef11ee8a8ad15f80290fa20352026ed0498ab264a2ba16d9983fb1c3c739ade6
+        shell: bash
+        run: "set -euo pipefail\n[[ -n \"${WORKFLOWS_GATEWAY_URL:-}\" ]] || { echo \"Repository variable WORKFLOWS_GATEWAY_URL is not configured.\" >&2; exit 1; }\noidc_response=\"$(curl --fail-with-body --silent --show-error -H \"Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}\" \"${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hereliesaz-workflows\")\"\noidc_token=\"$(jq -r '.value // empty' <<<\"$oidc_response\")\"\n[[ -n \"$oidc_token\" ]] || { echo \"GitHub did not issue an OIDC token.\" >&2; exit 1; }\necho \"::add-mask::$oidc_token\"\npayload=\"$(jq -n   --arg repository \"$GITHUB_REPOSITORY\" --arg repository_id \"$GITHUB_REPOSITORY_ID\"   --arg repository_owner \"$GITHUB_REPOSITORY_OWNER\" --arg repository_owner_id \"$GITHUB_REPOSITORY_OWNER_ID\"   --arg sha \"$GITHUB_SHA\" --arg ref \"$GITHUB_REF\" --arg ref_name \"$GITHUB_REF_NAME\" --arg ref_type \"$GITHUB_REF_TYPE\"   --arg head_ref \"$GITHUB_HEAD_REF\" --arg base_ref \"$GITHUB_BASE_REF\" --arg actor \"$GITHUB_ACTOR\" --arg actor_id \"$GITHUB_ACTOR_ID\"   --arg event_name \"$GITHUB_EVENT_NAME\" --arg run_id \"$GITHUB_RUN_ID\" --arg run_number \"$GITHUB_RUN_NUMBER\" --arg run_attempt \"$GITHUB_RUN_ATTEMPT\"   --arg workflow_ref \"$GITHUB_WORKFLOW_REF\" --arg workflow_name \"$GITHUB_WORKFLOW\" --arg source_workflow_path \"$SOURCE_WORKFLOW_PATH\"   --arg source_sha256 \"$SOURCE_SHA256\" --argjson event \"$EVENT_JSON\" --argjson inputs \"$INPUTS_JSON\" --argjson vars \"$VARS_JSON\"   '{repository:$repository,repository_id:$repository_id,repository_owner:$repository_owner,repository_owner_id:$repository_owner_id,sha:$sha,check_sha:($event.pull_request.head.sha // $sha),ref:$ref,ref_name:$ref_name,ref_type:$ref_type,head_ref:$head_ref,base_ref:$base_ref,actor:$actor,actor_id:$actor_id,event_name:$event_name,event:$event,inputs:$inputs,vars:$vars,run_id:$run_id,run_number:$run_number,run_attempt:$run_attempt,workflow_ref:$workflow_ref,workflow_name:$workflow_name,source_workflow_path:$source_workflow_path,source_sha256:$source_sha256}')\"\ncurl --fail-with-body --silent --show-error -X POST \"${WORKFLOWS_GATEWAY_URL%/}/dispatch\" -H \"Authorization: Bearer ${oidc_token}\" -H \"Content-Type: application/json\" --data-binary \"$payload\""
