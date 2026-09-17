@@ -1,97 +1,136 @@
 # Handoff
 
-Snapshot of where things stand. For the previous handoff (superseded, kept
-for history) see [`archive/HANDOFF-2026-07-03.md`](./archive/HANDOFF-2026-07-03.md).
+This repository contains multiple intentional art-processing pipelines. Do **not** classify one as abandoned merely because the current renderer does not consume it. Treat the implementations as parallel representations/capabilities unless Az explicitly retires one.
 
-## Current state
+For the integration contract and pipeline map, start with [`INTEGRATION.md`](./INTEGRATION.md).
 
-The paper-theater renderer (`TheaterPainting.jsx` + `theater_baker.py` +
-`pareidolia_index.py`) is the live, shipped gallery and matches
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) / [`FRONTEND.md`](./FRONTEND.md) /
-[`SHADERS.md`](./SHADERS.md) / [`PIPELINE.md`](./PIPELINE.md) as of this
-writing. Recently stabilized:
+## Shipped gallery
 
-- **Depth-band boundaries are a hard discard**, deliberately with no
-  opacity antialiasing. An antialiased ramp was tried and reverted — it
-  fixed sub-pixel flicker but introduced a static "topographic contour
-  map" artifact at every band boundary, because the flats are opaque and
-  depth-tested, not alpha-blended (two partial-opacity edges never
-  actually combine). See the in-shader comment in `TheaterPainting.jsx`'s
-  `flatFS` and [`SHADERS.md`](./SHADERS.md) before touching this again —
-  verify any change against real rendered frames at multiple actual
-  coalescence points, not a single crop that may not contain a boundary.
-- A batch of accessibility, CI-security, and PWA-hygiene fixes landed
-  together (keyboard navigation, modal dialog semantics, reduced-motion
-  wired into the camera/shader, least-privilege workflow permissions,
-  SSH host-key pinning on the SFTP deploy, PWA precache/manifest cleanup,
-  supply-chain pinning on the one `git+https` dependency).
-- Scene constants (`NULL_DISTANCE`, `PAINTING_HEIGHT`, `CAMERA_FOV_DEG`)
-  were deduplicated into `src/sceneConstants.js`; pre-built segment
-  placement now recomputes on resize/rotation instead of freezing at
-  whatever viewport built it.
-- Documentation across the repo was fully audited and rewritten against
-  the actual code (this pass) — see "What changed in this doc pass" below.
+The current production renderer is the paper-theater path:
 
-## Known drift / open threads
+```text
+public/assets/
+  -> scripts/theater_baker.py
+  -> public/data/theater/{id}.painting.webp
+  -> public/data/theater/{id}.depth.png
+  -> public/data/theater/{id}.theater.json
+  -> scripts/pareidolia_index.py
+  -> public/data/theater/graph.theater.json
+  -> Scene.jsx / TheaterPainting.jsx / AnamorphicCam.jsx
+```
 
-- **`process_art.yml` and `bootstrap.yml` still run in CI but produce dead
-  output.** The 56-shard `grinder.py` stroke-cloud job and the manual
-  `bootstrap.py` job both run SAM-based pipelines from the abandoned
-  "shard cloud" design and deploy their output to `art-data` — nothing in
-  `src/` reads any of it (`Scene.jsx` only reads the theater tree, falling
-  back to the legacy flat `public/graph.json`, never the stroke JSON).
-  Turning these off (or deleting the scripts) is a real decision someone
-  should make deliberately, not a docs fix — see
-  [`PIPELINE.md`](./PIPELINE.md#legacy-scripts-that-still-execute-in-ci).
-- **A handful of fully dead scripts remain in `scripts/`** (`indexer.py`,
-  `pareidolia.py`, `curator.py`, `jules.py`, `3d_deconstructor.py`,
-  `prepare.py`, `repair_and_index.py`, `bake-shards.js`) — confirmed by
-  grep to have no live caller. Candidates for deletion in a future
-  cleanup, not touched here.
-- **`docs/SETUP.md` states "Node.js 18+"**; CI actually runs Node 20
-  (`deploy.yml`) and Node 22 (`deploy-sftp.yml`). Minor, worth a follow-up
-  fix.
-- The modal keyboard-focus behavior (`Overlay.jsx`) was verified correct
-  by code inspection but showed one inconclusive result in a dev-server
-  Tab-focus test, most likely a Vite HMR-injected-DOM artifact rather than
-  a real bug — not independently reproduced in a production build.
+`Scene.jsx` prefers the theater manifest/hinge graph and falls back to `public/graph.json` flat images if the theater data is unavailable.
 
-## What changed in this doc pass
+`TheaterPainting.jsx` builds mirrored depth-band flats at runtime, including the hinge reveal, shard wipe, dark/light background handling, and background sweep.
 
-Every doc under `docs/` was checked against the actual code and rewritten
-where it had drifted from or never matched what was built:
+## Intentional parallel pipelines
 
-- `ARCHITECTURE.md`, `FRONTEND.md`, `SHADERS.md`, `PIPELINE.md` — full
-  rewrites; previously described an abandoned SAM/DINOv2/particle-cloud
-  design that was never implemented.
-- `README.md` (root) and `docs/README.md` — full rewrites for the same
-  reason, plus corrected doc links and quick-start commands.
-- `AESTHETIC.md` §8 — rewritten to describe the paper-theater primitive as
-  actually built (no backdrop plane, no blotch/stroke library, real
-  photograph pixels not synthesized marks), and extended with the
-  fulcrum-reveal, shard-wipe, and background-sweep mechanics that exist in
-  the shipped renderer but were undocumented anywhere. §1–7 (the closet
-  premise, palette law, mark vocabulary as UI chrome, type/signature) were
-  left as-is — still an accurate creative contract.
-- `WORKFLOW.md` and `SETUP.md` were reviewed and found largely accurate
-  already (a prior pass had fixed the worst of their drift); only the
-  Node-version note above remains open.
-- Eight early planning/spec documents describing designs that were
-  explored and abandoned before or during implementation (a shard-cloud
-  Next.js renderer, DINOv2/YOLO matching, an earlier "unified field"
-  design, a stale mid-rework session handoff) were moved to
-  `docs/archive/` with an explanatory index rather than deleted, so the
-  design history stays recoverable.
-- `AGENTS.md` — left untouched aside from a pointer to `ARCHITECTURE.md`;
-  it's the original creative brief and still describes the intended
-  experience accurately, just not the implementation mechanism.
+### Turbo Stroke Cloud
 
-## Where to start
+`process_art.yml` runs `scripts/grinder.py` across the source corpus in 56 shards and publishes the resulting stroke JSON to `art-data`.
 
-- Rendering/shader work: [`SHADERS.md`](./SHADERS.md), then
-  `TheaterPainting.jsx`.
-- Camera/scroll/state work: [`FRONTEND.md`](./FRONTEND.md)'s
-  `AnamorphicCam.jsx` and `useStore.jsx` sections.
-- Pipeline/bake work: [`PIPELINE.md`](./PIPELINE.md), then
-  [`WORKFLOW.md`](./WORKFLOW.md) for how to run it.
-- CI/deploy work: [`ARCHITECTURE.md`](./ARCHITECTURE.md)'s CI/CD section.
+`grinder.py` combines SAM segmentation, color sub-sharding, and monocular depth. Companion tooling includes `indexer.py`, `pareidolia.py`, `repair_and_index.py`, and `bake-shards.js`.
+
+Status: **producer wired; current gallery consumer not yet wired**.
+
+### Bootstrap Art
+
+`bootstrap.yml` is a manually dispatched five-image bootstrap workflow using `scripts/bootstrap.py`.
+
+Status: **workflow wired, implementation currently affected by input-path drift** (`bootstrap.py` still assumes `assets/raw`, while the real source corpus is under `public/assets`). Repair it; do not remove it merely because it currently fails to find inputs.
+
+### Unified Shard Field
+
+`scripts/prepare.py` + `scripts/shard_prep/*` implement the approved unified-shard preprocessor: painterly segmentation, depth assignment, anamorphic projection, mirrored shards, and DINOv2 graph generation.
+
+Native output:
+
+```text
+public/data/baked/{id}.baked.json
+public/graph.json
+```
+
+Status: **preprocessor implementation exists; production viewer integration is incomplete**.
+
+### Curator / semantic pipeline
+
+`scripts/curator.py` combines SAM segmentation, depth, semantic embeddings, binary GPU-oriented attributes, and a semantic graph.
+
+Status: **substantial alternate/semantic pipeline; current input defaults need alignment with the real corpus**.
+
+### Semantic deconstructor
+
+`scripts/3d_deconstructor.py` produces a smaller number of semantic/depth layers rather than dense shards.
+
+Status: **experimental/incomplete**. A known defect is use of `random.random()` without importing `random`.
+
+### Perspective shard bake
+
+`scripts/bake-shards.js` converts existing stroke/shard JSON into perspective-corrected mirrored baked geometry.
+
+Status: **implemented build stage; not currently selected by the production renderer**.
+
+### Jules utility
+
+`scripts/jules.py` is a standalone CLI that files GitHub issues from error text supplied through argv/stdin.
+
+Status: **standalone utility; no importer is required for it to be valid**.
+
+## Canonical integration layer
+
+The repo now has an additive integration contract:
+
+- schema: `schemas/painting-bake.schema.json`
+- builder: `scripts/integrate_painting_bakes.py`
+- tests: `scripts/test_integrate_painting_bakes.py`
+- docs: `docs/INTEGRATION.md`
+
+On deploy, after `art-data` is checked out, the integration builder writes:
+
+```text
+public/data/integrated/_manifest.json
+public/data/integrated/{id}.painting-bake.json
+```
+
+These sidecars **reference** native outputs. They do not rewrite or replace them. A painting can simultaneously expose theater, stroke-cloud, unified-shard, perspective-shard, semantic-layer, and flat-image representations.
+
+Transition graph families remain distinct in the canonical record so their semantics/provenance are not flattened:
+
+- `transitions.theater` — current saliency/LAB/gradient/depth hinge matcher
+- `transitions.legacyOrUnified` — `public/graph.json` graph family, including DINOv2-style anchors or older compatible variants
+
+## CI / deployment
+
+`deploy.yml` redeploys after:
+
+- `Process Art (Turbo 56)`
+- `Theater Bake`
+- `Remove Painting`
+- `Bootstrap Art (5 Images)`
+
+It checks out `art-data`, verifies usable theater data, runs the integration unit tests, builds integrated sidecars, repairs the legacy flat fallback graph against available assets, builds Vite, and deploys Pages.
+
+The theater producer still validates its own native output with `scripts/validate_output.py` before publishing.
+
+## Known work to do
+
+1. Repair source-path drift (`assets/raw` vs `public/assets`) in `bootstrap.py`, `curator.py`, `3d_deconstructor.py`, and any other affected entrypoints while preserving explicit CLI input overrides.
+2. Fix the missing `random` import in `3d_deconstructor.py`.
+3. Make Unified Shard Field and semantic-layer artifacts first-class published `art-data` outputs rather than local-only/occasional artifacts.
+4. Add a runtime loader for `/data/integrated/_manifest.json` so a renderer can discover and combine representations without hard-coding each producer format.
+5. Define combination rules rather than replacement rules: painterly shard boundaries, theater-quality depth, semantic tags/objects, and both transition-graph families can all contribute to one painting experience.
+6. Production-test the existing modal keyboard-focus behavior; prior dev-server testing was inconclusive.
+
+## Status vocabulary
+
+Use these terms when auditing the repo:
+
+- **production** — relied on by the shipped site
+- **wired** — reachable through a real producer/consumer/execution path
+- **unwired** — implementation exists but is not connected to a current path
+- **incomplete** — intended behavior is only partially implemented
+- **broken** — a concrete defect prevents intended execution
+- **overlapping** — another intentional pipeline solves part of the same problem differently
+- **experimental** — intentionally exploratory
+
+Do not infer **abandoned**, **dead**, or **orphaned** from absence of a current caller. Removal requires an explicit decision that the capability is no longer wanted.
