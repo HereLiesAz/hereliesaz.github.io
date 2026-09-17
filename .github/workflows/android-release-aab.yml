@@ -2,12 +2,10 @@
 # central-source-path: .github/workflows/android-release-aab.yml
 # central-source-sha256: c7e435bc33db1508560b4f5e700570d3f9544ce3d2efa16b4b7df2a60ee3c1f4
 # This file intentionally contains no repository secrets.
+# This repository does not currently contain a native Gradle project, so the
+# Android publishing workflow must not fire on ordinary website pushes.
 name: Build & Publish AAB (Play) [central proxy]
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - version.properties
   workflow_dispatch:
     inputs:
       publish:
