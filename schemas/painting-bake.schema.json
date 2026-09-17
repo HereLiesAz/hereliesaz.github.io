@@ -23,12 +23,13 @@
       "type": "object",
       "minProperties": 1,
       "properties": {
-        "theater": { "$ref": "#/$defs/theaterRepresentation" },
-        "strokeCloud": { "$ref": "#/$defs/strokeRepresentation" },
-        "unifiedShardField": { "$ref": "#/$defs/shardRepresentation" },
-        "perspectiveShardBake": { "$ref": "#/$defs/shardRepresentation" },
-        "semanticLayers": { "$ref": "#/$defs/semanticRepresentation" },
-        "flatImage": { "$ref": "#/$defs/flatRepresentation" }
+        "theater": { "$ref": "#/$defs/theaterOrVariants" },
+        "strokeCloud": { "$ref": "#/$defs/strokeOrVariants" },
+        "unifiedShardField": { "$ref": "#/$defs/shardOrVariants" },
+        "perspectiveShardBake": { "$ref": "#/$defs/shardOrVariants" },
+        "semanticShardCloud": { "$ref": "#/$defs/semanticShardOrVariants" },
+        "semanticLayers": { "$ref": "#/$defs/semanticLayerOrVariants" },
+        "flatImage": { "$ref": "#/$defs/flatOrVariants" }
       },
       "additionalProperties": true
     },
@@ -56,6 +57,90 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "theaterOrVariants": {
+      "anyOf": [
+        { "$ref": "#/$defs/theaterRepresentation" },
+        { "$ref": "#/$defs/theaterVariants" }
+      ]
+    },
+    "strokeOrVariants": {
+      "anyOf": [
+        { "$ref": "#/$defs/strokeRepresentation" },
+        { "$ref": "#/$defs/strokeVariants" }
+      ]
+    },
+    "shardOrVariants": {
+      "anyOf": [
+        { "$ref": "#/$defs/shardRepresentation" },
+        { "$ref": "#/$defs/shardVariants" }
+      ]
+    },
+    "semanticShardOrVariants": {
+      "anyOf": [
+        { "$ref": "#/$defs/semanticShardRepresentation" },
+        { "$ref": "#/$defs/semanticShardVariants" }
+      ]
+    },
+    "semanticLayerOrVariants": {
+      "anyOf": [
+        { "$ref": "#/$defs/semanticLayerRepresentation" },
+        { "$ref": "#/$defs/semanticLayerVariants" }
+      ]
+    },
+    "flatOrVariants": {
+      "anyOf": [
+        { "$ref": "#/$defs/flatRepresentation" },
+        { "$ref": "#/$defs/flatVariants" }
+      ]
+    },
+    "theaterVariants": {
+      "type": "object",
+      "required": ["variants"],
+      "properties": {
+        "variants": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/theaterRepresentation" } }
+      },
+      "additionalProperties": false
+    },
+    "strokeVariants": {
+      "type": "object",
+      "required": ["variants"],
+      "properties": {
+        "variants": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/strokeRepresentation" } }
+      },
+      "additionalProperties": false
+    },
+    "shardVariants": {
+      "type": "object",
+      "required": ["variants"],
+      "properties": {
+        "variants": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/shardRepresentation" } }
+      },
+      "additionalProperties": false
+    },
+    "semanticShardVariants": {
+      "type": "object",
+      "required": ["variants"],
+      "properties": {
+        "variants": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/semanticShardRepresentation" } }
+      },
+      "additionalProperties": false
+    },
+    "semanticLayerVariants": {
+      "type": "object",
+      "required": ["variants"],
+      "properties": {
+        "variants": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/semanticLayerRepresentation" } }
+      },
+      "additionalProperties": false
+    },
+    "flatVariants": {
+      "type": "object",
+      "required": ["variants"],
+      "properties": {
+        "variants": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/flatRepresentation" } }
+      },
+      "additionalProperties": false
+    },
     "theaterRepresentation": {
       "type": "object",
       "required": ["metadata", "painting", "depth"],
@@ -63,6 +148,7 @@
         "metadata": { "type": "string" },
         "painting": { "type": "string" },
         "depth": { "type": "string" },
+        "masks": { "type": "string" },
         "nativeSchema": {},
         "depthSource": { "type": ["string", "null"] },
         "bandCount": { "type": "integer", "minimum": 0 }
@@ -98,7 +184,26 @@
       },
       "additionalProperties": true
     },
-    "semanticRepresentation": {
+    "semanticShardRepresentation": {
+      "type": "object",
+      "required": ["data", "count"],
+      "properties": {
+        "data": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "resolution": { "$ref": "#/$defs/resolution" },
+        "buffers": {
+          "type": "object",
+          "properties": {
+            "position": { "type": "string" },
+            "uv": { "type": "string" },
+            "scale": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "semanticLayerRepresentation": {
       "type": "object",
       "required": ["data"],
       "properties": {
@@ -130,7 +235,13 @@
         "t_uv": { "$ref": "#/$defs/uv" },
         "scale": { "type": "number", "exclusiveMinimum": 0 },
         "source_shard": { "type": "integer", "minimum": 0 },
-        "target_shard": { "type": "integer", "minimum": 0 }
+        "target_shard": { "type": "integer", "minimum": 0 },
+        "s_nx": { "type": "number" },
+        "s_ny": { "type": "number" },
+        "s_depth": { "type": "number" },
+        "t_nx": { "type": "number" },
+        "t_ny": { "type": "number" },
+        "t_depth": { "type": "number" }
       },
       "additionalProperties": true
     },
