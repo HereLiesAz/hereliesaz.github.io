@@ -5,10 +5,21 @@ on:
     branches: ["main"]
   workflow_dispatch:
   workflow_run:
-    # Theater Bake publishes the live paper-theater dataset to art-data.
-    # Remove Painting mutates that same branch. Either operation must be
-    # followed by a deploy so the built site consumes the new art-data tree.
-    workflows: ["Theater Bake", "Remove Painting"]
+    # Must exactly match the target workflows' `name:` fields. Watching
+    # only "Process Art (Turbo 56)" (that workflow's stroke/grind output,
+    # which the frontend doesn't even read) meant a "Theater Bake" run —
+    # the ACTUAL publisher of the painting/depth/hinge-graph data the site
+    # renders — never triggered a redeploy: new theater data could land on
+    # art-data and sit there until something else happened to push to main
+    # or someone noticed and dispatched this workflow by hand. "Remove
+    # Painting" publishes to art-data the same way and was missing here
+    # for the same reason — a removal from /admin updated art-data but the
+    # live site never redeployed to pick it up, so it looked like nothing
+    # had happened. "Bootstrap Art (5 Images)" publishes to art-data too
+    # and is included for the same reason, even though it's a one-time
+    # seeding workflow unlikely to run again — nothing marks it retired,
+    # so leaving it off this list would be a live trap if it ever is.
+    workflows: ["Process Art (Turbo 56)", "Theater Bake", "Remove Painting", "Bootstrap Art (5 Images)"]
     types:
       - completed
 
@@ -46,12 +57,17 @@ jobs:
           fetch-tags: false
 
       # Consuming-side sanity check (not the full validate_output.py
-      # schema check — that runs on the producing side before this data
-      # reaches art-data).
+      # schema check — that runs on the producing side, in
+      # theater_bake.yml, before this data ever reaches art-data).
+      # Previously a missing/empty art-data checkout was either silently
+      # skipped (branch absent) or produced an empty public/data with no
+      # warning at all — the site would then deploy showing the
+      # flat-fallback plane for every painting with no CI signal. Fail
+      # loudly instead.
       - name: Verify art data is usable
         run: |
           if [ ! -s public/data/theater/_manifest.json ]; then
-            echo "::error::public/data/theater/_manifest.json is missing or empty after the art-data checkout — refusing to deploy a site with no theater data. Check that the art-data branch exists and Theater Bake has published to it."
+            echo "::error::public/data/theater/_manifest.json is missing or empty after the art-data checkout — refusing to deploy a site with no theater data. Check that the art-data branch exists and theater_bake.yml has published to it."
             exit 1
           fi
           echo "art-data verified: $(find public/data -type f | wc -l) files staged"
@@ -65,8 +81,11 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      # Legacy graph.json remains a defensive fallback for paintings that
-      # do not yet have theater data.
+      # Legacy graph.json fallback (Scene.jsx uses it when the theater
+      # manifest is missing/empty): self-repairs public/graph.json by
+      # dropping nodes with no matching public/assets/ image and bridging
+      # edges around them. Only touches this ephemeral checkout, not the
+      # repo.
       - name: Verify legacy graph.json against assets
         run: npm run verify-assets
 

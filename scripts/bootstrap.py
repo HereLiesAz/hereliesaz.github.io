@@ -1,0 +1,171 @@
+import os
+import json
+import torch
+import cv2
+import numpy as np
+import warnings
+import random
+from pathlib import Path
+from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+
+# --- CONFIGURATION ---
+# We use absolute paths to stop the guessing game
+PROJECT_ROOT = Path(os.getcwd())
+INPUT_DIR = PROJECT_ROOT / "assets/raw"
+OUTPUT_DIR = PROJECT_ROOT / "public/data"
+# NOT public/manifest.json: index.html references that path as the real
+# PWA manifest (<link rel="manifest" href="/manifest.json" />), and a
+# different agent is turning it into one. This bootstrap script's own
+# graph-bootstrap JSON ({"generated_at", "nodes": [...]}) has nothing to
+# do with the PWA manifest and must not clobber it. It's also distinct
+# from public/data/theater/_manifest.json (the real theater-pipeline
+# manifest, just a bare id list) and public/data/manifest.json (written by
+# scripts/repair_and_index.py) — hence the "bootstrap-manifest" name.
+# Confirmed via repo-wide grep: nothing else reads this path.
+MANIFEST_PATH = PROJECT_ROOT / "public/data/bootstrap-manifest.json"
+LIMIT = 5
+
+warnings.filterwarnings("ignore")
+
+def main():
+    print(f"[*] Bootstrapping the Void (Hard Reset Mode)...")
+    print(f"[*] Root: {PROJECT_ROOT}")
+
+    # 1. Clean & Setup
+    if not OUTPUT_DIR.exists():
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # 2. Find Images
+    valid_exts = {'.jpg', '.jpeg', '.png', '.webp'}
+    if not INPUT_DIR.exists():
+        print(f"[!] Error: {INPUT_DIR} missing.")
+        return
+
+    all_files = sorted([p for p in INPUT_DIR.iterdir() if p.suffix.lower() in valid_exts])
+    
+    if not all_files:
+        print("[!] No images found.")
+        return
+
+    # Random Selection
+    if len(all_files) > LIMIT:
+        selected_files = random.sample(all_files, LIMIT)
+    else:
+        selected_files = all_files
+
+    print(f"[*] Selected {len(selected_files)} images.")
+
+    # 3. AI Setup
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"[*] AI Device: {device}")
+
+    try:
+        depth_model = torch.hub.load("intel-isl/MiDaS", "DPT_Large").to(device).eval()
+        depth_transform = torch.hub.load("intel-isl/MiDaS", "transforms").dpt_transform
+    except:
+        print("[!] Depth model failed. Check internet.")
+        return
+
+    checkpoint = "sam_vit_b_01ec64.pth"
+    if not os.path.exists(checkpoint):
+        torch.hub.download_url_to_file("https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth", checkpoint)
+
+    sam = sam_model_registry["vit_b"](checkpoint=checkpoint)
+    sam.to(device=device)
+    mask_generator = SamAutomaticMaskGenerator(sam, points_per_side=16)
+
+    # 4. Processing
+    nodes = []
+
+    for idx, img_path in enumerate(selected_files):
+        print(f"[{idx+1}/{len(selected_files)}] Processing {img_path.name}...")
+        
+        try:
+            img_cv2 = cv2.imread(str(img_path))
+            if img_cv2 is None: continue
+            img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
+
+            # Resize
+            h, w = img_rgb.shape[:2]
+            max_dim = 512
+            if max(h, w) > max_dim:
+                scale = max_dim / max(h, w)
+                img_rgb = cv2.resize(img_rgb, (int(w * scale), int(h * scale)))
+
+            # Depth & Mask
+            input_batch = depth_transform(img_rgb).to(device)
+            with torch.no_grad():
+                prediction = depth_model(input_batch)
+                prediction = torch.nn.functional.interpolate(
+                    prediction.unsqueeze(1), size=img_rgb.shape[:2], mode="bicubic", align_corners=False
+                ).squeeze()
+            depth_raw = prediction.cpu().numpy()
+            d_min, d_max = depth_raw.min(), depth_raw.max()
+            depth_map = (depth_raw - d_min) / (d_max - d_min) if (d_max - d_min) > 0 else np.zeros_like(depth_raw)
+
+            masks = mask_generator.generate(img_rgb)
+            strokes = []
+            for m in masks:
+                mask = m['segmentation']
+                y, x = np.where(mask)
+                if len(y) == 0: continue
+                
+                strokes.append({
+                    "color": img_rgb[y, x].mean(axis=0).astype(int).tolist(),
+                    "bbox": [int(v) for v in m['bbox']],
+                    "z": float(depth_map[y, x].mean()),
+                    "stability": float(m['stability_score'])
+                })
+
+            out_name = f"{img_path.name}.json"
+            
+            with open(OUTPUT_DIR / out_name, 'w') as f:
+                json.dump({
+                    "meta": {"file": img_path.name, "res": [img_rgb.shape[1], img_rgb.shape[0]]}, 
+                    "strokes": strokes
+                }, f)
+
+            nodes.append({
+                "id": img_path.stem,
+                "file": out_name, 
+                "strokes": len(strokes),
+                "res": [img_rgb.shape[1], img_rgb.shape[0]],
+                "neighbors": [] 
+            })
+
+        except Exception as e:
+            print(f"[!] Failed {img_path.name}: {e}")
+
+    # 5. Manifest Generation
+    # Circular Linking
+    total = len(nodes)
+    for i, node in enumerate(nodes):
+        node["neighbors"] = [
+            nodes[(i - 1) % total]["id"], 
+            nodes[(i + 1) % total]["id"]
+        ]
+
+    # Structure: Object with 'nodes' array
+    manifest_data = {
+        "generated_at": "BOOTSTRAP_MODE",
+        "nodes": nodes
+    }
+
+    # Write
+    with open(MANIFEST_PATH, 'w') as f:
+        json.dump(manifest_data, f, indent=2)
+
+    # 6. VERIFICATION
+    print(f"[*] Verifying {MANIFEST_PATH}...")
+    try:
+        with open(MANIFEST_PATH, 'r') as f:
+            data = json.load(f)
+            if "nodes" in data and isinstance(data["nodes"], list):
+                print(f"[*] VALID. Found {len(data['nodes'])} nodes.")
+            else:
+                print(f"[!] INVALID STRUCTURE. Got keys: {data.keys()}")
+    except Exception as e:
+        print(f"[!] JSON CORRUPTED: {e}")
+
+if __name__ == "__main__":
+    main()

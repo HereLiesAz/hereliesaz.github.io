@@ -1,76 +1,146 @@
-# Workflow
+# Developer Workflow
 
-How to operate the live gallery.
+This document describes the pipeline as it actually exists in this repo
+today — not an aspirational `assets/raw/` staging layout from an earlier
+plan. Source photos live in a single flat directory, `public/assets/`
+(1180+ files), with no raw/processed split; scripts read from it directly.
 
-## Add a painting through `/admin`
+There are two independent, live GitHub Actions pipelines that both write
+to the orphan `art-data` branch (`keep_files: true`, so they layer rather
+than overwrite each other), plus a couple of manual/optional helper
+scripts:
 
-1. Open `/admin` and authenticate with the repository-scoped GitHub token.
-2. Add the source image and metadata.
-3. The admin app commits the source under `public/assets/` and dispatches `theater_bake.yml` for that painting id.
-4. The central Theater Bake implementation generates the paper-theater assets, hinge graph, validates them, and publishes to `art-data`.
-5. `deploy.yml` runs after the bake completes and rebuilds GitHub Pages with the new `art-data` checkout.
+1.  **Paper theater** (`theater_bake.yml`) — the CURRENT gallery: crops
+    each painting, photorealizes it, estimates depth, buckets the depth
+    into bands, and builds the "pareidolia hinge" graph connecting
+    paintings by shared visual patches. This is the pipeline behind the
+    live 3D diorama gallery.
+2.  **Stroke grinder** (`process_art.yml`) — an older, separate
+    "pointillist" visualization (`scripts/grinder.py`, SAM + MiDaS,
+    56-way sharded). Still live, but independent of the theater pipeline;
+    neither reads the other's output.
 
-The admin UI does not wait synchronously for the bake. “Dispatched” means GitHub accepted the workflow request; the actual bake/deploy continues in Actions.
+Plus `bootstrap.yml`, a small manual workflow that bootstraps 5 sample
+images through a MiDaS+SAM path similar to the grinder, for a fast, cheap
+sanity check of the art-data publish flow.
 
-## Add or rebake from GitHub Actions
+---
 
-Run **Theater Bake** manually and pass a comma-separated `ids` list. Leaving `ids` blank uses the workflow's configured default batch.
+## 1. Paper theater (the live gallery pipeline)
 
-Use targeted ids whenever possible. The photorealization/depth stages can consume remote model quota; widening a batch is an operational/cost decision, not merely a convenience.
+Source: `public/assets/{id}.{jpg,png,webp,heic,...}`
+Output: `public/data/theater/` (deployed to the `art-data` branch)
 
-## Crop corrections
-
-Edit `scripts/crops.json`. A crop-box change triggers Theater Bake through the repository proxy. The baker detects crop changes per id and invalidates the relevant cached stages so the photorealized image and depth remain aligned with the new crop.
-
-## Edit metadata
-
-Use `/admin`. Metadata edits are ordinary `main`-branch content changes and do not require the removed legacy processing pipeline.
-
-## Curate depth bands
-
-Use the band editor under `/admin`. It writes `public/band-overrides.json`.
-
-Band overrides are applied at render time by `src/utils/bandOverrides.js`; they do not modify baked theater data and do not require a rebake.
-
-## Remove a painting
-
-Remove it through `/admin`. The UI batches removals and dispatches `remove_painting.yml`, which updates `art-data`. The Pages deploy watches that workflow and rebuilds the site after completion.
-
-Do not manually fire one removal workflow per id in a burst; the batching logic exists to avoid competing writes to the orphan data branch.
-
-## Local frontend development
-
-```bash
-npm install
-npm run dev
-```
-
-The gallery expects theater data under `public/data/theater/`. For a production-faithful build, populate that directory from the `art-data` branch before building.
-
-```bash
-npm run build
-```
-
-## Local pipeline development
-
-Install the Python dependencies from `scripts/requirements.txt` and run the baker against selected ids:
+### Step 1 — Bake painting + depth + metadata
 
 ```bash
 python3 scripts/theater_baker.py \
-  --input public/assets/ \
-  --output public/data/theater/ \
-  --ids id1,id2
-
-python3 scripts/pareidolia_index.py
-python3 scripts/validate_output.py
+    --input  public/assets/ \
+    --output public/data/theater/ \
+    --ids id1,id2,...   # or omit for the default curated batch
 ```
 
-Exact CLI options can change; use each script's `--help` when running locally.
+Per painting this runs four cacheable stages (each skipped if its output
+already exists, unless `--force`): crop to the artwork (hand-authored
+boxes in `scripts/crops.json`, else a saturation heuristic) → photorealize
+via an HF image model → monocular depth (Depth-Anything-V2, local first,
+then a hosted Space, then a documented emergency-only synthetic
+fallback) → k-means depth bands + color clusters, written to
+`{id}.theater.json`. See the module docstring in `theater_baker.py` for
+the full stage breakdown and depth-provenance values.
 
-## Destructive duplicate cleanup
+### Step 2 — Build the hinge graph
 
-`scripts/deduplicate.py` is manual and destructive. It can delete perceptually duplicate source files under `public/assets/`. Never wire it into CI and never run it casually.
+```bash
+python3 scripts/pareidolia_index.py --data public/data/theater/
+```
 
-## Historical pipeline
+Reads every baked `{id}.painting.webp` / `{id}.depth.png` pair already in
+`--data` (no re-bake needed) and writes `graph.theater.json`: for each
+ordered pair of paintings, the best shared "hinge" patch, if any candidate
+clears the acceptance bar (see `pareidolia_index.py`'s `MIN_SIM` / scale-
+bias-correction comments — most pairs get NO edge; this is intentional, a
+curated match set, not a complete graph).
 
-The old `process_art.yml` / `bootstrap.yml` shard-cloud system and its scripts were removed in September 2026. Do not recreate them from old references. Historical design material is intentionally isolated in `docs/archive/`.
+### Step 3 — Validate before publishing
+
+```bash
+python3 scripts/validate_output.py --dir public/data/theater
+```
+
+Hard gate, non-zero exit on any violation (schema, torn-write manifest
+entries, a synthetic/emergency depth map that shipped undetected, or a
+suspiciously-complete hinge graph). `theater_bake.yml` runs this and fails
+the job on any error — see that workflow for the exact CI wiring.
+
+In CI this whole chain (bake → hinge graph → validate → deploy) is driven
+by **`.github/workflows/theater_bake.yml`**, dispatched with an explicit
+comma-separated id list (or a default curated batch) — never the whole
+`public/assets/` corpus in one go, since the photorealize step calls a
+paid/quota'd model per painting.
+
+---
+
+## 2. Stroke grinder (legacy, still live, separate pipeline)
+
+Driven by **`.github/workflows/process_art.yml`**: a 56-shard matrix job
+runs `scripts/grinder.py` (SAM segmentation + MiDaS depth) over
+`public/assets/`, producing per-painting stroke JSON, consolidated and
+deployed to `art-data` alongside (not instead of) the theater tree.
+
+`scripts/indexer.py` and `scripts/pareidolia.py` are **not** run by this
+workflow (or any live workflow) anymore — see the comment in
+`process_art.yml`'s `consolidate` job for why the old indexer step was
+removed (its output path was never actually published, and nothing in
+`src/` reads it).
+
+### Pareidolia "ghost injection" — legacy, no live caller
+
+`scripts/pareidolia.py` scans the legacy per-painting JSON files in
+`public/data/` (not `public/data/theater/`) for face-like Haar-cascade
+detections and injects a `pareidolia` array into each. **No workflow calls
+this anymore.** Historical manual runs already left a stale `pareidolia`
+key on most (not all) of the legacy `public/data/*.json` files, so the
+corpus is inconsistent either way. Treat it as a standalone, manually-run
+curiosity, not a required pipeline step — do not add it back into a
+workflow without also deciding what to do about the paintings that were
+never run through it.
+
+### Deduplication — optional, manual, destructive
+
+```bash
+python3 scripts/deduplicate.py
+```
+
+Scans `public/assets/` (the SAME directory the theater bake reads from —
+there is no separate raw-dump folder), perceptually hashes every image,
+and **deletes** the lower-quality file in each visually-identical group.
+No workflow runs this automatically. Because it deletes files by content
+match, and `theater_bake.yml`'s default id batch and `scripts/crops.json`
+both key off exact filename stems, run it deliberately and check its
+output before committing — not as a routine step.
+
+---
+
+## Metadata (editorial)
+
+`scripts/grinder.py` creates a per-image "stub" markdown file in
+`assets/meta/` for hand-edited titles/years/descriptions, in the same
+format described in earlier versions of this doc. That mechanism is part
+of the stroke-grinder pipeline, not the paper-theater one.
+
+---
+
+## Frontend Development
+
+### Start Local Server
+```bash
+npm run dev
+```
+
+### Building for Production
+```bash
+npm run build
+```
+This generates the static site in `dist/`. Baked art data is fetched at
+runtime from the `art-data` branch rather than bundled into `dist/`.
