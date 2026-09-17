@@ -56,6 +56,20 @@ def provenance(rec: dict[str, Any], pipeline: str, artifact: str, native_schema:
         rec["provenance"].append(item)
 
 
+def add_representation(rec: dict[str, Any], key: str, rep: dict[str, Any]) -> None:
+    """Preserve every native artifact even when several share one family."""
+    current = rec["representations"].get(key)
+    if current is None:
+        rec["representations"][key] = rep
+        return
+    if isinstance(current, dict) and isinstance(current.get("variants"), list):
+        if rep not in current["variants"]:
+            current["variants"].append(rep)
+        return
+    if current != rep:
+        rec["representations"][key] = {"variants": [current, rep]}
+
+
 def add_theater(public_root: Path, records: dict[str, dict[str, Any]], warnings: list[str]) -> None:
     root = public_root / "data" / "theater"
     manifest_path = root / "_manifest.json"
@@ -86,11 +100,11 @@ def add_theater(public_root: Path, records: dict[str, dict[str, Any]], warnings:
                     rec["source"]["width"] = src["width"]
                 if isinstance(src.get("height"), (int, float)) and src["height"] > 0:
                     rec["source"]["height"] = src["height"]
-                for key in ("file", "filename", "original_file", "originalFile"):
-                    if isinstance(src.get(key), str) and src[key]:
-                        rec["source"].setdefault("image", "/assets/" + src[key])
+                for field in ("file", "filename", "original_file", "originalFile"):
+                    if isinstance(src.get(field), str) and src[field]:
+                        rec["source"].setdefault("image", "/assets/" + src[field])
                         break
-        rec["representations"]["theater"] = rep
+        add_representation(rec, "theater", rep)
         provenance(rec, "paper-theater", web_path(meta_path, public_root), rep.get("nativeSchema"))
 
     graph_path = root / "graph.theater.json"
@@ -101,7 +115,9 @@ def add_theater(public_root: Path, records: dict[str, dict[str, Any]], warnings:
                 continue
             rec = record(records, edge["source"])
             rec["transitions"].setdefault("theater", []).append({
-                key: edge[key] for key in ("target", "weight", "s_uv", "t_uv", "scale") if key in edge
+                field: edge[field]
+                for field in ("target", "weight", "s_uv", "t_uv", "scale")
+                if field in edge
             })
             provenance(rec, "paper-theater-hinge-graph", web_path(graph_path, public_root), graph.get("schemaVersion"))
 
@@ -109,8 +125,8 @@ def add_theater(public_root: Path, records: dict[str, dict[str, Any]], warnings:
 def stroke_id(path: Path, payload: dict[str, Any]) -> str:
     meta = payload.get("meta")
     if isinstance(meta, dict):
-        for key in ("id", "file", "f", "original_file", "originalFile"):
-            pid = normalise_id(meta.get(key))
+        for field in ("id", "file", "f", "original_file", "originalFile"):
+            pid = normalise_id(meta.get(field))
             if pid:
                 return pid
     return Path(path.stem).stem
@@ -131,11 +147,15 @@ def add_strokes(public_root: Path, records: dict[str, dict[str, Any]], warnings:
         if not isinstance(strokes, list):
             continue
         rec = record(records, stroke_id(path, payload))
-        rep: dict[str, Any] = {"data": web_path(path, public_root), "count": len(strokes), "nativeField": field}
+        rep: dict[str, Any] = {
+            "data": web_path(path, public_root),
+            "count": len(strokes),
+            "nativeField": field,
+        }
         if isinstance(payload.get("pareidolia"), list):
             rep["hasPareidoliaAnnotations"] = True
             rep["pareidoliaCount"] = len(payload["pareidolia"])
-        rec["representations"]["strokeCloud"] = rep
+        add_representation(rec, "strokeCloud", rep)
         provenance(rec, "turbo-stroke-cloud", web_path(path, public_root), field)
 
 
@@ -161,7 +181,7 @@ def add_baked(public_root: Path, records: dict[str, dict[str, Any]], warnings: l
         if kind is None:
             warnings.append(f"{path}: unrecognized baked representation; preserved but not integrated")
             continue
-        pid = normalise_id(payload.get("id")) or path.name[:-len(".baked.json")]
+        pid = normalise_id(payload.get("id")) or Path(path.name[:-len(".baked.json")]).stem
         rec = record(records, pid)
         rep: dict[str, Any] = {"data": web_path(path, public_root)}
         if isinstance(payload.get("res"), list) and len(payload["res"]) == 2:
@@ -173,17 +193,23 @@ def add_baked(public_root: Path, records: dict[str, dict[str, Any]], warnings: l
             total = payload.get("totalCount")
             if isinstance(total, int):
                 rep.update(count=total, forwardCount=total // 2, mirrorCount=total - total // 2)
-            rep["attributes"] = [k for k in ("aOffset", "aScale", "aColor", "aUvOffset", "aUvScale", "isMirror") if k in payload]
+            rep["attributes"] = [
+                field for field in ("aOffset", "aScale", "aColor", "aUvOffset", "aUvScale", "isMirror")
+                if field in payload
+            ]
             pipeline = "unified-shard-field"
         elif kind == "perspectiveShardBake":
             if isinstance(payload.get("count"), int):
                 rep["count"] = payload["count"]
-            rep["attributes"] = [k for k in ("aOffset", "aScale", "aColor", "aUvOffset", "aUvScale") if k in payload]
+            rep["attributes"] = [
+                field for field in ("aOffset", "aScale", "aColor", "aUvOffset", "aUvScale")
+                if field in payload
+            ]
             pipeline = "perspective-shard-bake"
         else:
             rep["count"] = len(payload["slices"])
             pipeline = "semantic-layer-deconstructor"
-        rec["representations"][kind] = rep
+        add_representation(rec, kind, rep)
         provenance(rec, pipeline, web_path(path, public_root))
 
 
@@ -203,12 +229,12 @@ def add_graph(public_root: Path, records: dict[str, dict[str, Any]], warnings: l
         if isinstance(image, str) and image:
             image_path = "/assets/" + image
             rec["source"].setdefault("image", image_path)
-            rec["representations"].setdefault("flatImage", {"image": image_path})
+            add_representation(rec, "flatImage", {"image": image_path})
         else:
-            rec["representations"].setdefault("flatImage", {"graphNodeOnly": True})
-        for key in ("title", "totalCount"):
-            if key in node:
-                rec["source"].setdefault(key, node[key])
+            add_representation(rec, "flatImage", {"graphNodeOnly": True})
+        for field in ("title", "totalCount"):
+            if field in node:
+                rec["source"].setdefault(field, node[field])
         provenance(rec, "legacy-or-unified-graph", web_path(path, public_root), graph.get("schemaVersion"))
     for edge in graph.get("edges", []):
         if not isinstance(edge, dict):
@@ -218,9 +244,9 @@ def add_graph(public_root: Path, records: dict[str, dict[str, Any]], warnings: l
             continue
         rec = record(records, pid)
         rec["transitions"].setdefault("legacyOrUnified", []).append({
-            key: edge[key]
-            for key in ("target", "weight", "s_uv", "t_uv", "source_shard", "target_shard")
-            if key in edge
+            field: edge[field]
+            for field in ("target", "weight", "s_uv", "t_uv", "source_shard", "target_shard")
+            if field in edge
         })
 
 
@@ -255,10 +281,10 @@ def build(public_root: Path, strict: bool = False) -> int:
     errors: list[str] = []
     for pid in sorted(records):
         rec = records[pid]
-        rec["provenance"].sort(key=lambda x: (x.get("pipeline", ""), x.get("artifact", "")))
+        rec["provenance"].sort(key=lambda item: (item.get("pipeline", ""), item.get("artifact", "")))
         for edges in rec["transitions"].values():
             if isinstance(edges, list):
-                edges.sort(key=lambda e: (str(e.get("target", "")), -float(e.get("weight", 0) or 0)))
+                edges.sort(key=lambda edge: (str(edge.get("target", "")), -float(edge.get("weight", 0) or 0)))
         rec_errors = validate(rec)
         if rec_errors:
             errors.extend(f"{pid}: {msg}" for msg in rec_errors)
@@ -284,7 +310,7 @@ def build(public_root: Path, strict: bool = False) -> int:
         print(f"[integration error] {msg}", file=sys.stderr)
     print(
         f"Integrated {len(entries)} painting record(s) from "
-        f"{sum(len(r['representations']) for r in records.values())} representation(s); "
+        f"{sum(len(rec['representations']) for rec in records.values())} representation family slot(s); "
         f"{len(warnings)} warning(s), {len(errors)} error(s)."
     )
     return 1 if errors or (strict and warnings) else 0
