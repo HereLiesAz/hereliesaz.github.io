@@ -59,6 +59,9 @@ jobs:
           rm -rf public/data/integrated
           python3 scripts/integrate_painting_bakes.py --public-root public --strict
 
+      - name: Install verification dependencies
+        run: python3 -m pip install --disable-pip-version-check -r scripts/verification-requirements.txt
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -69,8 +72,9 @@ jobs:
         run: npm ci
 
       # One repository-level verification entrypoint: Python syntax, the
-      # integration builder tests, asset/legacy-graph consistency, Capacitor
-      # output-path sanity, and the production Vite build.
+      # integration builder tests, canonical JSON Schema validation,
+      # asset/legacy-graph consistency, Capacitor output-path sanity, and
+      # the production Vite build.
       - name: Verify repository and build
         run: npm run verify
 
