@@ -1,35 +1,41 @@
+#!/usr/bin/env python3
+"""Build a compact semantic/depth-layer representation for paintings."""
+from __future__ import annotations
+
 import argparse
-import os
 import json
-import torch
+import os
+import random
+from pathlib import Path
+
 import cv2
 import numpy as np
-from pathlib import Path
-from tqdm import tqdm
+import torch
 from PIL import Image, ImageFile
+from tqdm import tqdm
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-# Attempt to load specialized models
 try:
-    from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+    from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
     SAM_AVAILABLE = True
 except ImportError:
     SAM_AVAILABLE = False
 
-class ThreeDDeconstructor:
-    def __init__(self, device="cuda"):
-        self.device = device if torch.cuda.is_available() else "cpu"
-        print(f"[*] Initializing 3D Deconstructor on {self.device}...")
-        
-        # 1. Load Depth (MiDaS Small for speed/reliability)
-        self.depth_model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small").to(self.device).eval()
-        self.depth_transforms = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
 
-        # 2. Load SAM (for Feature Extraction)
+class ThreeDDeconstructor:
+    def __init__(self, device: str = "cuda"):
+        self.device = device if device == "cpu" or torch.cuda.is_available() else "cpu"
+        print(f"[*] Initializing 3D Deconstructor on {self.device}...")
+
+        self.depth_model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small").to(self.device).eval()
+        self.depth_transform = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
+
+        self.mask_generator = None
         if SAM_AVAILABLE:
-            checkpoint = "sam_vit_b_01ec64.pth"
-            if os.path.exists(checkpoint):
-                sam = sam_model_registry["vit_b"](checkpoint=checkpoint)
+            checkpoint = Path("sam_vit_b_01ec64.pth")
+            if checkpoint.exists():
+                sam = sam_model_registry["vit_b"](checkpoint=str(checkpoint))
                 sam.to(device=self.device)
                 self.mask_generator = SamAutomaticMaskGenerator(
                     model=sam,
@@ -39,13 +45,10 @@ class ThreeDDeconstructor:
                     min_mask_region_area=500,
                 )
             else:
-                print(f"[!] SAM checkpoint {checkpoint} not found. Skipping SAM features.")
-                self.mask_generator = None
-        else:
-            self.mask_generator = None
+                print(f"[!] SAM checkpoint {checkpoint} not found. Continuing with luminance features only.")
 
-    def get_depth_map(self, img_rgb):
-        input_batch = self.depth_transforms(img_rgb).to(self.device)
+    def get_depth_map(self, img_rgb: np.ndarray) -> np.ndarray:
+        input_batch = self.depth_transform(img_rgb).to(self.device)
         with torch.no_grad():
             prediction = self.depth_model(input_batch)
             prediction = torch.nn.functional.interpolate(
@@ -60,94 +63,101 @@ class ThreeDDeconstructor:
             return (depth - d_min) / (d_max - d_min)
         return np.zeros_like(depth)
 
-    def deconstruct(self, image_path, out_dir):
-        path = Path(image_path)
+    def deconstruct(self, image_path: Path, out_dir: Path) -> Path:
         img_pil = Image.open(image_path).convert("RGB")
         img_np = np.array(img_pil)
         h, w = img_np.shape[:2]
 
-        print(f"[*] Deconstructing {path.name}...")
+        print(f"[*] Deconstructing {image_path.name}...")
         depth_map = self.get_depth_map(img_np)
 
-        # 1. Feature Extraction (SAM + Luminance)
-        masks = []
-        if self.mask_generator:
-            masks = self.mask_generator.generate(img_np)
-        
-        # Add Luminance-based "Reason" (High contrast lighting)
+        masks = self.mask_generator.generate(img_np) if self.mask_generator else []
+
         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
         _, light_mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(light_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours:
-            if cv2.contourArea(cnt) > 1000:
-                m = np.zeros((h, w), dtype=np.uint8)
-                cv2.drawContours(m, [cnt], -1, 255, -1)
-                masks.append({'segmentation': m.astype(bool), 'bbox': cv2.boundingRect(cnt)})
+        for contour in contours:
+            if cv2.contourArea(contour) <= 1000:
+                continue
+            mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+            masks.append({
+                "segmentation": mask.astype(bool),
+                "bbox": cv2.boundingRect(contour),
+            })
 
-        # 2. Extract Liquidy Slices (Semantic Layers)
+        valid_masks = [
+            item for item in masks
+            if np.sum(item["segmentation"]) > (w * h * 0.005)
+        ]
+        valid_masks.sort(key=lambda item: np.sum(item["segmentation"]), reverse=True)
+
         slices = []
-        
-        # Filter and sort masks by size to get major features
-        valid_masks = [m for m in masks if np.sum(m['segmentation']) > (w * h * 0.005)] # At least 0.5% of image
-        valid_masks.sort(key=lambda x: np.sum(x['segmentation']), reverse=True)
-        
-        # LIMIT to top 15 features to keep it "Liquidy" and not "Sharded"
-        for i, m in enumerate(valid_masks[:15]):
-            seg = m['segmentation']
-            rx, ry, rw, rh = m['bbox']
-            
-            # Sample depth for this specific layer
+        for item in valid_masks[:15]:
+            seg = item["segmentation"]
+            rx, ry, rw, rh = item["bbox"]
             mask_depth = depth_map[seg]
             z_mean = float(np.mean(mask_depth))
             z_var = float(np.std(mask_depth))
-            
-            # 2. Interleaved Centered Distribution (Mirroring)
-            # Instead of 0..-20, we use -22..+22 to overlap with BOTH neighbors
-            # SEGMENT_LENGTH is 21.44, so 22.0 provides slight overlap
-            z_spread = (z_mean - 0.5) * 44.0 
-            
-            # Random variance for variety
-            r = [random.random() for _ in range(3)]
-            
+            z_spread = (z_mean - 0.5) * 44.0
             slices.append({
-                "b": [int(rx), int(ry), int(rw), int(rh)], # Bounding box for UV mapping
-                "z": z_spread,      # Centered interleaved Z
-                "zl": z_mean,       # Component mean depth (structural)
-                "zv": z_var,        # Component depth variance
-                "r": r              # Random factors for shader noise
+                "b": [int(rx), int(ry), int(rw), int(rh)],
+                "z": z_spread,
+                "zl": z_mean,
+                "zv": z_var,
+                "r": [random.random() for _ in range(3)],
             })
 
-        # Save refined deconstruction
-        out_file = out_dir / f"{path.stem}.baked.json"
-        with open(out_file, 'w') as f:
-            json.dump({
-                "id": path.stem,
-                "res": [w, h],
-                "count": len(slices),
-                "slices": slices
-            }, f, separators=(',', ':'))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"{image_path.stem}.baked.json"
+        out_file.write_text(json.dumps({
+            "id": image_path.stem,
+            "res": [w, h],
+            "count": len(slices),
+            "slices": slices,
+        }, separators=(",", ":")), encoding="utf-8")
+        return out_file
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="assets/raw")
-    parser.add_argument("--out", default="public/data/baked")
-    args = parser.parse_args()
 
-    in_dir = Path(args.input)
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, default=Path("public/assets"))
+    parser.add_argument("--out", type=Path, default=Path("public/data/baked"))
+    parser.add_argument("--limit", type=int, default=5, help="maximum paintings to process; 0 means all")
+    parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    args = parser.parse_args(argv)
 
-    deconstructor = ThreeDDeconstructor()
-    images = sorted([f for f in in_dir.iterdir() if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.webp']])
-    
-    # LIMIT to first 5 for initial high-fidelity test
-    process_list = images[:5]
-    
-    for img in tqdm(process_list):
+    if not args.input.is_dir():
+        print(f"[!] Input directory does not exist: {args.input}")
+        return 2
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    images = sorted(
+        p for p in args.input.iterdir()
+        if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+    )
+    if not images:
+        print(f"[!] No supported images found in {args.input}")
+        return 2
+
+    process_list = images if args.limit == 0 else images[:args.limit]
+    deconstructor = ThreeDDeconstructor(device=args.device)
+
+    failures = 0
+    for image in tqdm(process_list, desc="Semantic deconstruction"):
         try:
-            deconstructor.deconstruct(img, out_dir)
-        except Exception as e:
-            print(f"[!] Critical error on {img.name}: {e}")
+            deconstructor.deconstruct(image, args.out)
+        except Exception as exc:
+            failures += 1
+            print(f"[!] Critical error on {image.name}: {exc}")
+
+    if failures:
+        print(f"[!] Completed with {failures} failure(s) out of {len(process_list)} image(s).")
+        return 1
+    print(f"[+] Wrote {len(process_list)} semantic bake(s) to {args.out}")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
