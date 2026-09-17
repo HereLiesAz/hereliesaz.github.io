@@ -72,6 +72,9 @@ jobs:
           fi
           echo "art-data verified: $(find public/data -type f | wc -l) files staged"
 
+      - name: Test painting integration
+        run: python3 -m unittest scripts/test_integrate_painting_bakes.py
+
       # Build one additive index across every representation that happens
       # to be present in this exact art-data snapshot. Native pipeline
       # artifacts remain untouched and authoritative; the generated
