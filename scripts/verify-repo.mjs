@@ -2,9 +2,10 @@
 
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 
-const root = resolve(new URL('..', import.meta.url).pathname);
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function run(command, args, label) {
   console.log(`\n==> ${label}`);
@@ -60,6 +61,7 @@ try {
   verifyCapacitorConfig();
   run(python, ['-m', 'py_compile', ...pythonFiles], 'Python syntax check');
   run(python, ['-m', 'unittest', 'scripts/test_integrate_painting_bakes.py'], 'Integration builder unit tests');
+  run(python, ['scripts/validate_integrated_records.py', '--public-root', 'public'], 'Integrated painting JSON Schema validation');
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'verify-assets'], 'Asset/legacy graph verification');
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], 'Production Vite build');
   console.log('\nRepository verification passed.');
