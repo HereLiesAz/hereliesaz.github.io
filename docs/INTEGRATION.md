@@ -1,129 +1,71 @@
 # Multi-Pipeline Art Integration
 
-All currently present art-processing pipelines are intentional unless explicitly retired later. Their differing outputs are treated as complementary representations of the same painting, not as evidence that one should replace the others.
+All currently present art-processing pipelines are intentional unless explicitly retired later. Their outputs are complementary representations of the same painting.
 
 ## Integration rule
 
-Native pipeline outputs remain authoritative for their own formats. Integration is additive.
+Native outputs remain authoritative. Integration is additive: no native artifact is rewritten, deleted, renamed, or normalized away merely to fit a common format.
 
-`scripts/integrate_painting_bakes.py` discovers native artifacts and writes canonical sidecar records under:
+`scripts/integrate_painting_bakes.py` discovers the artifacts present in the deploy checkout and writes:
 
 ```text
-public/data/integrated/
-  _manifest.json
-  {id}.painting-bake.json
+public/data/integrated/_manifest.json
+public/data/integrated/{id}.painting-bake.json
 ```
 
 The machine-readable contract is `schemas/painting-bake.schema.json`.
 
-A sidecar never rewrites, deletes, renames, or normalizes away a native artifact. It records which representations exist for a painting, where they live, which transition graphs describe it, and which pipeline produced each artifact.
+## Representation families
 
-## Representation map
+| Canonical key | Native producer(s) | Native output |
+|---|---|---|
+| `theater` | `theater_baker.py` | painting/depth/theater metadata, optional masks |
+| `strokeCloud` | `grinder.py`, `bootstrap.py`, repaired older stroke data | root `data/*.json` using `s` or `strokes` |
+| `unifiedShardField` | `prepare.py` + `shard_prep/*` | baked arrays with `totalCount` + `isMirror` |
+| `perspectiveShardBake` | `bake-shards.js` | baked `aOffset/aScale/...` arrays |
+| `semanticShardCloud` | `curator.py` | shard JSON plus position/UV/scale binary buffers |
+| `semanticLayers` | `3d_deconstructor.py` | baked `slices` |
+| `flatImage` | `public/graph.json` + `public/assets` | image fallback / graph node |
 
-### Paper Theater
+A painting may contain any subset of these families.
 
-Producer chain:
+## Variants
 
-```text
-public/assets/{image}
-  -> scripts/theater_baker.py
-  -> public/data/theater/{id}.painting.webp
-  -> public/data/theater/{id}.depth.png
-  -> public/data/theater/{id}.theater.json
-  -> scripts/pareidolia_index.py
-  -> public/data/theater/graph.theater.json
+The real `art-data` branch contains multiple native artifacts from the same family for some paintings—for example compact and older stroke JSON forms, or multiple baked shard variants. Integration preserves all of them.
+
+A family with one native artifact is stored directly:
+
+```json
+"strokeCloud": {
+  "data": "/data/example.jpg.json",
+  "count": 123,
+  "nativeField": "s"
+}
 ```
 
-Canonical representation key: `representations.theater`
+A family with multiple artifacts becomes:
 
-Purpose: preserve the source artwork at coalescence while producing depth-band parallax and hinge-driven transitions.
-
-### Turbo Stroke Cloud
-
-Producer chain:
-
-```text
-public/assets/{image}
-  -> scripts/grinder.py
-  -> public/data/{source-filename}.json
+```json
+"strokeCloud": {
+  "variants": [
+    { "data": "/data/example.jpg.json", "count": 123, "nativeField": "s" },
+    { "data": "/data/example.json", "count": 15000, "nativeField": "strokes" }
+  ]
+}
 ```
 
-The native JSON may use `s` or `strokes`. `scripts/pareidolia.py`, `scripts/indexer.py`, and `scripts/repair_and_index.py` operate around this family of data.
-
-Canonical representation key: `representations.strokeCloud`
-
-Purpose: object/color/depth fragments suitable for volumetric or semantic motion.
-
-### Unified Shard Field
-
-Producer chain:
-
-```text
-painting image
-  -> scripts/prepare.py
-  -> scripts/shard_prep/*
-  -> public/data/baked/{id}.baked.json
-  -> public/graph.json
-```
-
-Canonical representation key: `representations.unifiedShardField`
-
-Purpose: organic painterly shards with anamorphic projection, mirrored geometry, and DINOv2 transition anchors.
-
-### Perspective shard bake
-
-Producer:
-
-```text
-public/data/*.json
-  -> scripts/bake-shards.js
-  -> public/data/baked/{id}.baked.json
-```
-
-Canonical representation key: `representations.perspectiveShardBake`
-
-Purpose: perspective-corrected GPU-ready shard geometry derived from pre-existing stroke/shard data.
-
-### Semantic layers
-
-Producer:
-
-```text
-painting image
-  -> scripts/3d_deconstructor.py
-  -> public/data/baked/{id}.baked.json
-```
-
-Canonical representation key: `representations.semanticLayers`
-
-Purpose: a smaller set of large semantic/depth layers between flat theater bands and dense shard clouds.
-
-### Flat image fallback
-
-Producer/source:
-
-```text
-public/graph.json node.image
-  -> public/assets/{image}
-```
-
-Canonical representation key: `representations.flatImage`
-
-Purpose: guaranteed low-complexity fallback when richer baked representations are missing or unavailable.
+No preferred variant is baked into the data contract.
 
 ## Transition graphs
 
-The canonical sidecar does not collapse graph algorithms into one score.
+Graph algorithms remain separate rather than being collapsed into one synthetic score.
 
-`transitions.theater` preserves the current schema-5 saliency/LAB/gradient/depth hinge graph from `pareidolia_index.py`.
+- `transitions.theater` preserves schema-5 saliency/LAB/gradient/depth hinge edges from `pareidolia_index.py`.
+- `transitions.legacyOrUnified` preserves `public/graph.json` edges, including DINO/semantic shard indices or UV anchors where present.
 
-`transitions.legacyOrUnified` preserves edges from `public/graph.json`, including DINOv2-style anchors or older graph variants.
+This keeps both provenance and semantics intact for future combination logic.
 
-Keeping graph families distinct is deliberate. A future renderer can combine or rank them, but integration must not silently erase the provenance or semantics of either graph.
-
-## Canonical record shape
-
-A record has this top-level form:
+## Canonical record
 
 ```json
 {
@@ -136,38 +78,50 @@ A record has this top-level form:
 }
 ```
 
-`representations` is sparse by design. A painting can have only theater data, only stroke data, every representation, or anything in between.
+`source` contains shared facts such as source image, resolution, or title when a native artifact provides them. `provenance` identifies the pipeline and artifact that contributed each capability.
 
-`provenance` identifies the native producer and artifact for every representation/graph incorporated into the record.
+## Deployment
 
-## Deployment behavior
+`.github/workflows/deploy.yml` performs integration after checking out `art-data` and before the Vite build:
 
-The deploy workflow runs the integrator after checking out `art-data` and before Vite builds the site. The integration directory is therefore regenerated from the exact artifact set being deployed.
+1. run `python3 -m unittest scripts/test_integrate_painting_bakes.py`;
+2. run `python3 scripts/integrate_painting_bakes.py --public-root public` against the real staged data;
+3. continue existing asset verification and Vite build/deploy.
 
-This keeps integration deterministic and prevents stale sidecars from surviving after a native artifact is added, changed, or removed.
+This means sidecars always describe the exact artifact set being deployed and cannot become a separately maintained stale database.
 
-The current frontend is not required to consume the sidecars yet. Existing theater and flat fallback paths continue to function unchanged. New consumers should prefer the canonical manifest when they need to discover which representations exist.
+## Runtime API
+
+`src/utils/paintingBake.js` provides:
+
+- `loadPaintingBakeManifest()`;
+- `loadPaintingBake(id)`;
+- `representationVariants(record, key)`;
+- `hasRepresentation(record, key)`;
+- `availableRepresentations(record)`;
+- `transitionEdges(record, graphKey)`;
+- `preferredRepresentation(record, preference)`;
+- `clearPaintingBakeCache()`.
+
+The helper understands direct representations and variant collections. The current Paper Theater renderer is intentionally unchanged; alternate renderers can now discover all available data through one stable API instead of knowing every native path convention.
+
+## Repairs made as part of integration
+
+- `bootstrap.py` defaults to `public/assets`, remains configurable, and handles zero successful samples safely.
+- `3d_deconstructor.py` defaults to the real corpus, imports its required random module, and exposes device/limit controls.
+- `curator.py` defaults to `public/assets`, exposes device/limit controls, writes semantic shard coordinates needed by its graph, and handles zero-shard paintings without `argmax` crashes.
+- the integrator recognizes optional theater mask files already present in `art-data`.
+- the integrator recognizes Curator JSON and its `_pos.bin`, `_uv.bin`, `_scale.bin` companions.
+- duplicate representation-family artifacts are retained as variants.
 
 ## Development policy
 
-Do not classify a pipeline as abandoned merely because the current renderer does not consume it.
-
-Use these statuses instead:
-
-- `wired`: producer or consumer is connected to an execution path.
-- `unwired`: implementation exists but no current execution/consumer path reaches it.
-- `incomplete`: intended behavior is only partially implemented.
-- `broken`: an identified defect prevents the intended path from working.
-- `overlapping`: another pipeline solves part of the same problem differently.
-- `experimental`: behavior is intentionally exploratory.
-- `production`: relied on by the shipped site.
+Do not classify a pipeline as abandoned merely because the current renderer does not consume it. Use `production`, `wired`, `unwired`, `incomplete`, `broken`, `overlapping`, or `experimental` as appropriate.
 
 Removal requires an explicit decision that the capability is no longer wanted.
 
-## Next integration steps
+## Completion state
 
-1. Repair path drift in tools that still default to `assets/raw` so they can operate on the real source corpus without losing the option for a separate staging directory.
-2. Fix known local defects such as the missing `random` import in `3d_deconstructor.py`.
-3. Add first-class generation/publishing for Unified Shard Field and semantic-layer artifacts so `art-data` can carry them alongside theater and stroke data.
-4. Add a runtime loader that reads `/data/integrated/_manifest.json` and can choose or combine representations without changing the current theater renderer's fallback behavior.
-5. Define combination rules for semantic metadata, painterly shard geometry, depth bands, and both transition-graph families after the data is simultaneously available for the same paintings.
+The cross-pipeline integration layer is implemented: schema, discovery builder, variant preservation, Curator support, transition preservation, fixture tests, deploy-time generation, runtime loader, and repaired known path/runtime defects are all present on `main`.
+
+Future work can change how the gallery **combines or renders** these representations, but it no longer needs to invent another discovery/data-contract layer first.
