@@ -1,73 +1,31 @@
 name: Android CI
-
-# Native Android support is intentionally preserved, but this repository does
-# not currently contain an Android/Gradle project or Gradle wrapper. Running
-# the previous workflow on every web push guaranteed a failure before tests
-# could start. Keep CI manually invokable until the native project is added or
-# generated as part of the build.
 on:
+  push:
+    branches: [main]
+    paths: ["app/**", "build.gradle.kts", "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat", ".github/workflows/android-ci.yml"]
+  pull_request:
+    paths: ["app/**", "build.gradle.kts", "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat", ".github/workflows/android-ci.yml"]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
-  verify-native-project:
+  test-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Verify Android project exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=0
-          for path in gradlew app; do
-            if [[ ! -e "$path" ]]; then
-              echo "::error file=$path::Required Android project path '$path' is not present."
-              missing=1
-            fi
-          done
-          if [[ ! -f settings.gradle && ! -f settings.gradle.kts ]]; then
-            echo "::error::Neither settings.gradle nor settings.gradle.kts is present."
-            missing=1
-          fi
-          if [[ "$missing" -ne 0 ]]; then
-            echo "Android CI is manual-only until the native project is checked in or generated reproducibly."
-            exit 1
-          fi
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Run unit tests
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { java-version: "17", distribution: "temurin" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests
         run: |
           chmod +x gradlew
-          ./gradlew test --continue --build-cache --no-daemon --stacktrace
-
+          ./gradlew testDebugUnitTest --build-cache --no-daemon --stacktrace
       - name: Build debug APK
         run: ./gradlew assembleDebug --build-cache --no-daemon --stacktrace
-
-      - name: Upload test reports
-        if: always()
+      - if: always()
         uses: actions/upload-artifact@v4
-        with:
-          name: android-unit-test-reports
-          path: '**/build/reports/tests/'
-          if-no-files-found: ignore
-
-      - name: Upload debug APK
-        if: success()
+        with: { name: android-unit-test-reports, path: "app/build/reports/tests/", if-no-files-found: ignore }
+      - if: success()
         uses: actions/upload-artifact@v4
-        with:
-          name: android-debug-apk
-          path: '**/build/outputs/apk/debug/*.apk'
-          if-no-files-found: error
+        with: { name: hereliesaz-admin-debug-apk, path: "app/build/outputs/apk/debug/*.apk", if-no-files-found: error }
