@@ -5,20 +5,6 @@ on:
     branches: ["main"]
   workflow_dispatch:
   workflow_run:
-    # Must exactly match the target workflows' `name:` fields. Watching
-    # only "Process Art (Turbo 56)" (that workflow's stroke/grind output,
-    # which the frontend doesn't even read) meant a "Theater Bake" run —
-    # the ACTUAL publisher of the painting/depth/hinge-graph data the site
-    # renders — never triggered a redeploy: new theater data could land on
-    # art-data and sit there until something else happened to push to main
-    # or someone noticed and dispatched this workflow by hand. "Remove
-    # Painting" publishes to art-data the same way and was missing here
-    # for the same reason — a removal from /admin updated art-data but the
-    # live site never redeployed to pick it up, so it looked like nothing
-    # had happened. "Bootstrap Art (5 Images)" publishes to art-data too
-    # and is included for the same reason, even though it's a one-time
-    # seeding workflow unlikely to run again — nothing marks it retired,
-    # so leaving it off this list would be a live trap if it ever is.
     workflows: ["Process Art (Turbo 56)", "Theater Bake", "Remove Painting", "Bootstrap Art (5 Images)"]
     types:
       - completed
@@ -56,14 +42,6 @@ jobs:
           path: public/data
           fetch-tags: false
 
-      # Consuming-side sanity check (not the full validate_output.py
-      # schema check — that runs on the producing side, in
-      # theater_bake.yml, before this data ever reaches art-data).
-      # Previously a missing/empty art-data checkout was either silently
-      # skipped (branch absent) or produced an empty public/data with no
-      # warning at all — the site would then deploy showing the
-      # flat-fallback plane for every painting with no CI signal. Fail
-      # loudly instead.
       - name: Verify art data is usable
         run: |
           if [ ! -s public/data/theater/_manifest.json ]; then
@@ -72,15 +50,14 @@ jobs:
           fi
           echo "art-data verified: $(find public/data -type f | wc -l) files staged"
 
-      - name: Test painting integration
-        run: python3 -m unittest scripts/test_integrate_painting_bakes.py
-
-      # Build one additive index across every representation that happens
-      # to be present in this exact art-data snapshot. Native pipeline
-      # artifacts remain untouched and authoritative; the generated
-      # /data/integrated sidecars only describe/discover them.
-      - name: Build integrated painting records
-        run: python3 scripts/integrate_painting_bakes.py --public-root public
+      # The integrated directory is generated output. Removing it first
+      # guarantees sidecars for deleted paintings cannot survive from an
+      # older art-data snapshot simply because the current builder no longer
+      # emits that id.
+      - name: Rebuild integrated painting records from scratch
+        run: |
+          rm -rf public/data/integrated
+          python3 scripts/integrate_painting_bakes.py --public-root public --strict
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -89,18 +66,13 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci
 
-      # Legacy graph.json fallback (Scene.jsx uses it when the theater
-      # manifest is missing/empty): self-repairs public/graph.json by
-      # dropping nodes with no matching public/assets/ image and bridging
-      # edges around them. Only touches this ephemeral checkout, not the
-      # repo.
-      - name: Verify legacy graph.json against assets
-        run: npm run verify-assets
-
-      - name: Build
-        run: npm run build
+      # One repository-level verification entrypoint: Python syntax, the
+      # integration builder tests, asset/legacy-graph consistency, Capacitor
+      # output-path sanity, and the production Vite build.
+      - name: Verify repository and build
+        run: npm run verify
 
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
