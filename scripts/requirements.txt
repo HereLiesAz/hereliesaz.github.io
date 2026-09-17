@@ -1,4 +1,4 @@
-# NOTE: numpy/opencv-python(-headless)/Pillow/pillow-heif/scipy/transformers/
+# NOTE: numpy/opencv-python-headless/Pillow/pillow-heif/scipy/transformers/
 # timm/huggingface_hub/gradio_client/torch/torchvision/imagehash are
 # intentionally left version-floating here rather than pinned to exact
 # versions: this pipeline runs under CI jobs with `contents: write` and
@@ -32,4 +32,3 @@ git+https://github.com/facebookresearch/segment-anything.git@dca509fe793f601edb9
 torch
 torchvision
 imagehash
-opencv-python
