@@ -46,12 +46,6 @@ async function api(path, options = {}) {
       },
     });
   } catch {
-    // fetch() itself throws (not an HTTP error response) on a network
-    // failure — offline, DNS, CORS-blocked, etc. — before any of the
-    // status-code handling below ever runs. Without this, every admin
-    // panel surfaces the bare browser string ("Failed to fetch",
-    // "NetworkError when attempting to fetch resource") with no
-    // indication of what to actually do about it.
     throw new GitHubApiError('Could not reach GitHub — check your connection and try again.', 0);
   }
   if (!res.ok) {
@@ -66,16 +60,22 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-// UTF-8/binary-safe base64 encode — btoa() alone chokes on multi-byte
-// characters and on raw image bytes read via a plain FileReader text
-// path, so route everything through the byte-accurate encoder instead.
 function toBase64(bytes) {
   let binary = '';
-  const chunk = 0x8000; // avoid a call-stack blowup from String.fromCharCode(...hugeArray)
+  const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
+}
+
+function fromBase64Utf8(encoded) {
+  const binary = atob(encoded.replace(/\s/g, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 export function fileToBase64(file) {
@@ -97,8 +97,7 @@ export function textToBase64(text) {
 export async function getFile(path) {
   try {
     const data = await api(`/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(path).replace(/%2F/g, '/')}?ref=${BRANCH}`);
-    const content = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
-    return { content, sha: data.sha };
+    return { content: fromBase64Utf8(data.content), sha: data.sha };
   } catch (e) {
     if (e.status === 404) return null;
     throw e;
