@@ -86,6 +86,9 @@ def add_theater(public_root: Path, records: dict[str, dict[str, Any]], warnings:
             "painting": web_path(root / f"{pid}.painting.webp", public_root),
             "depth": web_path(root / f"{pid}.depth.png", public_root),
         }
+        masks_path = root / f"{pid}.masks.png"
+        if masks_path.exists():
+            rep["masks"] = web_path(masks_path, public_root)
         if isinstance(meta, dict):
             rep["nativeSchema"] = meta.get("schema")
             depth = meta.get("depth")
@@ -132,7 +135,8 @@ def stroke_id(path: Path, payload: dict[str, Any]) -> str:
     return Path(path.stem).stem
 
 
-def add_strokes(public_root: Path, records: dict[str, dict[str, Any]], warnings: list[str]) -> None:
+def add_root_data(public_root: Path, records: dict[str, dict[str, Any]], warnings: list[str]) -> None:
+    """Index root-level stroke-cloud, bootstrap, repair, and curator outputs."""
     root = public_root / "data"
     if not root.exists():
         return
@@ -142,21 +146,48 @@ def add_strokes(public_root: Path, records: dict[str, dict[str, Any]], warnings:
         payload = read_json(path, warnings)
         if not isinstance(payload, dict):
             continue
+
+        # Grinder/bootstrap/repair family.
         field = "strokes" if isinstance(payload.get("strokes"), list) else "s"
         strokes = payload.get(field)
-        if not isinstance(strokes, list):
+        if isinstance(strokes, list):
+            rec = record(records, stroke_id(path, payload))
+            rep: dict[str, Any] = {
+                "data": web_path(path, public_root),
+                "count": len(strokes),
+                "nativeField": field,
+            }
+            if isinstance(payload.get("pareidolia"), list):
+                rep["hasPareidoliaAnnotations"] = True
+                rep["pareidoliaCount"] = len(payload["pareidolia"])
+            add_representation(rec, "strokeCloud", rep)
+            provenance(rec, "turbo-stroke-cloud", web_path(path, public_root), field)
             continue
-        rec = record(records, stroke_id(path, payload))
-        rep: dict[str, Any] = {
-            "data": web_path(path, public_root),
-            "count": len(strokes),
-            "nativeField": field,
-        }
-        if isinstance(payload.get("pareidolia"), list):
-            rep["hasPareidoliaAnnotations"] = True
-            rep["pareidoliaCount"] = len(payload["pareidolia"])
-        add_representation(rec, "strokeCloud", rep)
-        provenance(rec, "turbo-stroke-cloud", web_path(path, public_root), field)
+
+        # Curator family: semantic SAM shards plus GPU-ready binary buffers.
+        shards = payload.get("shards")
+        if isinstance(shards, list):
+            pid = normalise_id(payload.get("id")) or path.stem
+            rec = record(records, pid)
+            rep = {
+                "data": web_path(path, public_root),
+                "count": len(shards),
+            }
+            res = payload.get("res")
+            if isinstance(res, list) and len(res) == 2:
+                rep["resolution"] = res
+                if all(isinstance(v, (int, float)) and v > 0 for v in res):
+                    rec["source"].setdefault("width", res[0])
+                    rec["source"].setdefault("height", res[1])
+            buffers: dict[str, str] = {}
+            for name, suffix in (("position", "_pos.bin"), ("uv", "_uv.bin"), ("scale", "_scale.bin")):
+                buffer_path = root / f"{pid}{suffix}"
+                if buffer_path.exists():
+                    buffers[name] = web_path(buffer_path, public_root)
+            if buffers:
+                rep["buffers"] = buffers
+            add_representation(rec, "semanticShardCloud", rep)
+            provenance(rec, "curator-semantic-shard-cloud", web_path(path, public_root))
 
 
 def baked_kind(payload: dict[str, Any]) -> str | None:
@@ -245,7 +276,8 @@ def add_graph(public_root: Path, records: dict[str, dict[str, Any]], warnings: l
         rec = record(records, pid)
         rec["transitions"].setdefault("legacyOrUnified", []).append({
             field: edge[field]
-            for field in ("target", "weight", "s_uv", "t_uv", "source_shard", "target_shard")
+            for field in ("target", "weight", "s_uv", "t_uv", "source_shard", "target_shard",
+                          "s_nx", "s_ny", "s_depth", "t_nx", "t_ny", "t_depth")
             if field in edge
         })
 
@@ -271,7 +303,7 @@ def build(public_root: Path, strict: bool = False) -> int:
     warnings: list[str] = []
     records: dict[str, dict[str, Any]] = {}
     add_theater(public_root, records, warnings)
-    add_strokes(public_root, records, warnings)
+    add_root_data(public_root, records, warnings)
     add_baked(public_root, records, warnings)
     add_graph(public_root, records, warnings)
 
@@ -285,6 +317,9 @@ def build(public_root: Path, strict: bool = False) -> int:
         for edges in rec["transitions"].values():
             if isinstance(edges, list):
                 edges.sort(key=lambda edge: (str(edge.get("target", "")), -float(edge.get("weight", 0) or 0)))
+        for rep in rec["representations"].values():
+            if isinstance(rep, dict) and isinstance(rep.get("variants"), list):
+                rep["variants"].sort(key=lambda variant: str(variant.get("data", variant.get("image", ""))))
         rec_errors = validate(rec)
         if rec_errors:
             errors.extend(f"{pid}: {msg}" for msg in rec_errors)
