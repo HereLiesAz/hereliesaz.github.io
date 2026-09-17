@@ -1,5 +1,5 @@
 {
   "appId": "com.hereliesaz",
   "appName": "hereliesaz",
-  "webDir": "build"
+  "webDir": "dist"
 }
