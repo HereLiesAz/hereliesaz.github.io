@@ -72,6 +72,13 @@ jobs:
           fi
           echo "art-data verified: $(find public/data -type f | wc -l) files staged"
 
+      # Build one additive index across every representation that happens
+      # to be present in this exact art-data snapshot. Native pipeline
+      # artifacts remain untouched and authoritative; the generated
+      # /data/integrated sidecars only describe/discover them.
+      - name: Build integrated painting records
+        run: python3 scripts/integrate_painting_bakes.py --public-root public
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
