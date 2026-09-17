@@ -39,6 +39,7 @@ export async function loadPaintingBake(id) {
 }
 
 export function representationVariants(record, key) {
+  if (key === 'flatImage') return [];
   const value = record?.representations?.[key];
   if (!value) return [];
   if (Array.isArray(value.variants)) return value.variants;
