@@ -50,7 +50,7 @@ export function hasRepresentation(record, key) {
 }
 
 export function availableRepresentations(record) {
-  return Object.keys(record?.representations || {});
+  return Object.keys(record?.representations || {}).filter((key) => key !== 'flatImage');
 }
 
 export function transitionEdges(record, graphKey) {
@@ -65,7 +65,6 @@ export function preferredRepresentation(record, preference = [
   'semanticShardCloud',
   'semanticLayers',
   'strokeCloud',
-  'flatImage',
 ]) {
   for (const key of preference) {
     const variants = representationVariants(record, key);
