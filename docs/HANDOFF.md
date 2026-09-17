@@ -20,12 +20,14 @@ See `ARCHITECTURE.md`, `FRONTEND.md`, `SHADERS.md`, and `PIPELINE.md` for the de
 
 The abandoned shard-cloud pipeline has been retired instead of merely documented as dead:
 
-- removed `.github/workflows/process_art.yml`
-- removed `.github/workflows/bootstrap.yml`
-- removed `scripts/grinder.py` and `scripts/bootstrap.py`
-- removed orphaned scripts `indexer.py`, `pareidolia.py`, `curator.py`, `jules.py`, `3d_deconstructor.py`, `prepare.py`, `repair_and_index.py`, and `bake-shards.js`
+- removed `.github/workflows/process_art.yml` and `.github/workflows/bootstrap.yml`
+- removed `scripts/grinder.py`, `bootstrap.py`, `indexer.py`, `pareidolia.py`, `curator.py`, `jules.py`, `3d_deconstructor.py`, `prepare.py`, `repair_and_index.py`, and `bake-shards.js`
+- removed the entire orphaned `scripts/shard_prep/` package and its tests; its only live caller was the deleted `prepare.py`
 - removed the retired workflows from the GitHub Pages deploy trigger list
-- added `registry/1148736516/policy.json` in `HereLiesAz/workflows`, marking both workflows disabled so the central synchronizer will not recreate their proxies
+- removed four generic Android workflows that could not run here because this repository has no Gradle/native Android project
+- removed the sample Jekyll and static-`docs/` Pages workflows that competed with the actual Vite gallery deployment
+- updated `registry/1148736516/policy.json` in `HereLiesAz/workflows` so the central synchronizer treats all of those workflows as intentionally disabled instead of recreating them
+- removed legacy grinder assumptions from the `/admin` painting-removal path
 
 The old design remains recoverable in `docs/archive/`; executable leftovers do not.
 
@@ -34,6 +36,7 @@ The old design remains recoverable in `docs/archive/`; executable leftovers do n
 - The modal keyboard-focus behavior in `Overlay.jsx` was correct by code inspection but previously had one inconclusive dev-server Tab-focus test. Re-test against a production build when touching accessibility behavior.
 - `deploy-sftp.yml` is centrally managed by `HereLiesAz/workflows`; changes to its implementation belong there, not in this repository's proxy.
 - `theater_bake.yml` is also a central proxy. Treat the shared workflow implementation and this repository's trigger/proxy as two halves of one pipeline.
+- `scripts/theater_baker.py` still has an old docstring line naming `process_art.yml`; it is commentary only, not a caller. Remove it the next time that large file is edited.
 
 ## Where to start
 
