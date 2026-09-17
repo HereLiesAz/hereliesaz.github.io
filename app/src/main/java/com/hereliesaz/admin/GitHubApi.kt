@@ -73,7 +73,7 @@ class GitHubApi(private val tokenStore: TokenStore) {
     private suspend fun request(path: String, method: String = "GET", body: JSONObject? = null): JSONObject? =
         withContext(Dispatchers.IO) {
             val token = tokenStore.load()
-            if (token.isBlank()) throw@withContext GitHubApiException("No GitHub token set — open Settings first.", 401)
+            if (token.isBlank()) throw GitHubApiException("No GitHub token set — open Settings first.", 401)
             val conn = (URL("https://api.github.com$path").openConnection() as HttpURLConnection).apply {
                 requestMethod = method; connectTimeout = 15_000; readTimeout = 30_000
                 setRequestProperty("Accept", "application/vnd.github+json")
@@ -88,13 +88,13 @@ class GitHubApi(private val tokenStore: TokenStore) {
                 val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
                 if (code !in 200..299) {
                     val detail = runCatching { JSONObject(text).optString("message") }.getOrDefault("")
-                    throw@withContext GitHubApiException("GitHub API $method $path failed: $code" + if (detail.isNotBlank()) " — $detail" else "", code)
+                    throw GitHubApiException("GitHub API $method $path failed: $code" + if (detail.isNotBlank()) " — $detail" else "", code)
                 }
                 if (code == 204 || text.isBlank()) null else JSONObject(text)
             } catch (e: GitHubApiException) {
-                throw@withContext e
+                throw e
             } catch (e: Exception) {
-                throw@withContext GitHubApiException("Could not reach GitHub — check your connection and try again. " + e.message.orEmpty(), 0)
+                throw GitHubApiException("Could not reach GitHub — check your connection and try again. " + e.message.orEmpty(), 0)
             } finally { conn.disconnect() }
         }
 
