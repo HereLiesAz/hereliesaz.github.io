@@ -50,10 +50,6 @@ jobs:
           fi
           echo "art-data verified: $(find public/data -type f | wc -l) files staged"
 
-      # The integrated directory is generated output. Removing it first
-      # guarantees sidecars for deleted paintings cannot survive from an
-      # older art-data snapshot simply because the current builder no longer
-      # emits that id.
       - name: Rebuild integrated painting records from scratch
         run: |
           rm -rf public/data/integrated
@@ -61,6 +57,9 @@ jobs:
 
       - name: Install verification dependencies
         run: python3 -m pip install --disable-pip-version-check -r scripts/verification-requirements.txt
+
+      - name: Validate canonical painting records
+        run: python3 scripts/validate_integrated_records.py --public-root public
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -71,10 +70,8 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      # One repository-level verification entrypoint: Python syntax, the
-      # integration builder tests, canonical JSON Schema validation,
-      # asset/legacy-graph consistency, Capacitor output-path sanity, and
-      # the production Vite build.
+      # Source-level verification intentionally does not require generated
+      # art-data, so `npm run verify` also works in a normal main checkout.
       - name: Verify repository and build
         run: npm run verify
 
