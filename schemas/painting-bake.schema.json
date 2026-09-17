@@ -4,43 +4,18 @@
   "title": "PaintingBake Integration Record",
   "description": "Canonical additive index over all representations produced for one painting. Native pipeline artifacts remain authoritative and are referenced rather than rewritten.",
   "type": "object",
-  "required": [
-    "schemaVersion",
-    "id",
-    "source",
-    "representations",
-    "transitions",
-    "provenance"
-  ],
+  "required": ["schemaVersion", "id", "source", "representations", "transitions", "provenance"],
   "properties": {
-    "schemaVersion": {
-      "const": 1
-    },
-    "id": {
-      "type": "string",
-      "minLength": 1
-    },
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
     "source": {
       "type": "object",
       "properties": {
-        "image": {
-          "type": "string"
-        },
-        "width": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        "height": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        "title": {
-          "type": "string"
-        },
-        "totalCount": {
-          "type": "integer",
-          "minimum": 0
-        }
+        "image": { "type": "string" },
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "title": { "type": "string" },
+        "totalCount": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": true
     },
@@ -48,21 +23,12 @@
       "type": "object",
       "minProperties": 1,
       "properties": {
-        "theater": {
-          "$ref": "#/$defs/theaterRepresentation"
-        },
-        "strokeCloud": {
-          "$ref": "#/$defs/strokeRepresentation"
-        },
-        "unifiedShardField": {
-          "$ref": "#/$defs/shardRepresentation"
-        },
-        "perspectiveShardBake": {
-          "$ref": "#/$defs/shardRepresentation"
-        },
-        "semanticLayers": {
-          "$ref": "#/$defs/semanticRepresentation"
-        }
+        "theater": { "$ref": "#/$defs/theaterRepresentation" },
+        "strokeCloud": { "$ref": "#/$defs/strokeRepresentation" },
+        "unifiedShardField": { "$ref": "#/$defs/shardRepresentation" },
+        "perspectiveShardBake": { "$ref": "#/$defs/shardRepresentation" },
+        "semanticLayers": { "$ref": "#/$defs/semanticRepresentation" },
+        "flatImage": { "$ref": "#/$defs/flatRepresentation" }
       },
       "additionalProperties": true
     },
@@ -70,9 +36,7 @@
       "type": "object",
       "additionalProperties": {
         "type": "array",
-        "items": {
-          "$ref": "#/$defs/transition"
-        }
+        "items": { "$ref": "#/$defs/transition" }
       }
     },
     "provenance": {
@@ -82,14 +46,8 @@
         "type": "object",
         "required": ["pipeline", "artifact"],
         "properties": {
-          "pipeline": {
-            "type": "string",
-            "minLength": 1
-          },
-          "artifact": {
-            "type": "string",
-            "minLength": 1
-          },
+          "pipeline": { "type": "string", "minLength": 1 },
+          "artifact": { "type": "string", "minLength": 1 },
           "nativeSchema": {}
         },
         "additionalProperties": true
@@ -102,23 +60,12 @@
       "type": "object",
       "required": ["metadata", "painting", "depth"],
       "properties": {
-        "metadata": {
-          "type": "string"
-        },
-        "painting": {
-          "type": "string"
-        },
-        "depth": {
-          "type": "string"
-        },
+        "metadata": { "type": "string" },
+        "painting": { "type": "string" },
+        "depth": { "type": "string" },
         "nativeSchema": {},
-        "depthSource": {
-          "type": ["string", "null"]
-        },
-        "bandCount": {
-          "type": "integer",
-          "minimum": 0
-        }
+        "depthSource": { "type": ["string", "null"] },
+        "bandCount": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": true
     },
@@ -126,23 +73,11 @@
       "type": "object",
       "required": ["data", "count", "nativeField"],
       "properties": {
-        "data": {
-          "type": "string"
-        },
-        "count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "nativeField": {
-          "enum": ["s", "strokes"]
-        },
-        "pareidoliaCount": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "hasPareidoliaAnnotations": {
-          "type": "boolean"
-        }
+        "data": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "nativeField": { "enum": ["s", "strokes"] },
+        "pareidoliaCount": { "type": "integer", "minimum": 0 },
+        "hasPareidoliaAnnotations": { "type": "boolean" }
       },
       "additionalProperties": true
     },
@@ -150,40 +85,14 @@
       "type": "object",
       "required": ["data"],
       "properties": {
-        "data": {
-          "type": "string"
-        },
-        "count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "forwardCount": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "mirrorCount": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "resolution": {
-          "type": "array",
-          "prefixItems": [
-            {
-              "type": "number",
-              "exclusiveMinimum": 0
-            },
-            {
-              "type": "number",
-              "exclusiveMinimum": 0
-            }
-          ],
-          "items": false
-        },
+        "data": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "forwardCount": { "type": "integer", "minimum": 0 },
+        "mirrorCount": { "type": "integer", "minimum": 0 },
+        "resolution": { "$ref": "#/$defs/resolution" },
         "attributes": {
           "type": "array",
-          "items": {
-            "type": "string"
-          },
+          "items": { "type": "string" },
           "uniqueItems": true
         }
       },
@@ -193,64 +102,51 @@
       "type": "object",
       "required": ["data"],
       "properties": {
-        "data": {
-          "type": "string"
-        },
-        "count": {
-          "type": ["integer", "null"],
-          "minimum": 0
-        },
-        "resolution": {
-          "type": "array"
-        }
+        "data": { "type": "string" },
+        "count": { "type": ["integer", "null"], "minimum": 0 },
+        "resolution": { "$ref": "#/$defs/resolution" }
       },
+      "additionalProperties": true
+    },
+    "flatRepresentation": {
+      "type": "object",
+      "properties": {
+        "image": { "type": "string" },
+        "graphNodeOnly": { "type": "boolean" }
+      },
+      "anyOf": [
+        { "required": ["image"] },
+        { "required": ["graphNodeOnly"] }
+      ],
       "additionalProperties": true
     },
     "transition": {
       "type": "object",
       "required": ["target"],
       "properties": {
-        "target": {
-          "type": "string",
-          "minLength": 1
-        },
-        "weight": {
-          "type": "number"
-        },
-        "s_uv": {
-          "$ref": "#/$defs/uv"
-        },
-        "t_uv": {
-          "$ref": "#/$defs/uv"
-        },
-        "scale": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        "source_shard": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "target_shard": {
-          "type": "integer",
-          "minimum": 0
-        }
+        "target": { "type": "string", "minLength": 1 },
+        "weight": { "type": "number" },
+        "s_uv": { "$ref": "#/$defs/uv" },
+        "t_uv": { "$ref": "#/$defs/uv" },
+        "scale": { "type": "number", "exclusiveMinimum": 0 },
+        "source_shard": { "type": "integer", "minimum": 0 },
+        "target_shard": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": true
     },
     "uv": {
       "type": "array",
       "prefixItems": [
-        {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        }
+        { "type": "number", "minimum": 0, "maximum": 1 },
+        { "type": "number", "minimum": 0, "maximum": 1 }
+      ],
+      "items": false
+    },
+    "resolution": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "number", "exclusiveMinimum": 0 },
+        { "type": "number", "exclusiveMinimum": 0 }
       ],
       "items": false
     }
