@@ -4,6 +4,7 @@ import App from './App.jsx';
 import './index.css';
 import JulesBoundary from './components/JulesBoundary';
 import './utils/Logger'; // Initialize the logger immediately
+import './utils/theaterMotionPatch'; // Physical tear-apart + stronger camera travel
 
 // Restore the path public/404.html stashed before bouncing here (GitHub
 // Pages has no server-side SPA fallback, so a direct nav/reload to a
