@@ -5,9 +5,8 @@
 // specific file layout.
 import { deleteFile, dispatchWorkflow, getFile, listWorkflowRuns, putFile, textToBase64 } from './github.js';
 
-// Deliberately NOT under public/assets/ — process_art.yml's legacy
-// 56-shard grinder triggers on any push touching public/assets/**, and a
-// metadata-only edit here has nothing to do with that pipeline.
+// Hand-authored metadata belongs outside public/assets/: that directory is
+// reserved for source artwork consumed by the theater bake.
 const META_PATH = 'public/meta.json';
 const SITE_PATH = 'public/site-content.json';
 const BAND_OVERRIDES_PATH = 'public/band-overrides.json';
@@ -159,10 +158,7 @@ export async function removePainting(id) {
     if (srcImage) {
       const path = `public/assets/${srcImage}`;
       const file = await getFile(path);
-      // [skip-grind]: this is a real push to public/assets/**, which would
-      // otherwise also kick off process_art.yml's 56-shard legacy grinder
-      // for a file being deleted — see that workflow's job-level `if:`.
-      if (file) await deleteFile(path, `admin: remove source photo for ${id} [skip-grind]`, file.sha);
+      if (file) await deleteFile(path, `admin: remove source photo for ${id}`, file.sha);
     }
   } catch (e) {
     errors.push(`source photo: ${e.message}`);
