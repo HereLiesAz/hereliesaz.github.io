@@ -88,7 +88,7 @@ class GitHubApi(private val tokenStore: TokenStore) {
 
     suspend fun downloadArtifactZip(artifactId: Long): ByteArray = withContext(Dispatchers.IO) {
         val token = tokenStore.load()
-        if (token.isBlank()) throw@withContext GitHubApiException("No gh_token saved in the app.", 401)
+        if (token.isBlank()) throw GitHubApiException("No gh_token saved in the app.", 401)
         val conn = (URL("https://api.github.com/repos/$OWNER/$REPO/actions/artifacts/$artifactId/zip").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
@@ -103,7 +103,7 @@ class GitHubApi(private val tokenStore: TokenStore) {
             val location = conn.getHeaderField("Location")
             if (code !in 300..399 || location.isNullOrBlank()) {
                 val detail = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                throw@withContext GitHubApiException("Artifact download failed: $code $detail", code)
+                throw GitHubApiException("Artifact download failed: $code $detail", code)
             }
             publicBytes(location)
         } finally {
@@ -135,7 +135,7 @@ class GitHubApi(private val tokenStore: TokenStore) {
         bytes: ByteArray,
     ) = withContext(Dispatchers.IO) {
         val token = tokenStore.load()
-        if (token.isBlank()) throw@withContext GitHubApiException("No gh_token saved in the app.", 401)
+        if (token.isBlank()) throw GitHubApiException("No gh_token saved in the app.", 401)
         val encodedName = encodeSegment(filename)
         val conn = (URL("https://uploads.github.com/repos/$OWNER/$REPO/releases/$releaseId/assets?name=$encodedName").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -153,7 +153,7 @@ class GitHubApi(private val tokenStore: TokenStore) {
             val code = conn.responseCode
             if (code !in 200..299) {
                 val detail = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                throw@withContext GitHubApiException("Release asset upload failed: $code $detail", code)
+                throw GitHubApiException("Release asset upload failed: $code $detail", code)
             }
         } finally {
             conn.disconnect()
