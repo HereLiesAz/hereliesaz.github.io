@@ -80,8 +80,8 @@ private val Good = Color(0xFFB0E0B0)
 @Composable private fun TokenScreen(vm: AdminViewModel, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("GitHub access", style = MaterialTheme.typography.titleLarge)
-        Text("Use a fine-grained token for HereLiesAz/hereliesaz.github.io with Contents: Read and write and Actions: Read and write. It is encrypted with Android Keystore.")
-        OutlinedTextField(vm.tokenInput, { vm.tokenInput = it }, label = { Text("GitHub personal access token") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+        Text("Save a gh_token for HereLiesAz/hereliesaz.github.io with Contents: Read and write and Actions: Read and write. It persists on this device encrypted with Android Keystore. The app never borrows GitHub Actions credentials.")
+        OutlinedTextField(vm.tokenInput, { vm.tokenInput = it }, label = { Text("gh_token") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(vm::verifyAndSaveToken, enabled = vm.tokenInput.isNotBlank() && !vm.busy) { Text(if (vm.busy) "checking…" else "save & verify") }
             if (vm.authenticated || vm.tokenInput.isNotBlank()) DangerButton(vm::clearToken, !vm.busy) { Text("clear token") }
