@@ -25,6 +25,7 @@ class TokenStore(context: Context) {
             .apply()
     }
     fun load(): String {
+        migrateLegacyTokenIfNeeded()
         val payload = prefs.getString(KEY_TOKEN, null) ?: return ""
         val iv = prefs.getString(KEY_IV, null) ?: return ""
         return try {
@@ -35,7 +36,39 @@ class TokenStore(context: Context) {
             clear(); ""
         }
     }
-    fun clear() { prefs.edit().remove(KEY_TOKEN).remove(KEY_IV).apply() }
+    fun clear() {
+        prefs.edit()
+            .remove(KEY_TOKEN)
+            .remove(KEY_IV)
+            .remove(LEGACY_KEY_TOKEN)
+            .remove(LEGACY_KEY_IV)
+            .apply()
+    }
+
+    private fun migrateLegacyTokenIfNeeded() {
+        if (prefs.contains(KEY_TOKEN) && prefs.contains(KEY_IV)) return
+        val legacyPayload = prefs.getString(LEGACY_KEY_TOKEN, null) ?: return
+        val legacyIv = prefs.getString(LEGACY_KEY_IV, null) ?: return
+        try {
+            val legacyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val legacyKey = legacyStore.getKey(LEGACY_KEY_ALIAS, null) as? SecretKey ?: return
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                legacyKey,
+                GCMParameterSpec(128, Base64.decode(legacyIv, Base64.NO_WRAP)),
+            )
+            val plaintext = String(
+                cipher.doFinal(Base64.decode(legacyPayload, Base64.NO_WRAP)),
+                Charsets.UTF_8,
+            )
+            save(plaintext)
+            prefs.edit().remove(LEGACY_KEY_TOKEN).remove(LEGACY_KEY_IV).apply()
+        } catch (_: Exception) {
+            // Leave legacy values untouched if migration cannot be completed.
+        }
+    }
+
     private fun secretKey(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
@@ -50,9 +83,12 @@ class TokenStore(context: Context) {
         }
     }
     companion object {
-        private const val KEY_ALIAS = "hereliesaz_admin_github_pat"
-        private const val KEY_TOKEN = "github_pat"
-        private const val KEY_IV = "github_pat_iv"
+        private const val KEY_ALIAS = "hereliesaz_admin_gh_token"
+        private const val KEY_TOKEN = "gh_token"
+        private const val KEY_IV = "gh_token_iv"
+        private const val LEGACY_KEY_ALIAS = "hereliesaz_admin_github_pat"
+        private const val LEGACY_KEY_TOKEN = "github_pat"
+        private const val LEGACY_KEY_IV = "github_pat_iv"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 }
