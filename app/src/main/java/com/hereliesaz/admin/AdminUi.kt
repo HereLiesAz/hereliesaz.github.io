@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -56,7 +57,7 @@ private val Good = Color(0xFFB0E0B0)
         containerColor = Void,
         topBar = {
             Column(Modifier.background(Void)) {
-                Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     AdminTab.entries.forEach { item ->
                         if (vm.tab == item) Button({ vm.tab = item; if (item == AdminTab.Site) vm.loadSite() }) { Text(item.name.lowercase()) }
                         else OutlinedButton({ vm.tab = item; if (item == AdminTab.Site) vm.loadSite() }) { Text(item.name.lowercase()) }
@@ -71,6 +72,7 @@ private val Good = Color(0xFFB0E0B0)
                 AdminTab.Paintings -> PaintingsScreen(vm)
                 AdminTab.Add -> AddPaintingScreen(vm)
                 AdminTab.Site -> SiteContentScreen(vm)
+                AdminTab.Release -> ReleaseScreen(vm)
                 AdminTab.Settings -> TokenScreen(vm)
             }
         }
@@ -201,6 +203,78 @@ private val Good = Color(0xFFB0E0B0)
         Button({ vm.uploadChosen(context.contentResolver) }, enabled = vm.chosenUris.isNotEmpty() && !vm.busy) { Text(if (vm.busy) "working…" else "upload " + vm.chosenUris.size) }
         vm.addMessage?.let { StatusText(it) }
         OpenLinkButton("watch theater bake runs", "https://github.com/HereLiesAz/hereliesaz.github.io/actions/workflows/theater_bake.yml")
+    }
+}
+
+
+@Composable private fun ReleaseScreen(vm: AdminViewModel) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Publish Android release", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "Publishing uses only the gh_token you save in this app. GitHub Actions builds the APK without a publish credential; this app downloads that build and creates the GitHub Release itself.",
+            color = Ink.copy(alpha = 0.72f),
+        )
+
+        OutlinedTextField(
+            value = vm.tokenInput,
+            onValueChange = { vm.tokenInput = it },
+            label = { Text("gh_token") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = vm::verifyAndSaveToken,
+                enabled = vm.tokenInput.isNotBlank() && !vm.busy && !vm.releaseBusy,
+            ) { Text("save & verify gh_token") }
+            if (vm.authenticated || vm.tokenInput.isNotBlank()) {
+                DangerButton(vm::clearToken, !vm.busy && !vm.releaseBusy) { Text("clear") }
+            }
+        }
+        vm.authMessage?.let { StatusText(it) }
+
+        HorizontalDivider(color = Ink.copy(alpha = 0.18f))
+
+        OutlinedTextField(
+            value = vm.releaseVersion,
+            onValueChange = { vm.releaseVersion = it },
+            label = { Text("version (example: 1.0.1)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = vm.releaseNotes,
+            onValueChange = { vm.releaseNotes = it },
+            label = { Text("release notes (optional)") },
+            minLines = 4,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = vm.releasePrerelease,
+                onCheckedChange = { vm.releasePrerelease = it },
+                enabled = !vm.releaseBusy,
+            )
+            Text("prerelease")
+        }
+
+        Button(
+            onClick = vm::publishRelease,
+            enabled = vm.authenticated &&
+                vm.releaseVersion.isNotBlank() &&
+                !vm.releaseBusy &&
+                !vm.busy,
+        ) {
+            Text(if (vm.releaseBusy) "building / publishing…" else "build & publish GitHub Release")
+        }
+
+        vm.releaseMessage?.let { StatusText(it) }
+        vm.releaseUrl?.let { OpenLinkButton("open published release", it) }
+        Spacer(Modifier.height(40.dp))
     }
 }
 

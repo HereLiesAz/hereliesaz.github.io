@@ -54,7 +54,110 @@ class GitHubApi(private val tokenStore: TokenStore) {
     suspend fun listWorkflowRuns(workflowFile: String, perPage: Int = 5): List<WorkflowRun> {
         val json = request("/repos/$OWNER/$REPO/actions/workflows/" + encodeSegment(workflowFile) + "/runs?per_page=$perPage") ?: return emptyList()
         val runs = json.optJSONArray("workflow_runs") ?: JSONArray()
-        return buildList { for (i in 0 until runs.length()) add(WorkflowRun(runs.getJSONObject(i).optString("status"))) }
+        return buildList {
+            for (i in 0 until runs.length()) {
+                val run = runs.getJSONObject(i)
+                add(
+                    WorkflowRun(
+                        status = run.optString("status"),
+                        id = run.optLong("id"),
+                        conclusion = run.optString("conclusion").takeIf { it.isNotBlank() && it != "null" },
+                        displayTitle = run.optString("display_title"),
+                    ),
+                )
+            }
+        }
+    }
+
+    suspend fun listRunArtifacts(runId: Long): List<WorkflowArtifact> {
+        val json = request("/repos/$OWNER/$REPO/actions/runs/$runId/artifacts?per_page=100") ?: return emptyList()
+        val artifacts = json.optJSONArray("artifacts") ?: JSONArray()
+        return buildList {
+            for (i in 0 until artifacts.length()) {
+                val artifact = artifacts.getJSONObject(i)
+                add(
+                    WorkflowArtifact(
+                        id = artifact.optLong("id"),
+                        name = artifact.optString("name"),
+                        expired = artifact.optBoolean("expired", false),
+                    ),
+                )
+            }
+        }
+    }
+
+    suspend fun downloadArtifactZip(artifactId: Long): ByteArray = withContext(Dispatchers.IO) {
+        val token = tokenStore.load()
+        if (token.isBlank()) throw@withContext GitHubApiException("No gh_token saved in the app.", 401)
+        val conn = (URL("https://api.github.com/repos/$OWNER/$REPO/actions/artifacts/$artifactId/zip").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            instanceFollowRedirects = false
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+        }
+        try {
+            val code = conn.responseCode
+            val location = conn.getHeaderField("Location")
+            if (code !in 300..399 || location.isNullOrBlank()) {
+                val detail = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                throw@withContext GitHubApiException("Artifact download failed: $code $detail", code)
+            }
+            publicBytes(location)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    suspend fun createRelease(
+        tag: String,
+        name: String,
+        notes: String,
+        prerelease: Boolean,
+    ): Pair<Long, String> {
+        val body = JSONObject()
+            .put("tag_name", tag)
+            .put("target_commitish", BRANCH)
+            .put("name", name)
+            .put("body", notes)
+            .put("draft", false)
+            .put("prerelease", prerelease)
+        val json = request("/repos/$OWNER/$REPO/releases", "POST", body)
+            ?: throw GitHubApiException("GitHub returned an empty release response.", 0)
+        return json.getLong("id") to json.optString("html_url")
+    }
+
+    suspend fun uploadReleaseAsset(
+        releaseId: Long,
+        filename: String,
+        bytes: ByteArray,
+    ) = withContext(Dispatchers.IO) {
+        val token = tokenStore.load()
+        if (token.isBlank()) throw@withContext GitHubApiException("No gh_token saved in the app.", 401)
+        val encodedName = encodeSegment(filename)
+        val conn = (URL("https://uploads.github.com/repos/$OWNER/$REPO/releases/$releaseId/assets?name=$encodedName").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            doOutput = true
+            fixedLengthStreamingMode(bytes.size)
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            setRequestProperty("Content-Type", "application/vnd.android.package-archive")
+        }
+        try {
+            conn.outputStream.use { it.write(bytes) }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val detail = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                throw@withContext GitHubApiException("Release asset upload failed: $code $detail", code)
+            }
+        } finally {
+            conn.disconnect()
+        }
     }
     suspend fun publicBytes(url: String): ByteArray = withContext(Dispatchers.IO) {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {

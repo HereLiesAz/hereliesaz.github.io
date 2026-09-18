@@ -10,9 +10,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.ByteArrayInputStream
+import java.util.UUID
+import java.util.zip.ZipInputStream
 
-enum class AdminTab { Paintings, Add, Site, Settings }
+enum class AdminTab { Paintings, Add, Site, Release, Settings }
 
 class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val tokenStore = TokenStore(application)
@@ -40,6 +44,13 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var bandMessage by mutableStateOf<String?>(null); private set
     var bandLoading by mutableStateOf(false); private set
     var theaterMeta by mutableStateOf<TheaterMeta?>(null); private set
+
+    var releaseVersion by mutableStateOf("")
+    var releaseNotes by mutableStateOf("")
+    var releasePrerelease by mutableStateOf(false)
+    var releaseBusy by mutableStateOf(false); private set
+    var releaseMessage by mutableStateOf<String?>(null); private set
+    var releaseUrl by mutableStateOf<String?>(null); private set
 
     init { if (authenticated) refreshPaintings() }
 
@@ -182,6 +193,98 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             finally { busy = false }
         }
     }
+    fun publishRelease() {
+        val version = releaseVersion.trim()
+        if (version.isBlank()) {
+            releaseMessage = "Enter a release version."
+            return
+        }
+        if (!tokenStore.hasToken()) {
+            releaseMessage = "Save and verify gh_token in this app before publishing."
+            return
+        }
+
+        releaseBusy = true
+        releaseUrl = null
+        releaseMessage = "Starting credential-free APK build…"
+
+        viewModelScope.launch {
+            val requestId = UUID.randomUUID().toString()
+            try {
+                api.dispatchWorkflow(
+                    "android-release-apk.yml",
+                    mapOf(
+                        "version" to version,
+                        "request_id" to requestId,
+                    ),
+                )
+
+                releaseMessage = "Build requested. Waiting for GitHub Actions…"
+                val run = waitForReleaseRun(requestId)
+                if (run.conclusion != "success") {
+                    error("APK build failed with conclusion: " + (run.conclusion ?: "unknown"))
+                }
+
+                releaseMessage = "Build finished. Downloading APK artifact…"
+                val artifact = api.listRunArtifacts(run.id)
+                    .firstOrNull { it.name == "admin-apk-$requestId" && !it.expired }
+                    ?: error("Build succeeded but its APK artifact was not found.")
+
+                val zipBytes = api.downloadArtifactZip(artifact.id)
+                val apkBytes = extractApk(zipBytes)
+                val safeVersion = version.replace(Regex("[^0-9A-Za-z._-]"), "-")
+                val tag = "admin-v$safeVersion"
+                val filename = "HereLiesAz-Admin-$safeVersion.apk"
+                val notes = releaseNotes.trim().ifBlank {
+                    "Native HereLiesAz Admin Android release $version."
+                }
+
+                releaseMessage = "Creating GitHub Release with the saved gh_token…"
+                val (releaseId, url) = api.createRelease(
+                    tag = tag,
+                    name = "HereLiesAz Admin $version",
+                    notes = notes,
+                    prerelease = releasePrerelease,
+                )
+                api.uploadReleaseAsset(releaseId, filename, apkBytes)
+
+                releaseUrl = url
+                releaseMessage = "Published $tag with $filename."
+            } catch (e: Exception) {
+                releaseMessage = e.message ?: "Release publishing failed."
+            } finally {
+                releaseBusy = false
+            }
+        }
+    }
+
+    private suspend fun waitForReleaseRun(requestId: String): WorkflowRun {
+        val deadline = System.currentTimeMillis() + 30 * 60 * 1_000L
+        var matched: WorkflowRun? = null
+        while (System.currentTimeMillis() < deadline) {
+            val runs = api.listWorkflowRuns("android-release-apk.yml", 30)
+            matched = runs.firstOrNull { it.displayTitle.contains(requestId) }
+            if (matched != null && matched.status == "completed") return matched
+            delay(5_000)
+        }
+        error(
+            if (matched == null) "Timed out waiting for the APK build to appear."
+            else "Timed out waiting for the APK build to finish."
+        )
+    }
+
+    private fun extractApk(zipBytes: ByteArray): ByteArray {
+        ZipInputStream(ByteArrayInputStream(zipBytes)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                if (!entry.isDirectory && entry.name.endsWith(".apk", ignoreCase = true)) {
+                    return zip.readBytes()
+                }
+            }
+        }
+        error("Downloaded artifact did not contain an APK.")
+    }
+
     suspend fun bitmap(url: String, maxDimension: Int = 1024): Bitmap? = repo.loadBitmap(url, maxDimension)
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }

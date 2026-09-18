@@ -27,7 +27,13 @@ data class SiteContent(
 }
 data class RepoFile(val content: String, val sha: String)
 data class TokenVerification(val login: String, val canWrite: Boolean, val actionsOk: Boolean)
-data class WorkflowRun(val status: String)
+data class WorkflowRun(
+    val status: String,
+    val id: Long = 0L,
+    val conclusion: String? = null,
+    val displayTitle: String = "",
+)
+data class WorkflowArtifact(val id: Long, val name: String, val expired: Boolean)
 data class TheaterMeta(val sourceImage: String?, val depthFile: String, val bandEdges: List<Double>, val bandCenters: List<Double>)
 data class BandPreview(val index: Int, val min: Double, val max: Double, val bitmap: Bitmap, val hidden: Boolean)
 data class PickedFile(val displayName: String, val bytes: ByteArray)
