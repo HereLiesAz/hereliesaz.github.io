@@ -1,24 +1,146 @@
-# centralized-by: HereLiesAz/workflows
-# central-source-path: .github/workflows/android-release-apk.yml
-# central-source-sha256: 41ccb8c30d393fdc42a44d3b208b179f948ebc44e1c316c4e78b76f627f3bb3c
-# This file intentionally contains no repository secrets.
-name: Compile and Release APK [central proxy]
+name: Publish Android APK Release
+
+# Publishing is deliberately manual. This workflow never publishes with
+# github.token / GITHUB_TOKEN. A separately saved repository secret named
+# GH_TOKEN is required and is the only credential exposed to gh.
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. 1.0.1"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark this GitHub Release as a prerelease"
+        required: true
+        default: false
+        type: boolean
+      notes:
+        description: "Optional release notes"
+        required: false
+        default: ""
+        type: string
+
 permissions:
   contents: read
-  id-token: write
+
 jobs:
-  central-dispatch:
+  build-and-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
-      - name: Dispatch to HereLiesAz/workflows
+      - name: Require persisted GH_TOKEN
         env:
-          WORKFLOWS_GATEWAY_URL: ${{ vars.WORKFLOWS_GATEWAY_URL }}
-          EVENT_JSON: ${{ toJSON(github.event) }}
-          INPUTS_JSON: ${{ toJSON(inputs) }}
-          VARS_JSON: ${{ toJSON(vars) }}
-          SOURCE_WORKFLOW_PATH: .github/workflows/android-release-apk.yml
-          SOURCE_SHA256: 41ccb8c30d393fdc42a44d3b208b179f948ebc44e1c316c4e78b76f627f3bb3c
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         shell: bash
-        run: "set -euo pipefail\n[[ -n \"${WORKFLOWS_GATEWAY_URL:-}\" ]] || { echo \"Repository variable WORKFLOWS_GATEWAY_URL is not configured.\" >&2; exit 1; }\noidc_response=\"$(curl --fail-with-body --silent --show-error -H \"Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}\" \"${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hereliesaz-workflows\")\"\noidc_token=\"$(jq -r '.value // empty' <<<\"$oidc_response\")\"\n[[ -n \"$oidc_token\" ]] || { echo \"GitHub did not issue an OIDC token.\" >&2; exit 1; }\necho \"::add-mask::$oidc_token\"\npayload=\"$(jq -n   --arg repository \"$GITHUB_REPOSITORY\" --arg repository_id \"$GITHUB_REPOSITORY_ID\"   --arg repository_owner \"$GITHUB_REPOSITORY_OWNER\" --arg repository_owner_id \"$GITHUB_REPOSITORY_OWNER_ID\"   --arg sha \"$GITHUB_SHA\" --arg ref \"$GITHUB_REF\" --arg ref_name \"$GITHUB_REF_NAME\" --arg ref_type \"$GITHUB_REF_TYPE\"   --arg head_ref \"$GITHUB_HEAD_REF\" --arg base_ref \"$GITHUB_BASE_REF\" --arg actor \"$GITHUB_ACTOR\" --arg actor_id \"$GITHUB_ACTOR_ID\"   --arg event_name \"$GITHUB_EVENT_NAME\" --arg run_id \"$GITHUB_RUN_ID\" --arg run_number \"$GITHUB_RUN_NUMBER\" --arg run_attempt \"$GITHUB_RUN_ATTEMPT\"   --arg workflow_ref \"$GITHUB_WORKFLOW_REF\" --arg workflow_name \"$GITHUB_WORKFLOW\" --arg source_workflow_path \"$SOURCE_WORKFLOW_PATH\"   --arg source_sha256 \"$SOURCE_SHA256\" --argjson event \"$EVENT_JSON\" --argjson inputs \"$INPUTS_JSON\" --argjson vars \"$VARS_JSON\"   '{repository:$repository,repository_id:$repository_id,repository_owner:$repository_owner,repository_owner_id:$repository_owner_id,sha:$sha,check_sha:($event.pull_request.head.sha // $sha),ref:$ref,ref_name:$ref_name,ref_type:$ref_type,head_ref:$head_ref,base_ref:$base_ref,actor:$actor,actor_id:$actor_id,event_name:$event_name,event:$event,inputs:$inputs,vars:$vars,run_id:$run_id,run_number:$run_number,run_attempt:$run_attempt,workflow_ref:$workflow_ref,workflow_name:$workflow_name,source_workflow_path:$source_workflow_path,source_sha256:$source_sha256}')\"\ncurl --fail-with-body --silent --show-error -X POST \"${WORKFLOWS_GATEWAY_URL%/}/dispatch\" -H \"Authorization: Bearer ${oidc_token}\" -H \"Content-Type: application/json\" --data-binary \"$payload\""
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::Repository secret GH_TOKEN is not saved. Publishing is intentionally blocked until you add a persistent GH_TOKEN secret."
+            exit 1
+          fi
+          echo "::add-mask::$GH_TOKEN"
+
+      - name: Checkout without persisting Actions credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Test
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --build-cache --no-daemon --stacktrace
+
+      - name: Build installable APK
+        run: ./gradlew assembleDebug --build-cache --no-daemon --stacktrace
+
+      - name: Prepare release asset
+        id: asset
+        env:
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(printf '%s' "$VERSION" | tr -cd '0-9A-Za-z._-')"
+          [[ -n "$VERSION" ]] || { echo "::error::version became empty after sanitizing"; exit 1; }
+          TAG="admin-v$VERSION"
+          ASSET="HereLiesAz-Admin-$VERSION.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$ASSET"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Verify GH_TOKEN can publish this repository
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$GH_TOKEN"
+          push="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.permissions.push // false')"
+          if [[ "$push" != "true" ]]; then
+            echo "::error::Saved GH_TOKEN can authenticate but does not have write access to $GITHUB_REPOSITORY."
+            exit 1
+          fi
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TAG: ${{ steps.asset.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$GH_TOKEN"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Choose a new version; this workflow will not silently replace a published APK."
+            exit 1
+          fi
+
+      - name: Publish GitHub Release with saved GH_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TAG: ${{ steps.asset.outputs.tag }}
+          ASSET: ${{ steps.asset.outputs.asset }}
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$GH_TOKEN"
+
+          args=(
+            release create "$TAG"
+            "$ASSET#HereLiesAz Admin APK $VERSION"
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "HereLiesAz Admin $VERSION"
+          )
+
+          if [[ -n "$NOTES" ]]; then
+            args+=(--notes "$NOTES")
+          else
+            args+=(--notes "Native HereLiesAz Admin Android release $VERSION.")
+          fi
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh "${args[@]}"
+
+      - name: Upload CI copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.asset.outputs.asset }}
+          path: ${{ steps.asset.outputs.asset }}
+          if-no-files-found: error
