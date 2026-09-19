@@ -257,7 +257,7 @@ private val Good = Color(0xFFB0E0B0)
     ) {
         Text("Publish Android release", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Publishing uses only the gh_token you save in this app. GitHub Actions builds the APK without a publish credential; this app downloads that build and creates the GitHub Release itself.",
+            "The gh_token saved in this app starts the release. The centralized HereLiesAz/workflows job builds and signs the APK, then publishes it to GitHub Releases using the repository GH_TOKEN secret.",
             color = Ink.copy(alpha = 0.72f),
         )
 
