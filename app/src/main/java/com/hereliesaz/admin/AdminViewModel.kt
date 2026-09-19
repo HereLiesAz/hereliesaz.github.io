@@ -10,7 +10,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -263,52 +262,27 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
         releaseBusy = true
         releaseUrl = null
-        releaseMessage = "Dispatching centralized signed APK release…"
+        releaseMessage = "Dispatching centralized GitHub Release workflow…"
 
         viewModelScope.launch {
-            val requestId = UUID.randomUUID().toString()
             try {
                 api.dispatchWorkflow(
                     "android-release-apk.yml",
                     mapOf(
                         "version" to version,
-                        "request_id" to requestId,
+                        "request_id" to UUID.randomUUID().toString(),
                         "notes" to releaseNotes.trim(),
                         "prerelease" to releasePrerelease.toString(),
                     ),
                 )
-
-                releaseMessage = "Central release job started. Waiting for GitHub Actions…"
-                val run = waitForReleaseRun(requestId)
-                if (run.conclusion != "success") {
-                    error("GitHub Release job failed with conclusion: " + (run.conclusion ?: "unknown"))
-                }
-
-                val safeVersion = version.replace(Regex("[^0-9A-Za-z._-]"), "-")
-                val tag = "admin-v$safeVersion"
-                releaseUrl = "https://github.com/HereLiesAz/hereliesaz.github.io/releases/tag/$tag"
-                releaseMessage = "Published $tag to GitHub Releases."
+                releaseUrl = "https://github.com/HereLiesAz/hereliesaz.github.io/releases"
+                releaseMessage = "Release dispatched to the centralized workflow. It will appear in GitHub Releases after the central build completes."
             } catch (e: Exception) {
-                releaseMessage = e.message ?: "Release publishing failed."
+                releaseMessage = e.message ?: "Release dispatch failed."
             } finally {
                 releaseBusy = false
             }
         }
-    }
-
-    private suspend fun waitForReleaseRun(requestId: String): WorkflowRun {
-        val deadline = System.currentTimeMillis() + 35 * 60 * 1_000L
-        var matched: WorkflowRun? = null
-        while (System.currentTimeMillis() < deadline) {
-            val runs = api.listWorkflowRuns("android-release-apk.yml", 30)
-            matched = runs.firstOrNull { it.displayTitle.contains(requestId) }
-            if (matched != null && matched.status == "completed") return matched
-            delay(5_000)
-        }
-        error(
-            if (matched == null) "Timed out waiting for the centralized release job to appear."
-            else "Timed out waiting for the centralized release job to finish."
-        )
     }
 
     suspend fun bitmap(url: String, maxDimension: Int = 1024): Bitmap? = repo.loadBitmap(url, maxDimension)
