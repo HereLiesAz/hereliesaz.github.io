@@ -57,3 +57,16 @@ Self-updates require all release APKs to use the same signing key. The GitHub re
 These are Android signing material only. They are not GitHub publishing credentials. GitHub Release publishing remains controlled exclusively by the `gh_token` saved inside the Android app.
 
 The workflow builds `assembleRelease`, assigns a monotonically increasing version code, and uploads that signed APK as the artifact the app later publishes to GitHub Releases.
+
+
+## Automatic APK builds
+
+Every push to `main` that changes the Android app or its Gradle configuration automatically runs **Build Android APK for In-App Release** and uploads a signed APK as a GitHub Actions artifact.
+
+Automatic builds do **not** create a GitHub Release and do not use a GitHub publishing token. The in-app release flow remains the only path that creates/releases an APK on GitHub.
+
+For automatic push builds, the workflow assigns an internal build version of `0.0.<run number>` and an artifact request id based on the commit SHA. Manual builds dispatched from the app continue to use the version and request id supplied by the app.
+
+## Gradle dependency submission compatibility
+
+GitHub's repository-level **Automatic Dependency Submission (Gradle)** job expects standard Gradle wrapper metadata. This repository keeps its lightweight `gradlew` bootstrapper but now also checks in `gradle/wrapper/gradle-wrapper.properties` pointing at Gradle 9.6.0, so GitHub can detect the Gradle version instead of failing with “Cannot locate Gradle wrapper properties file”.

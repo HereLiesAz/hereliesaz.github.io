@@ -1,9 +1,21 @@
 name: Build Android APK for In-App Release
-run-name: Android APK build ${{ inputs.request_id }} ${{ inputs.version }}
+run-name: Android APK build ${{ github.event_name == 'workflow_dispatch' && inputs.request_id || github.sha }} ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'automatic' }}
 
-# The Android app publishes the GitHub Release with its locally saved gh_token.
-# This workflow only builds a stably signed APK and uploads a short-lived artifact.
+# Automatically builds the native Android app when its source/build files change.
+# GitHub Release publication remains in-app only, using the gh_token saved on-device.
+# This workflow never receives a GitHub publishing credential.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "gradle/wrapper/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - ".github/workflows/android-release-apk.yml"
   workflow_dispatch:
     inputs:
       version:
@@ -22,7 +34,31 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
     steps:
+      - name: Resolve build metadata
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_REQUEST_ID: ${{ inputs.request_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="$INPUT_VERSION"
+            REQUEST_ID="$INPUT_REQUEST_ID"
+          else
+            VERSION="0.0.$RUN_NUMBER"
+            REQUEST_ID="auto-${HEAD_SHA:0:12}"
+          fi
+          SAFE_VERSION="$(printf '%s' "$VERSION" | tr -c '0-9A-Za-z._-' '-')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "safe_version=$SAFE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "request_id=$REQUEST_ID" >> "$GITHUB_OUTPUT"
+
       - name: Require stable Android signing material
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -66,7 +102,7 @@ jobs:
 
       - name: Build signed release APK
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.meta.outputs.version }}
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/hereliesaz-admin-release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -81,18 +117,17 @@ jobs:
             --build-cache --no-daemon --stacktrace
 
       - name: Prepare APK
-        env:
-          VERSION: ${{ inputs.version }}
         shell: bash
+        env:
+          SAFE_VERSION: ${{ steps.meta.outputs.safe_version }}
         run: |
           set -euo pipefail
-          SAFE_VERSION="$(printf '%s' "$VERSION" | tr -c '0-9A-Za-z._-' '-')"
           cp app/build/outputs/apk/release/app-release.apk "HereLiesAz-Admin-$SAFE_VERSION.apk"
 
-      - name: Upload APK for the requesting app
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: admin-apk-${{ inputs.request_id }}
+          name: admin-apk-${{ steps.meta.outputs.request_id }}
           path: HereLiesAz-Admin-*.apk
           if-no-files-found: error
           retention-days: 7
