@@ -1,5 +1,5 @@
 name: Build & Publish Android APK
-run-name: Android release ${{ github.event_name == 'workflow_dispatch' && inputs.version || format('1.0.0.{0}', github.run_number) }}
+run-name: Android release ${{ github.event_name == 'workflow_dispatch' && inputs.request_id || github.sha }} ${{ github.event_name == 'workflow_dispatch' && inputs.version || format('1.0.0.{0}', github.run_number) }}
 
 on:
   push:
