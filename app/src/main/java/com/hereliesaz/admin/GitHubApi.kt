@@ -142,7 +142,7 @@ class GitHubApi(private val tokenStore: TokenStore) {
             connectTimeout = 15_000
             readTimeout = 60_000
             doOutput = true
-            fixedLengthStreamingMode(bytes.size)
+            setFixedLengthStreamingMode(bytes.size)
             setRequestProperty("Accept", "application/vnd.github+json")
             setRequestProperty("Authorization", "Bearer $token")
             setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
