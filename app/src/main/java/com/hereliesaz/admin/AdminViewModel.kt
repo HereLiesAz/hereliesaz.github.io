@@ -22,6 +22,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val tokenStore = TokenStore(application)
     private val api = GitHubApi(tokenStore)
     private val repo = AdminRepository(api)
+    private val updater = GitHubUpdater(application)
 
     var authenticated by mutableStateOf(tokenStore.hasToken()); private set
     var tokenInput by mutableStateOf(tokenStore.load())
@@ -52,7 +53,65 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var releaseMessage by mutableStateOf<String?>(null); private set
     var releaseUrl by mutableStateOf<String?>(null); private set
 
-    init { if (authenticated) refreshPaintings() }
+    var availableUpdate by mutableStateOf<UpdateInfo?>(null); private set
+    var updateBusy by mutableStateOf(false); private set
+    var updateMessage by mutableStateOf<String?>(null); private set
+    private var downloadedUpdateFile: java.io.File? = null
+
+    init {
+        checkForUpdates(silent = true)
+        if (authenticated) refreshPaintings()
+    }
+
+
+    fun checkForUpdates(silent: Boolean = false) {
+        if (updateBusy) return
+        updateBusy = true
+        if (!silent) updateMessage = "Checking GitHub Releases…"
+        viewModelScope.launch {
+            try {
+                val update = updater.checkForUpdate()
+                availableUpdate = update
+                updateMessage = when {
+                    update != null -> "Update " + update.version + " is available."
+                    silent -> null
+                    else -> "You already have the latest release."
+                }
+            } catch (e: Exception) {
+                if (!silent) updateMessage = e.message ?: "Update check failed."
+            } finally {
+                updateBusy = false
+            }
+        }
+    }
+
+    fun downloadAndInstallUpdate() {
+        val update = availableUpdate ?: return
+        if (updateBusy) return
+        updateBusy = true
+        updateMessage = "Downloading " + update.assetName + "…"
+        viewModelScope.launch {
+            try {
+                val file = downloadedUpdateFile?.takeIf { it.exists() }
+                    ?: updater.downloadAndValidate(update).also { downloadedUpdateFile = it }
+                val installerLaunched = updater.launchInstaller(file)
+                updateMessage = if (installerLaunched) {
+                    "Android installer opened. Confirm the update to finish."
+                } else {
+                    "Allow installs from this app, then tap Install update again."
+                }
+            } catch (e: Exception) {
+                updateMessage = e.message ?: "Update failed."
+            } finally {
+                updateBusy = false
+            }
+        }
+    }
+
+    fun dismissUpdate() {
+        availableUpdate = null
+        updateMessage = null
+    }
 
     fun verifyAndSaveToken() {
         if (tokenInput.trim().isBlank()) { authMessage = "Enter a GitHub token."; return }

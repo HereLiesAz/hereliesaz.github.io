@@ -1,14 +1,13 @@
 name: Build Android APK for In-App Release
 run-name: Android APK build ${{ inputs.request_id }} ${{ inputs.version }}
 
-# This workflow never publishes a GitHub Release and receives no publish
-# credential. The Android admin app dispatches it with the user's saved
-# gh_token, waits for this artifact, then publishes the release itself.
+# The Android app publishes the GitHub Release with its locally saved gh_token.
+# This workflow only builds a stably signed APK and uploads a short-lived artifact.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version being built"
+        description: "Version name being built"
         required: true
         type: string
       request_id:
@@ -24,6 +23,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Require stable Android signing material
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${KEYSTORE_B64:-}" ]] || { echo "::error::ANDROID_KEYSTORE_BASE64 is not configured."; exit 1; }
+          [[ -n "${KEYSTORE_PASSWORD:-}" ]] || { echo "::error::ANDROID_KEYSTORE_PASSWORD is not configured."; exit 1; }
+          [[ -n "${KEY_ALIAS:-}" ]] || { echo "::error::ANDROID_KEY_ALIAS is not configured."; exit 1; }
+          [[ -n "${KEY_PASSWORD:-}" ]] || { echo "::error::ANDROID_KEY_PASSWORD is not configured."; exit 1; }
+
       - name: Checkout without persisted credentials
         uses: actions/checkout@v4
         with:
@@ -38,21 +51,43 @@ jobs:
       - name: Setup Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Decode release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/hereliesaz-admin-release.jks"
+
       - name: Test
         run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest --build-cache --no-daemon --stacktrace
 
-      - name: Build APK
-        run: ./gradlew assembleDebug --build-cache --no-daemon --stacktrace
+      - name: Build signed release APK
+        env:
+          VERSION: ${{ inputs.version }}
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/hereliesaz-admin-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_CODE=$(( $(date +%s) - 1577836800 ))
+          ./gradlew assembleRelease \
+            -PreleaseVersionName="$VERSION" \
+            -PreleaseVersionCode="$VERSION_CODE" \
+            --build-cache --no-daemon --stacktrace
 
       - name: Prepare APK
         env:
           VERSION: ${{ inputs.version }}
+        shell: bash
         run: |
           set -euo pipefail
           SAFE_VERSION="$(printf '%s' "$VERSION" | tr -c '0-9A-Za-z._-' '-')"
-          cp app/build/outputs/apk/debug/app-debug.apk "HereLiesAz-Admin-$SAFE_VERSION.apk"
+          cp app/build/outputs/apk/release/app-release.apk "HereLiesAz-Admin-$SAFE_VERSION.apk"
 
       - name: Upload APK for the requesting app
         uses: actions/upload-artifact@v4

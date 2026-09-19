@@ -35,3 +35,25 @@ The app uses the saved `gh_token` to dispatch `.github/workflows/android-release
 The app then waits for the exact build request, downloads its APK artifact using the saved `gh_token`, creates the GitHub Release directly through the GitHub API, and uploads the APK asset.
 
 There is no repository `GH_TOKEN` secret requirement and no fallback to `github.token` or `GITHUB_TOKEN` for publishing. Existing installations still migrate the prior encrypted `github_pat` value to the local `gh_token` field on first load.
+
+
+## Self-updates from GitHub Releases
+
+The Android app checks the repository's latest GitHub Release automatically at startup and also exposes a manual **check for updates** action in Settings.
+
+When a newer `admin-vX.Y.Z` release contains an APK asset, the app can download it, verify GitHub's SHA-256 digest when supplied, confirm the APK package name, confirm its Android signing certificate matches the installed app, confirm its version code is newer, and then hand it to Android's package installer.
+
+Android does not allow a normal third-party app to silently replace itself. On first use, Android may require enabling **Install unknown apps** for HereLiesAz Admin; after that, the system installer still presents the update confirmation.
+
+### Stable signing requirement
+
+Self-updates require all release APKs to use the same signing key. The GitHub release-build workflow therefore refuses to build a release APK unless these Actions secrets exist:
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+These are Android signing material only. They are not GitHub publishing credentials. GitHub Release publishing remains controlled exclusively by the `gh_token` saved inside the Android app.
+
+The workflow builds `assembleRelease`, assigns a monotonically increasing version code, and uploads that signed APK as the artifact the app later publishes to GitHub Releases.

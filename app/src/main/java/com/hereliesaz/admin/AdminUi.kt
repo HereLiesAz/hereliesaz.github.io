@@ -49,6 +49,35 @@ private val Good = Color(0xFFB0E0B0)
 }
 
 @Composable fun AdminApp(vm: AdminViewModel = viewModel()) {
+    vm.availableUpdate?.let { update ->
+        AlertDialog(
+            onDismissRequest = vm::dismissUpdate,
+            title = { Text("Update available") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(update.name.ifBlank { update.tag })
+                    Text("Installed: " + BuildConfig.VERSION_NAME + "   Available: " + update.version)
+                    if (update.notes.isNotBlank()) {
+                        Text(update.notes.take(900))
+                    }
+                    vm.updateMessage?.let { StatusText(it) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = vm::downloadAndInstallUpdate,
+                    enabled = !vm.updateBusy,
+                ) {
+                    Text(if (vm.updateBusy) "working…" else "install update")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::dismissUpdate, enabled = !vm.updateBusy) {
+                    Text("later")
+                }
+            },
+        )
+    }
     if (!vm.authenticated) {
         Surface(Modifier.fillMaxSize(), color = Void) { TokenScreen(vm, Modifier.padding(16.dp)) }
         return
@@ -89,6 +118,20 @@ private val Good = Color(0xFFB0E0B0)
             if (vm.authenticated || vm.tokenInput.isNotBlank()) DangerButton(vm::clearToken, !vm.busy) { Text("clear token") }
         }
         vm.authMessage?.let { StatusText(it) }
+
+        HorizontalDivider(color = Ink.copy(alpha = 0.18f))
+        Text("App updates", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "The app automatically checks the latest GitHub Release when it starts.",
+            color = Ink.copy(alpha = 0.65f),
+        )
+        OutlinedButton(
+            onClick = { vm.checkForUpdates(silent = false) },
+            enabled = !vm.updateBusy,
+        ) {
+            Text(if (vm.updateBusy) "checking…" else "check for updates")
+        }
+        vm.updateMessage?.let { StatusText(it) }
     }
 }
 
