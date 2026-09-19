@@ -1,5 +1,5 @@
-name: Build Android APK for In-App Release
-run-name: Android APK build ${{ github.event_name == 'workflow_dispatch' && inputs.request_id || github.sha }} ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'automatic' }}
+name: Build & Publish Android APK
+run-name: Android release ${{ github.event_name == 'workflow_dispatch' && inputs.version || format('1.0.0.{0}', github.run_number) }}
 
 on:
   push:
@@ -21,15 +21,24 @@ on:
       request_id:
         required: true
         type: string
+      notes:
+        required: false
+        type: string
+        default: ""
+      prerelease:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  release:
     uses: HereLiesAz/workflows/.github/workflows/hereliesaz-admin-apk-build.yml@main
     with:
-      version: ${{ github.event_name == 'workflow_dispatch' && inputs.version || format('0.0.{0}', github.run_number) }}
+      version: ${{ github.event_name == 'workflow_dispatch' && inputs.version || format('1.0.0.{0}', github.run_number) }}
       request_id: ${{ github.event_name == 'workflow_dispatch' && inputs.request_id || format('auto-{0}', github.sha) }}
-      release_signed: ${{ github.event_name == 'workflow_dispatch' }}
+      notes: ${{ github.event_name == 'workflow_dispatch' && inputs.notes || format('Automatic Android release for {0}', github.sha) }}
+      prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
     secrets: inherit
