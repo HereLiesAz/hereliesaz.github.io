@@ -20,6 +20,7 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -87,7 +88,37 @@ jobs:
           USER_TRIMMED=$(printf '%s' "$USERNAME" | tr -d ' \t\r\n')
           PW_TRIMMED=$(printf '%s' "$PASSWORD" | tr -d '\r\n')
 
-          lftp -u "$USER_TRIMMED","$PW_TRIMMED" \
+          if [ -z "$HOST" ] || [ -z "$USER_TRIMMED" ] || [ -z "$PW_TRIMMED" ]; then
+            echo "::error::SFTP deployment credentials are incomplete. Check FTP_SERVER, FTP_USERNAME, and FTP_PASSWORD."
+            exit 1
+          fi
+
+          echo "Testing SFTP connection to $HOST:$PORT ..."
+          timeout 45s lftp -u "$USER_TRIMMED","$PW_TRIMMED" \
             -p "$PORT" \
-            -e "set sftp:auto-confirm yes; set ssl:verify-certificate no; mirror -R --verbose ./dist/ $REMOTE_DIR; quit" \
-            sftp://"$HOST"
+            -e "set net:timeout 15; set net:max-retries 2; set net:reconnect-interval-base 2; set net:reconnect-interval-max 5; set sftp:auto-confirm yes; cls -1 $REMOTE_DIR >/dev/null; quit" \
+            sftp://"$HOST" || {
+              code=$?
+              if [ "$code" -eq 124 ]; then
+                echo "::error::SFTP connection test timed out after 45 seconds."
+              else
+                echo "::error::SFTP connection/authentication test failed with exit code $code."
+              fi
+              exit "$code"
+            }
+
+          echo "Deploying dist/ to $REMOTE_DIR ..."
+          timeout 15m lftp -u "$USER_TRIMMED","$PW_TRIMMED" \
+            -p "$PORT" \
+            -e "set net:timeout 20; set net:max-retries 3; set net:reconnect-interval-base 2; set net:reconnect-interval-max 10; set sftp:auto-confirm yes; mirror -R --only-newer --delete --verbose=1 ./dist/ $REMOTE_DIR; quit" \
+            sftp://"$HOST" || {
+              code=$?
+              if [ "$code" -eq 124 ]; then
+                echo "::error::SFTP upload timed out after 15 minutes."
+              else
+                echo "::error::SFTP upload failed with exit code $code."
+              fi
+              exit "$code"
+            }
+
+          echo "SFTP deployment completed."
