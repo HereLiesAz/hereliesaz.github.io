@@ -259,7 +259,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             price = if (paintingForm.forSale) price else null,
             currency = paintingForm.currency.trim().uppercase().ifBlank { "USD" },
         )
-        setDraft(
+        persistDraft(
             draft.copy(
                 metaUpdates = draft.metaUpdates + (id to entry),
                 removals = draft.removals - id,
@@ -277,7 +277,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             sourceFilename = item.sourceFilename,
             sourceIsSymlink = item.sourceIsSymlink,
         )
-        setDraft(
+        persistDraft(
             draft.copy(
                 metaUpdates = draft.metaUpdates - item.id,
                 bandUpdates = draft.bandUpdates - item.id,
@@ -309,7 +309,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     PickedFile(name, bytes)
                 }
                 val next = draftStore.stageUploads(draft, files)
-                setDraft(next)
+                persistDraft(next)
                 chosenUris = emptyList()
                 addMessage =
                     "Staged " + files.size + " photo" +
@@ -341,7 +341,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveSite() {
         val x = siteContent ?: return
-        setDraft(draft.copy(siteContent = x))
+        persistDraft(draft.copy(siteContent = x))
         siteMessage = "Staged. Nothing has been sent to GitHub yet."
     }
 
@@ -391,7 +391,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             bandMessage = "At least one layer must stay visible."
             return
         }
-        setDraft(
+        persistDraft(
             draft.copy(
                 bandUpdates = draft.bandUpdates + (id to bandHidden),
                 removals = draft.removals - id,
@@ -461,7 +461,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }
 
-    private fun setDraft(next: AdminDraft) {
+    private fun persistDraft(next: AdminDraft) {
         draft = next
         draftStore.save(next)
         submitMessage = null
