@@ -351,13 +351,10 @@ class AdminRepository(private val api: GitHubApi) {
 
         if (draft.removals.isNotEmpty()) {
             runCatching {
-                removalMutex.withLock {
-                    waitForNoActiveRemovalRun()
-                    api.dispatchWorkflow(
-                        "remove_painting.yml",
-                        mapOf("ids" to draft.removals.keys.joinToString(",")),
-                    )
-                }
+                api.dispatchWorkflow(
+                    "remove_painting.yml",
+                    mapOf("ids" to draft.removals.keys.joinToString(",")),
+                )
             }.onFailure {
                 warnings += "The changes were committed, but the removal workflow did not dispatch: " +
                     (it.message ?: "unknown error")
