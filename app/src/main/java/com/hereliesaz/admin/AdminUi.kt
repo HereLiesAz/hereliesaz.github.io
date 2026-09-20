@@ -12,6 +12,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -159,6 +161,7 @@ private val Good = Color(0xFFB0E0B0)
         Box(Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp)) {
             when (vm.tab) {
                 AdminTab.Art -> PaintingsScreen(vm)
+                AdminTab.Dedup -> DedupScreen(vm)
                 AdminTab.Add -> AddPaintingScreen(vm)
                 AdminTab.Site -> SiteContentScreen(vm)
                 AdminTab.Settings -> TokenScreen(vm)
@@ -508,6 +511,238 @@ private val Good = Color(0xFFB0E0B0)
         vm.bandMessage?.let { StatusText(it) }
     }
 }
+
+private enum class DedupFilter {
+    All,
+    Duplicates,
+    Similar,
+}
+
+@Composable private fun DedupScreen(vm: AdminViewModel) {
+    var filter by remember { mutableStateOf(DedupFilter.All) }
+    val report = vm.dedupReport
+
+    Column(
+        Modifier.fillMaxSize().padding(vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Dedup", style = MaterialTheme.typography.titleLarge)
+            OutlinedButton(
+                onClick = vm::scanForDuplicates,
+                enabled = !vm.dedupBusy,
+            ) {
+                Text(if (vm.dedupBusy) "scanning…" else if (report == null) "scan" else "rescan")
+            }
+        }
+
+        Text(
+            "Exact copies, compressed/resized copies, and visually similar images. " +
+                "Nothing is deleted here; deletions are only staged for Submit All.",
+            color = Ink.copy(alpha = 0.65f),
+        )
+
+        vm.dedupMessage?.let { StatusText(it) }
+
+        if (report == null) {
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = vm::scanForDuplicates,
+                enabled = !vm.dedupBusy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (vm.dedupBusy) "scanning photo library…" else "scan for duplicates")
+            }
+            return
+        }
+
+        Text(
+            report.imageCount.toString() + " images · " +
+                report.exactCount + " exact · " +
+                report.compressedCount + " compressed copies · " +
+                report.similarCount + " similar pairs",
+            color = Good,
+        )
+
+        if (report.scanErrorCount > 0) {
+            Text(
+                report.scanErrorCount.toString() + " image(s) could not be visually decoded; exact file matching still ran where possible.",
+                color = DangerInk,
+            )
+        }
+
+        if (report.exactCount + report.compressedCount > 0) {
+            Button(
+                onClick = vm::stageAllSuggestedDuplicates,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("stage all duplicate suggestions")
+            }
+        }
+
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            DedupFilter.entries.forEach { option ->
+                FilterChip(
+                    selected = filter == option,
+                    onClick = { filter = option },
+                    label = {
+                        Text(
+                            when (option) {
+                                DedupFilter.All -> "all"
+                                DedupFilter.Duplicates -> "duplicates"
+                                DedupFilter.Similar -> "similar"
+                            },
+                        )
+                    },
+                )
+            }
+        }
+
+        val visiblePairs = report.pairs.filter { pair ->
+            when (filter) {
+                DedupFilter.All -> true
+                DedupFilter.Duplicates ->
+                    pair.kind == DedupKind.Exact || pair.kind == DedupKind.Compressed
+                DedupFilter.Similar -> pair.kind == DedupKind.Similar
+            }
+        }
+
+        if (visiblePairs.isEmpty()) {
+            Text("No matches in this view.", color = Ink.copy(alpha = 0.6f))
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                itemsIndexed(
+                    items = visiblePairs,
+                    key = { index, pair ->
+                        pair.left.id + "::" + pair.right.id + "::" + index
+                    },
+                ) { _, pair ->
+                    DedupPairCard(vm, pair)
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun DedupPairCard(vm: AdminViewModel, pair: DedupPair) {
+    val kindLabel = when (pair.kind) {
+        DedupKind.Exact -> "exact duplicate"
+        DedupKind.Compressed -> "compressed / resized copy"
+        DedupKind.Similar -> "similar"
+    }
+    val certainty = String.format(java.util.Locale.US, "%.1f%%", pair.certainty)
+    val suggestedRemove = pair.suggestedRemoveId
+
+    Column(
+        Modifier.fillMaxWidth().background(Panel).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(kindLabel, style = MaterialTheme.typography.titleMedium)
+            Text(certainty, color = Good)
+        }
+
+        if (pair.reasons.isNotEmpty()) {
+            Text(pair.reasons.joinToString(" · "), color = Ink.copy(alpha = 0.62f))
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DedupImageCard(vm, pair.left, pair, Modifier.weight(1f))
+            DedupImageCard(vm, pair.right, pair, Modifier.weight(1f))
+        }
+
+        if (suggestedRemove != null && suggestedRemove !in vm.draft.removals) {
+            val image = if (pair.left.id == suggestedRemove) pair.left else pair.right
+            OutlinedButton(
+                onClick = { vm.stageDedupRemoval(image) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("queue suggested removal")
+            }
+        }
+    }
+}
+
+@Composable private fun DedupImageCard(
+    vm: AdminViewModel,
+    image: DedupImage,
+    pair: DedupPair,
+    modifier: Modifier = Modifier,
+) {
+    val queued = image.id in vm.draft.removals
+    val keep = pair.suggestedKeepId == image.id
+    val remove = pair.suggestedRemoveId == image.id
+
+    Column(
+        modifier.background(Void).padding(5.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        NetworkImage(
+            vm.dedupImageUrl(image),
+            vm,
+            Modifier.fillMaxWidth().aspectRatio(1f),
+        )
+        Text(image.id, maxLines = 2)
+
+        val dimensions =
+            if (image.width != null && image.height != null) {
+                image.width.toString() + "×" + image.height
+            } else {
+                "dimensions unknown"
+            }
+        Text(
+            dimensions + " · " + formatBytes(image.bytes),
+            color = Ink.copy(alpha = 0.6f),
+        )
+
+        when {
+            queued -> Text("queued for deletion", color = DangerInk)
+            keep -> Text("suggested keep", color = Good)
+            remove -> Text("suggested remove", color = DangerInk)
+        }
+
+        DangerButton(
+            onClick = { vm.stageDedupRemoval(image) },
+            enabled = !queued,
+        ) {
+            Text(if (queued) "queued" else "delete")
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String =
+    when {
+        bytes >= 1024L * 1024L ->
+            String.format(
+                java.util.Locale.US,
+                "%.1f MB",
+                bytes.toDouble() / (1024.0 * 1024.0),
+            )
+        bytes >= 1024L ->
+            String.format(
+                java.util.Locale.US,
+                "%.0f KB",
+                bytes.toDouble() / 1024.0,
+            )
+        else -> bytes.toString() + " B"
+    }
 
 @Composable private fun AddPaintingScreen(vm: AdminViewModel) {
     val context = LocalContext.current
