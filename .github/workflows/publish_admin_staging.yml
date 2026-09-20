@@ -1,6 +1,6 @@
 name: Publish Admin Staging
 
-run-name: Publish admin staging \${{ inputs.request_id }}
+run-name: Publish admin staging ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: \${{ github.token }}
+          token: ${{ github.token }}
 
       - name: Fetch admin staging
         run: |
@@ -77,8 +77,8 @@ jobs:
       - name: Process new or changed photos
         if: steps.diff.outputs.bake_ids != ''
         env:
-          GH_TOKEN: \${{ github.token }}
-          IDS: \${{ steps.diff.outputs.bake_ids }}
+          GH_TOKEN: ${{ github.token }}
+          IDS: ${{ steps.diff.outputs.bake_ids }}
         run: |
           set -euo pipefail
           SHA="$(git rev-parse origin/admin-staging)"
@@ -100,8 +100,8 @@ jobs:
       - name: Process removals
         if: steps.diff.outputs.remove_ids != ''
         env:
-          GH_TOKEN: \${{ github.token }}
-          IDS: \${{ steps.diff.outputs.remove_ids }}
+          GH_TOKEN: ${{ github.token }}
+          IDS: ${{ steps.diff.outputs.remove_ids }}
         run: |
           set -euo pipefail
           SHA="$(git rev-parse origin/admin-staging)"
@@ -122,7 +122,7 @@ jobs:
 
       - name: Merge staged changes into main
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh api --method POST "repos/$GITHUB_REPOSITORY/merges" \
@@ -132,7 +132,7 @@ jobs:
 
       - name: Reset staging to published main
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           MAIN_SHA="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
