@@ -114,8 +114,8 @@ class GitHubApi(private val tokenStore: TokenStore) {
 
         val commitSha = commit.getString("sha")
         val updateRefQuery =
-            "mutation(\\$input: UpdateRefInput!) { " +
-                "updateRef(input: \\$input) { ref { name target { oid } } } }"
+            "mutation(\$input: UpdateRefInput!) { " +
+                "updateRef(input: \$input) { ref { name target { oid } } } }"
         val variables = JSONObject().put(
             "input",
             JSONObject()
