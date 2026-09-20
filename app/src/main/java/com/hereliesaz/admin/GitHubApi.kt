@@ -45,6 +45,76 @@ class GitHubApi(private val tokenStore: TokenStore) {
         }
     }
 
+    suspend fun getBranchHeadSha(ref: String = BRANCH): String {
+        val json = request("/repos/$OWNER/$REPO/git/ref/heads/" + encodeSegment(ref))
+            ?: error("Empty Git reference response")
+        return json.getJSONObject("object").getString("sha")
+    }
+
+    suspend fun commitBatch(
+        mutations: List<RepoMutation>,
+        message: String,
+        parentSha: String,
+    ): String {
+        if (mutations.isEmpty()) return parentSha
+
+        val parent = request("/repos/$OWNER/$REPO/git/commits/" + encodeSegment(parentSha))
+            ?: error("Could not read parent commit")
+        val baseTreeSha = parent.getJSONObject("tree").getString("sha")
+
+        val uniqueMutations = linkedMapOf<String, RepoMutation>()
+        mutations.forEach { uniqueMutations[it.path] = it }
+
+        val entries = JSONArray()
+        uniqueMutations.values.forEach { mutation ->
+            val entry = JSONObject()
+                .put("path", mutation.path)
+                .put("mode", "100644")
+                .put("type", "blob")
+
+            if (mutation.content == null) {
+                entry.put("sha", JSONObject.NULL)
+            } else {
+                val blob = request(
+                    "/repos/$OWNER/$REPO/git/blobs",
+                    "POST",
+                    JSONObject()
+                        .put("content", Base64.encodeToString(mutation.content, Base64.NO_WRAP))
+                        .put("encoding", "base64"),
+                ) ?: error("Could not create blob for " + mutation.path)
+                entry.put("sha", blob.getString("sha"))
+            }
+            entries.put(entry)
+        }
+
+        val tree = request(
+            "/repos/$OWNER/$REPO/git/trees",
+            "POST",
+            JSONObject()
+                .put("base_tree", baseTreeSha)
+                .put("tree", entries),
+        ) ?: error("Could not create Git tree")
+
+        val commit = request(
+            "/repos/$OWNER/$REPO/git/commits",
+            "POST",
+            JSONObject()
+                .put("message", message)
+                .put("tree", tree.getString("sha"))
+                .put("parents", JSONArray().put(parentSha)),
+        ) ?: error("Could not create Git commit")
+
+        val commitSha = commit.getString("sha")
+        request(
+            "/repos/$OWNER/$REPO/git/refs/heads/" + encodeSegment(BRANCH),
+            "PATCH",
+            JSONObject()
+                .put("sha", commitSha)
+                .put("force", false),
+        )
+        return commitSha
+    }
+
     suspend fun getFile(path: String, ref: String = BRANCH): RepoFile? {
         return try {
             val json = request(
