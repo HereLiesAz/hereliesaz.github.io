@@ -33,6 +33,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var submitMessage by mutableStateOf<String?>(null); private set
 
     var paintings by mutableStateOf<List<ArtworkItem>?>(null); private set
+    var selectedArtworkIds by mutableStateOf<Set<String>>(emptySet()); private set
+    val multiSelectionActive: Boolean get() = selectedArtworkIds.isNotEmpty()
     var meta by mutableStateOf<Map<String, PaintingMeta>>(emptyMap()); private set
     var filter by mutableStateOf("")
     var artMessage by mutableStateOf<String?>(null); private set
@@ -154,6 +156,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         authenticated = false
         authMessage = null
         paintings = null
+        selectedArtworkIds = emptySet()
         artMessage = null
         selectedArtwork = null
     }
@@ -161,6 +164,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshPaintings() {
         if (!authenticated) return
         paintings = null
+        selectedArtworkIds = emptySet()
         artMessage = "Loading complete photo inventory…"
         viewModelScope.launch {
             try {
@@ -205,6 +209,53 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 artMessage = e.message ?: "Could not load the photo inventory."
             }
         }
+    }
+
+    fun toggleArtworkSelection(item: ArtworkItem) {
+        selectedArtworkIds = selectedArtworkIds.toMutableSet().apply {
+            if (!add(item.id)) remove(item.id)
+        }
+    }
+
+    fun clearArtworkSelection() {
+        selectedArtworkIds = emptySet()
+    }
+
+    fun stageSelectedForRemoval() {
+        if (selectedArtworkIds.isEmpty()) return
+
+        val byId = paintings.orEmpty().associateBy { it.id }
+        val targets = selectedArtworkIds.mapNotNull(byId::get)
+        if (targets.isEmpty()) {
+            selectedArtworkIds = emptySet()
+            return
+        }
+
+        val ids = targets.mapTo(linkedSetOf()) { it.id }
+        val removals = draft.removals.toMutableMap()
+        targets.forEach { item ->
+            removals[item.id] = StagedRemoval(
+                id = item.id,
+                sourceFilename = item.sourceFilename,
+                sourceIsSymlink = item.sourceIsSymlink,
+            )
+        }
+
+        persistDraft(
+            draft.copy(
+                metaUpdates = draft.metaUpdates.filterKeys { it !in ids },
+                bandUpdates = draft.bandUpdates.filterKeys { it !in ids },
+                removals = removals,
+            ),
+        )
+
+        meta = meta.filterKeys { it !in ids }
+        paintings = paintings?.filterNot { it.id in ids }
+        selectedArtworkIds = emptySet()
+        artMessage =
+            "Staged " + targets.size + " photo" +
+                (if (targets.size == 1) "" else "s") +
+                " for deletion. Nothing will be deleted until Submit All."
     }
 
     fun selectPainting(item: ArtworkItem) {
@@ -420,6 +471,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
                 draftStore.clear(toSubmit)
                 draft = AdminDraft()
+                selectedArtworkIds = emptySet()
                 removalStaged = false
 
                 submitMessage = if (result.dispatchWarnings.isEmpty()) {
@@ -447,6 +499,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         if (old.isEmpty || submitBusy) return
         draftStore.clear(old)
         draft = AdminDraft()
+        selectedArtworkIds = emptySet()
         submitMessage = "Discarded local staged changes."
         siteContent = null
         closePainting()
