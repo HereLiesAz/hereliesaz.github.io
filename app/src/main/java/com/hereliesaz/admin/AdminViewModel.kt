@@ -312,7 +312,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 setDraft(next)
                 chosenUris = emptyList()
                 addMessage =
-                    "Staged " + files.size + " photo" + if (files.size == 1) "" else "s" +
+                    "Staged " + files.size + " photo" +
+                        (if (files.size == 1) "" else "s") +
                         ". Nothing has been uploaded yet."
             } catch (e: Exception) {
                 addMessage = e.message ?: "Could not stage the selected photos."
@@ -407,7 +408,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         submitBusy = true
         submitMessage =
             "Submitting " + toSubmit.changeCount + " staged change" +
-                if (toSubmit.changeCount == 1) "" else "s" +
+                (if (toSubmit.changeCount == 1) "" else "s") +
                 " as one Git commit…"
 
         viewModelScope.launch {
