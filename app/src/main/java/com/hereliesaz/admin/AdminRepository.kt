@@ -4,17 +4,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.max
 
 class AdminRepository(private val api: GitHubApi) {
-    private val removalMutex = Mutex()
-
     suspend fun listBakedPaintings(): List<String> {
         val file = api.getFile("theater/_manifest.json", ART_DATA_BRANCH)
             ?: error("art-data/theater/_manifest.json is missing")
@@ -47,31 +42,6 @@ class AdminRepository(private val api: GitHubApi) {
         return parseMeta(file.content)
     }
 
-    suspend fun saveMetaEntry(id: String, entry: PaintingMeta?) {
-        val file = api.getFile(META_PATH)
-        val root = parseObject(file?.content)
-        if (entry == null) {
-            root.remove(id)
-        } else {
-            root.put(id, JSONObject().apply {
-                put("title", entry.title)
-                put("description", entry.description)
-                put("tags", JSONArray(entry.tags))
-                put("forSale", entry.forSale)
-                if (entry.forSale && entry.price != null) {
-                    put("price", entry.price)
-                    put("currency", entry.currency)
-                }
-            })
-        }
-        api.putFile(
-            META_PATH,
-            (root.toString(2) + "\n").toByteArray(),
-            "admin android: update metadata for $id",
-            file?.sha,
-        )
-    }
-
     suspend fun loadBandOverrides(): Map<String, Set<Int>> {
         val file = api.getFile(BAND_OVERRIDES_PATH) ?: return emptyMap()
         val root = parseObject(file.content)
@@ -81,22 +51,6 @@ class AdminRepository(private val api: GitHubApi) {
                 for (i in 0 until hidden.length()) add(hidden.getInt(i))
             }
         }
-    }
-
-    suspend fun saveBandOverrideEntry(id: String, hidden: Set<Int>?) {
-        val file = api.getFile(BAND_OVERRIDES_PATH)
-        val root = parseObject(file?.content)
-        if (hidden.isNullOrEmpty()) {
-            root.remove(id)
-        } else {
-            root.put(id, JSONObject().put("hidden", JSONArray(hidden.sorted())))
-        }
-        api.putFile(
-            BAND_OVERRIDES_PATH,
-            (root.toString(2) + "\n").toByteArray(),
-            "admin android: update band overrides for $id",
-            file?.sha,
-        )
     }
 
     suspend fun loadSiteContent(): SiteContent {
@@ -115,21 +69,6 @@ class AdminRepository(private val api: GitHubApi) {
                 if (links.isEmpty()) SiteContent.DEFAULT_LINKS else links,
             )
         }.getOrDefault(SiteContent())
-    }
-
-    suspend fun saveSiteContent(content: SiteContent) {
-        val file = api.getFile(SITE_PATH)
-        val links = JSONArray()
-        content.menuLinks.forEach {
-            links.put(JSONObject().put("label", it.label).put("href", it.href).put("external", it.external))
-        }
-        val root = JSONObject().put("about", content.about).put("menuLinks", links)
-        api.putFile(
-            SITE_PATH,
-            (root.toString(2) + "\n").toByteArray(),
-            "admin android: update site content",
-            file?.sha,
-        )
     }
 
     suspend fun fetchTheaterMeta(id: String): TheaterMeta? {
@@ -238,98 +177,135 @@ class AdminRepository(private val api: GitHubApi) {
         result
     }
 
-    suspend fun uploadPainting(item: PickedFile): String {
-        val safe = sanitizeIdAndFilename(item.displayName)
-        api.putFile(
-            "public/assets/" + safe.filename,
-            item.bytes,
-            "admin android: add painting " + safe.id,
+    suspend fun submitDraft(
+        draft: AdminDraft,
+        uploadFiles: Map<String, PickedFile>,
+    ): SubmitResult {
+        require(!draft.isEmpty) { "There are no staged changes to submit." }
+
+        val baseSha = api.getBranchHeadSha()
+        val tree = api.listRepoTree(baseSha)
+        val mutations = mutableListOf<RepoMutation>()
+
+        if (draft.metaUpdates.isNotEmpty() || draft.removals.isNotEmpty()) {
+            val file = api.getFile(META_PATH, baseSha)
+            val root = parseObject(file?.content)
+            draft.metaUpdates.forEach { (id, entry) ->
+                root.put(id, JSONObject().apply {
+                    put("title", entry.title)
+                    put("description", entry.description)
+                    put("tags", JSONArray(entry.tags))
+                    put("forSale", entry.forSale)
+                    if (entry.forSale && entry.price != null) {
+                        put("price", entry.price)
+                        put("currency", entry.currency)
+                    }
+                })
+            }
+            draft.removals.keys.forEach(root::remove)
+            mutations += RepoMutation(
+                META_PATH,
+                (root.toString(2) + "\n").toByteArray(Charsets.UTF_8),
+            )
+        }
+
+        if (draft.bandUpdates.isNotEmpty() || draft.removals.isNotEmpty()) {
+            val file = api.getFile(BAND_OVERRIDES_PATH, baseSha)
+            val root = parseObject(file?.content)
+            draft.bandUpdates.forEach { (id, hidden) ->
+                if (hidden.isEmpty()) {
+                    root.remove(id)
+                } else {
+                    root.put(id, JSONObject().put("hidden", JSONArray(hidden.sorted())))
+                }
+            }
+            draft.removals.keys.forEach(root::remove)
+            mutations += RepoMutation(
+                BAND_OVERRIDES_PATH,
+                (root.toString(2) + "\n").toByteArray(Charsets.UTF_8),
+            )
+        }
+
+        draft.siteContent?.let { content ->
+            val links = JSONArray()
+            content.menuLinks.forEach { link ->
+                links.put(
+                    JSONObject()
+                        .put("label", link.label)
+                        .put("href", link.href)
+                        .put("external", link.external),
+                )
+            }
+            val root = JSONObject()
+                .put("about", content.about)
+                .put("menuLinks", links)
+            mutations += RepoMutation(
+                SITE_PATH,
+                (root.toString(2) + "\n").toByteArray(Charsets.UTF_8),
+            )
+        }
+
+        draft.uploads.forEach { staged ->
+            val picked = uploadFiles[staged.id]
+                ?: error("Staged upload " + staged.filename + " could not be read.")
+            mutations += RepoMutation(
+                "public/assets/" + staged.filename,
+                picked.bytes,
+            )
+        }
+
+        draft.removals.values.forEach { removal ->
+            val sourceFilename = removal.sourceFilename
+                ?: fetchTheaterMeta(removal.id)?.sourceImage
+                ?: return@forEach
+            val publicPath = "public/assets/$sourceFilename"
+            val publicEntry = tree.firstOrNull { it.path == publicPath && it.type == "blob" }
+            if (publicEntry != null) {
+                mutations += RepoMutation(publicPath, null)
+                if (publicEntry.mode == "120000" || removal.sourceIsSymlink) {
+                    val rawPath = "public/assets/raw/$sourceFilename"
+                    if (tree.any { it.path == rawPath && it.type == "blob" }) {
+                        mutations += RepoMutation(rawPath, null)
+                    }
+                }
+            }
+        }
+
+        val commitSha = api.commitBatch(
+            mutations = mutations,
+            message = "admin android: submit " + draft.changeCount + " staged changes",
+            parentSha = baseSha,
         )
-        return safe.id
+
+        val warnings = mutableListOf<String>()
+
+        if (draft.uploads.isNotEmpty()) {
+            runCatching {
+                dispatchBake(draft.uploads.map { it.id })
+            }.onFailure {
+                warnings += "The changes were committed, but the theater bake did not dispatch: " +
+                    (it.message ?: "unknown error")
+            }
+        }
+
+        if (draft.removals.isNotEmpty()) {
+            runCatching {
+                api.dispatchWorkflow(
+                    "remove_painting.yml",
+                    mapOf("ids" to draft.removals.keys.joinToString(",")),
+                )
+            }.onFailure {
+                warnings += "The changes were committed, but the removal workflow did not dispatch: " +
+                    (it.message ?: "unknown error")
+            }
+        }
+
+        return SubmitResult(commitSha, warnings)
     }
 
     suspend fun dispatchBake(ids: List<String>) {
         if (ids.isNotEmpty()) {
             api.dispatchWorkflow("theater_bake.yml", mapOf("ids" to ids.joinToString(",")))
-        }
-    }
-
-    suspend fun removePainting(item: ArtworkItem) {
-        val id = item.id
-        val errors = mutableListOf<String>()
-        var dispatched = false
-
-        try {
-            val sourceFilename = item.sourceFilename ?: fetchTheaterMeta(id)?.sourceImage
-            if (!sourceFilename.isNullOrBlank()) {
-                val tree = api.listRepoTree()
-                val publicPath = "public/assets/$sourceFilename"
-                val publicEntry = tree.firstOrNull { it.path == publicPath && it.type == "blob" }
-                if (publicEntry != null) {
-                    api.deleteFile(
-                        publicPath,
-                        "admin android: remove source photo for $id [skip-grind]",
-                        publicEntry.sha,
-                    )
-                    if (publicEntry.mode == "120000") {
-                        val rawPath = "public/assets/raw/$sourceFilename"
-                        val rawEntry = tree.firstOrNull { it.path == rawPath && it.type == "blob" }
-                        if (rawEntry != null) {
-                            api.deleteFile(
-                                rawPath,
-                                "admin android: remove raw source photo for $id [skip-grind]",
-                                rawEntry.sha,
-                            )
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            errors += "source photo: " + e.message
-        }
-
-        try {
-            saveMetaEntry(id, null)
-        } catch (e: Exception) {
-            errors += "metadata: " + e.message
-        }
-        try {
-            saveBandOverrideEntry(id, null)
-        } catch (e: Exception) {
-            errors += "band overrides: " + e.message
-        }
-
-        try {
-            removalMutex.withLock {
-                waitForNoActiveRemovalRun()
-                api.dispatchWorkflow("remove_painting.yml", mapOf("ids" to id))
-                delay(REMOVAL_POLL_MS)
-                waitForNoActiveRemovalRun()
-            }
-            dispatched = true
-        } catch (e: Exception) {
-            errors += "removal workflow dispatch: " + e.message
-        }
-
-        if (errors.isNotEmpty()) {
-            val prefix =
-                if (dispatched) {
-                    "Removal dispatched, but cleanup had errors: "
-                } else {
-                    "Cleanup ran, but the removal workflow never dispatched: "
-                }
-            throw RemovalException(prefix + errors.joinToString("; "), dispatched)
-        }
-    }
-
-    private suspend fun waitForNoActiveRemovalRun() {
-        val deadline = System.currentTimeMillis() + REMOVAL_POLL_MAX_MS
-        while (true) {
-            if (api.listWorkflowRuns("remove_painting.yml", 5).none { it.status != "completed" }) return
-            if (System.currentTimeMillis() > deadline) {
-                error("A previous removal run has been active for over 20 minutes. Check GitHub Actions.")
-            }
-            delay(REMOVAL_POLL_MS)
         }
     }
 

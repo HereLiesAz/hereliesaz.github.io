@@ -45,6 +45,111 @@ class GitHubApi(private val tokenStore: TokenStore) {
         }
     }
 
+    suspend fun getBranchHeadSha(ref: String = BRANCH): String {
+        val json = request("/repos/$OWNER/$REPO/git/ref/heads/" + encodeSegment(ref))
+            ?: error("Empty Git reference response")
+        return json.getJSONObject("object").getString("sha")
+    }
+
+    suspend fun commitBatch(
+        mutations: List<RepoMutation>,
+        message: String,
+        parentSha: String,
+    ): String {
+        if (mutations.isEmpty()) return parentSha
+
+        val branchRef = request("/repos/$OWNER/$REPO/git/ref/heads/" + encodeSegment(BRANCH))
+            ?: error("Could not read the branch reference")
+        val currentHead = branchRef.getJSONObject("object").getString("sha")
+        if (currentHead != parentSha) {
+            error("main changed while the draft was being prepared. Refresh and submit again.")
+        }
+        val refNodeId = branchRef.getString("node_id")
+
+        val parent = request("/repos/$OWNER/$REPO/git/commits/" + encodeSegment(parentSha))
+            ?: error("Could not read parent commit")
+        val baseTreeSha = parent.getJSONObject("tree").getString("sha")
+
+        val uniqueMutations = linkedMapOf<String, RepoMutation>()
+        mutations.forEach { uniqueMutations[it.path] = it }
+
+        val entries = JSONArray()
+        uniqueMutations.values.forEach { mutation ->
+            val entry = JSONObject()
+                .put("path", mutation.path)
+                .put("mode", "100644")
+                .put("type", "blob")
+
+            if (mutation.content == null) {
+                entry.put("sha", JSONObject.NULL)
+            } else {
+                val blob = request(
+                    "/repos/$OWNER/$REPO/git/blobs",
+                    "POST",
+                    JSONObject()
+                        .put("content", Base64.encodeToString(mutation.content, Base64.NO_WRAP))
+                        .put("encoding", "base64"),
+                ) ?: error("Could not create blob for " + mutation.path)
+                entry.put("sha", blob.getString("sha"))
+            }
+            entries.put(entry)
+        }
+
+        val tree = request(
+            "/repos/$OWNER/$REPO/git/trees",
+            "POST",
+            JSONObject()
+                .put("base_tree", baseTreeSha)
+                .put("tree", entries),
+        ) ?: error("Could not create Git tree")
+
+        val commit = request(
+            "/repos/$OWNER/$REPO/git/commits",
+            "POST",
+            JSONObject()
+                .put("message", message)
+                .put("tree", tree.getString("sha"))
+                .put("parents", JSONArray().put(parentSha)),
+        ) ?: error("Could not create Git commit")
+
+        val commitSha = commit.getString("sha")
+        val updateRefQuery =
+            "mutation(\$input: UpdateRefInput!) { " +
+                "updateRef(input: \$input) { ref { name target { oid } } } }"
+        val variables = JSONObject().put(
+            "input",
+            JSONObject()
+                .put("refId", refNodeId)
+                .put("oid", commitSha)
+                .put("force", false),
+        )
+        val updateResponse = request(
+            "/graphql",
+            "POST",
+            JSONObject()
+                .put("query", updateRefQuery)
+                .put("variables", variables),
+        ) ?: error("GitHub returned no response while advancing main")
+
+        if (updateResponse.has("errors")) {
+            error(
+                "GitHub refused to advance main: " +
+                    updateResponse.getJSONArray("errors").toString(),
+            )
+        }
+
+        val updatedOid = updateResponse
+            .optJSONObject("data")
+            ?.optJSONObject("updateRef")
+            ?.optJSONObject("ref")
+            ?.optJSONObject("target")
+            ?.optString("oid")
+        if (updatedOid != commitSha) {
+            error("GitHub did not advance main to the staged commit.")
+        }
+        return commitSha
+    }
+
     suspend fun getFile(path: String, ref: String = BRANCH): RepoFile? {
         return try {
             val json = request(
@@ -55,20 +160,6 @@ class GitHubApi(private val tokenStore: TokenStore) {
         } catch (e: GitHubApiException) {
             if (e.status == 404) null else throw e
         }
-    }
-
-    suspend fun putFile(path: String, bytes: ByteArray, message: String, sha: String? = null) {
-        val body = JSONObject().put("message", message).put("content", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("branch", BRANCH)
-        if (sha != null) body.put("sha", sha)
-        request("/repos/$OWNER/$REPO/contents/" + encodePath(path), "PUT", body)
-    }
-
-    suspend fun deleteFile(path: String, message: String, sha: String) {
-        request(
-            "/repos/$OWNER/$REPO/contents/" + encodePath(path),
-            "DELETE",
-            JSONObject().put("message", message).put("sha", sha).put("branch", BRANCH),
-        )
     }
 
     suspend fun dispatchWorkflow(workflowFile: String, inputs: Map<String, String> = emptyMap()) {

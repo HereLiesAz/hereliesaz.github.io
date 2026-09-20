@@ -19,12 +19,19 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val api = GitHubApi(tokenStore)
     private val repo = AdminRepository(api)
     private val updater = GitHubUpdater(application)
+    private val draftStore = DraftStore(application)
 
     var authenticated by mutableStateOf(tokenStore.hasToken()); private set
     var tokenInput by mutableStateOf(tokenStore.load())
     var authMessage by mutableStateOf<String?>(null); private set
     var busy by mutableStateOf(false); private set
     var tab by mutableStateOf(AdminTab.Art)
+
+    var draft by mutableStateOf(draftStore.load()); private set
+    val pendingCount: Int get() = draft.changeCount
+    var submitBusy by mutableStateOf(false); private set
+    var submitMessage by mutableStateOf<String?>(null); private set
+
     var paintings by mutableStateOf<List<ArtworkItem>?>(null); private set
     var meta by mutableStateOf<Map<String, PaintingMeta>>(emptyMap()); private set
     var filter by mutableStateOf("")
@@ -32,11 +39,14 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var selectedArtwork by mutableStateOf<ArtworkItem?>(null); private set
     var paintingForm by mutableStateOf(PaintingForm())
     var editorMessage by mutableStateOf<String?>(null); private set
-    var removalDispatched by mutableStateOf(false); private set
+    var removalStaged by mutableStateOf(false); private set
+
     var chosenUris by mutableStateOf<List<Uri>>(emptyList()); private set
     var addMessage by mutableStateOf<String?>(null); private set
+
     var siteContent by mutableStateOf<SiteContent?>(null); private set
     var siteMessage by mutableStateOf<String?>(null); private set
+
     var bandPreviews by mutableStateOf<List<BandPreview>>(emptyList()); private set
     var bandHidden by mutableStateOf<Set<Int>>(emptySet()); private set
     var bandMessage by mutableStateOf<String?>(null); private set
@@ -103,18 +113,38 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun verifyAndSaveToken() {
-        if (tokenInput.trim().isBlank()) { authMessage = "Enter a GitHub token."; return }
-        tokenStore.save(tokenInput.trim()); busy = true; authMessage = "Checking…"
+        if (tokenInput.trim().isBlank()) {
+            authMessage = "Enter a GitHub token."
+            return
+        }
+        tokenStore.save(tokenInput.trim())
+        busy = true
+        authMessage = "Checking…"
         viewModelScope.launch {
             try {
                 val x = api.verifyToken()
                 when {
-                    !x.canWrite -> authMessage = "Token works but has no write access to the repository (logged in as " + x.login + ")."
-                    !x.actionsOk -> authMessage = "Token can write Contents but cannot access Actions. Grant Actions: Read and write."
-                    else -> { authenticated = true; authMessage = "Verified — write access confirmed."; refreshPaintings() }
+                    !x.canWrite ->
+                        authMessage =
+                            "Token works but has no write access to the repository (logged in as " +
+                                x.login + ")."
+
+                    !x.actionsOk ->
+                        authMessage =
+                            "Token can write Contents but cannot access Actions. Grant Actions: Read and write."
+
+                    else -> {
+                        authenticated = true
+                        authMessage = "Verified — write access confirmed."
+                        refreshPaintings()
+                    }
                 }
-            } catch (e: Exception) { authenticated = false; authMessage = e.message }
-            finally { busy = false }
+            } catch (e: Exception) {
+                authenticated = false
+                authMessage = e.message
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -140,15 +170,22 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
                 val merged = linkedMapOf<String, ArtworkItem>()
                 source.forEach { item ->
-                    merged[item.id] = item.copy(baked = item.id in bakedIds)
+                    if (item.id !in draft.removals) {
+                        merged[item.id] = item.copy(baked = item.id in bakedIds)
+                    }
                 }
                 bakedIds.forEach { id ->
-                    if (id !in merged) merged[id] = ArtworkItem(id = id, baked = true)
+                    if (id !in merged && id !in draft.removals) {
+                        merged[id] = ArtworkItem(id = id, baked = true)
+                    }
                 }
                 paintings = merged.values.sortedBy { it.id.lowercase() }
 
                 val metaResult = runCatching { repo.loadMeta() }
-                meta = metaResult.getOrDefault(emptyMap())
+                val combinedMeta = metaResult.getOrDefault(emptyMap()).toMutableMap()
+                combinedMeta.putAll(draft.metaUpdates)
+                draft.removals.keys.forEach(combinedMeta::remove)
+                meta = combinedMeta
 
                 val warnings = buildList {
                     bakedResult.exceptionOrNull()?.let {
@@ -173,23 +210,30 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     fun selectPainting(item: ArtworkItem) {
         selectedArtwork = item
         editorMessage = null
-        removalDispatched = false
+        removalStaged = item.id in draft.removals
+        bandPreviews.forEach { runCatching { it.bitmap.recycle() } }
         bandPreviews = emptyList()
         bandHidden = emptySet()
         theaterMeta = null
-        val x = meta[item.id] ?: PaintingMeta()
+
+        val x = draft.metaUpdates[item.id] ?: meta[item.id] ?: PaintingMeta()
         paintingForm = PaintingForm(
-            x.title, x.description, x.tags.joinToString(", "), x.forSale,
-            x.price?.let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }.orEmpty(),
-            x.currency,
+            title = x.title,
+            description = x.description,
+            tags = x.tags.joinToString(", "),
+            forSale = x.forSale,
+            price = x.price
+                ?.let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }
+                .orEmpty(),
+            currency = x.currency,
         )
     }
 
     fun closePainting() {
         selectedArtwork = null
         editorMessage = null
-        removalDispatched = false
-        bandPreviews.forEach { it.bitmap.recycle() }
+        removalStaged = false
+        bandPreviews.forEach { runCatching { it.bitmap.recycle() } }
         bandPreviews = emptyList()
         theaterMeta = null
     }
@@ -197,85 +241,82 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     fun savePainting() {
         val item = selectedArtwork ?: return
         val id = item.id
-        if (paintingForm.forSale && paintingForm.price.isBlank()) { editorMessage = "Marked “for sale” needs a price."; return }
-        val price = paintingForm.price.toDoubleOrNull()
-        if (paintingForm.forSale && (price == null || price < 0)) { editorMessage = "Price must be a non-negative number."; return }
-        busy = true; editorMessage = "Saving…"
-        viewModelScope.launch {
-            try {
-                val entry = PaintingMeta(
-                    paintingForm.title.trim(), paintingForm.description.trim(),
-                    paintingForm.tags.split(',').map { it.trim() }.filter { it.isNotBlank() },
-                    paintingForm.forSale, if (paintingForm.forSale) price else null,
-                    paintingForm.currency.trim().uppercase().ifBlank { "USD" },
-                )
-                repo.saveMetaEntry(id, entry)
-                meta = meta + (id to entry)
-                editorMessage = "Saved — live after the next deploy."
-            } catch (e: Exception) {
-                editorMessage = e.message
-            } finally {
-                busy = false
-            }
+        if (paintingForm.forSale && paintingForm.price.isBlank()) {
+            editorMessage = "Marked “for sale” needs a price."
+            return
         }
+        val price = paintingForm.price.toDoubleOrNull()
+        if (paintingForm.forSale && (price == null || price < 0)) {
+            editorMessage = "Price must be a non-negative number."
+            return
+        }
+
+        val entry = PaintingMeta(
+            title = paintingForm.title.trim(),
+            description = paintingForm.description.trim(),
+            tags = paintingForm.tags.split(',').map { it.trim() }.filter { it.isNotBlank() },
+            forSale = paintingForm.forSale,
+            price = if (paintingForm.forSale) price else null,
+            currency = paintingForm.currency.trim().uppercase().ifBlank { "USD" },
+        )
+        setDraft(
+            draft.copy(
+                metaUpdates = draft.metaUpdates + (id to entry),
+                removals = draft.removals - id,
+            ),
+        )
+        meta = meta + (id to entry)
+        removalStaged = false
+        editorMessage = "Staged. Nothing has been sent to GitHub yet."
     }
 
     fun removePainting() {
         val item = selectedArtwork ?: return
-        busy = true
-        removalDispatched = false
-        editorMessage = "Waiting for a safe removal slot. Existing removal runs are allowed to finish first."
-        viewModelScope.launch {
-            try {
-                repo.removePainting(item)
-                removalDispatched = true
-                editorMessage = "Removal completed and dispatched. Refresh the list after the site redeploys."
-            } catch (e: RemovalException) {
-                removalDispatched = e.dispatched
-                editorMessage = e.message
-            } catch (e: Exception) {
-                editorMessage = e.message
-            } finally {
-                busy = false
-            }
-        }
+        val removal = StagedRemoval(
+            id = item.id,
+            sourceFilename = item.sourceFilename,
+            sourceIsSymlink = item.sourceIsSymlink,
+        )
+        setDraft(
+            draft.copy(
+                metaUpdates = draft.metaUpdates - item.id,
+                bandUpdates = draft.bandUpdates - item.id,
+                removals = draft.removals + (item.id to removal),
+            ),
+        )
+        meta = meta - item.id
+        paintings = paintings?.filterNot { it.id == item.id }
+        removalStaged = true
+        editorMessage = "Removal staged. Nothing will be deleted until Submit Changes."
     }
 
-    fun chooseUris(uris: List<Uri>) { chosenUris = uris; addMessage = null }
+    fun chooseUris(uris: List<Uri>) {
+        chosenUris = uris
+        addMessage = null
+    }
 
     fun uploadChosen(resolver: ContentResolver) {
         if (chosenUris.isEmpty()) return
-        busy = true; addMessage = "Uploading…"
+
+        busy = true
+        addMessage = "Copying photos into the local draft…"
         viewModelScope.launch {
-            val uploaded = mutableListOf<String>()
-            var failure: Exception? = null
-            var failedAt = -1
-            for ((index, uri) in chosenUris.withIndex()) {
-                try {
-                    val name = displayName(resolver, uri) ?: "photo"
-                    val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Could not read $name")
-                    uploaded += repo.uploadPainting(PickedFile(name, bytes))
-                } catch (e: Exception) {
-                    failure = e
-                    failedAt = index
-                    break
-                }
-            }
             try {
-                if (uploaded.isNotEmpty()) {
-                    addMessage = "Dispatching bake for " + uploaded.joinToString(", ") + "…"
-                    repo.dispatchBake(uploaded)
+                val files = chosenUris.map { uri ->
+                    val name = displayName(resolver, uri) ?: "photo"
+                    val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: error("Could not read $name")
+                    PickedFile(name, bytes)
                 }
-                if (failure != null) {
-                    chosenUris = chosenUris.drop(failedAt)
-                    addMessage = "Uploaded and dispatched " + uploaded.joinToString(", ") + "; stopped after: " + failure.message + ". " + chosenUris.size + " file(s) remain selected."
-                } else {
-                    chosenUris = emptyList()
-                    addMessage = "Uploaded and dispatched: " + uploaded.joinToString(", ") + "."
-                }
+                val next = draftStore.stageUploads(draft, files)
+                setDraft(next)
+                chosenUris = emptyList()
+                addMessage =
+                    "Staged " + files.size + " photo" +
+                        (if (files.size == 1) "" else "s") +
+                        ". Nothing has been uploaded yet."
             } catch (e: Exception) {
-                chosenUris = chosenUris.drop(uploaded.size)
-                addMessage = "Uploaded " + uploaded.joinToString(", ") + " but bake dispatch failed: " + e.message + ". The source files are already on main."
+                addMessage = e.message ?: "Could not stage the selected photos."
             } finally {
                 busy = false
             }
@@ -284,28 +325,24 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadSite() {
         if (siteContent != null) return
-        viewModelScope.launch { siteContent = runCatching { repo.loadSiteContent() }.getOrDefault(SiteContent()) }
+        draft.siteContent?.let {
+            siteContent = it
+            return
+        }
+        viewModelScope.launch {
+            siteContent = runCatching { repo.loadSiteContent() }.getOrDefault(SiteContent())
+        }
     }
 
     fun setSite(x: SiteContent) {
         siteContent = x
-        if (siteMessage?.startsWith("Saved") == true) siteMessage = null
+        if (siteMessage?.startsWith("Staged") == true) siteMessage = null
     }
 
     fun saveSite() {
         val x = siteContent ?: return
-        busy = true
-        siteMessage = "Saving…"
-        viewModelScope.launch {
-            try {
-                repo.saveSiteContent(x)
-                siteMessage = "Saved — live after the next deploy."
-            } catch (e: Exception) {
-                siteMessage = e.message
-            } finally {
-                busy = false
-            }
-        }
+        setDraft(draft.copy(siteContent = x))
+        siteMessage = "Staged. Nothing has been sent to GitHub yet."
     }
 
     fun loadBands() {
@@ -315,16 +352,23 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (bandLoading || bandPreviews.isNotEmpty()) return
+
         bandLoading = true
         bandMessage = "Loading layers…"
         viewModelScope.launch {
             try {
-                val t = repo.fetchTheaterMeta(item.id) ?: error("This painting has no theater metadata.")
-                val hidden = repo.loadBandOverrides()[item.id].orEmpty()
+                val t = repo.fetchTheaterMeta(item.id)
+                    ?: error("This painting has no theater metadata.")
+                val remoteHidden = repo.loadBandOverrides()[item.id].orEmpty()
+                val hidden = draft.bandUpdates[item.id] ?: remoteHidden
                 theaterMeta = t
                 bandHidden = hidden
                 bandPreviews = repo.buildBandPreviews(item.id, t, hidden)
-                bandMessage = null
+                bandMessage = if (item.id in draft.bandUpdates) {
+                    "These layer changes are staged locally."
+                } else {
+                    null
+                }
             } catch (e: Exception) {
                 bandMessage = e.message
             } finally {
@@ -334,9 +378,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleBand(index: Int) {
-        bandHidden = bandHidden.toMutableSet().apply { if (!add(index)) remove(index) }
+        bandHidden = bandHidden.toMutableSet().apply {
+            if (!add(index)) remove(index)
+        }
         bandPreviews = bandPreviews.map { it.copy(hidden = it.index in bandHidden) }
-        if (bandMessage?.startsWith("Saved") == true) bandMessage = null
+        if (bandMessage?.startsWith("Staged") == true) bandMessage = null
     }
 
     fun saveBands() {
@@ -345,24 +391,81 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             bandMessage = "At least one layer must stay visible."
             return
         }
-        busy = true
-        bandMessage = "Saving layers…"
+        setDraft(
+            draft.copy(
+                bandUpdates = draft.bandUpdates + (id to bandHidden),
+                removals = draft.removals - id,
+            ),
+        )
+        removalStaged = false
+        bandMessage = "Staged. Nothing has been sent to GitHub yet."
+    }
+
+    fun submitChanges() {
+        val toSubmit = draft
+        if (toSubmit.isEmpty || submitBusy) return
+
+        submitBusy = true
+        submitMessage =
+            "Submitting " + toSubmit.changeCount + " staged change" +
+                (if (toSubmit.changeCount == 1) "" else "s") +
+                " as one Git commit…"
+
         viewModelScope.launch {
             try {
-                repo.saveBandOverrideEntry(id, bandHidden)
-                bandMessage = "Saved — live after the next deploy."
+                val uploads = toSubmit.uploads.associate { staged ->
+                    staged.id to draftStore.readUpload(staged)
+                }
+                val result = repo.submitDraft(toSubmit, uploads)
+
+                draftStore.clear(toSubmit)
+                draft = AdminDraft()
+                removalStaged = false
+
+                submitMessage = if (result.dispatchWarnings.isEmpty()) {
+                    "Submitted " + toSubmit.changeCount + " changes in one commit."
+                } else {
+                    "Submitted in one commit. " + result.dispatchWarnings.joinToString(" ")
+                }
+
+                siteContent = null
+                closePainting()
+                refreshPaintings()
+                if (tab == AdminTab.Site) loadSite()
             } catch (e: Exception) {
-                bandMessage = e.message
+                submitMessage =
+                    (e.message ?: "Submit failed.") +
+                        " Your staged changes are still saved on this device."
             } finally {
-                busy = false
+                submitBusy = false
             }
         }
     }
 
-    suspend fun bitmap(url: String, maxDimension: Int = 1024): Bitmap? = repo.loadBitmap(url, maxDimension)
+    fun discardDraft() {
+        val old = draft
+        if (old.isEmpty || submitBusy) return
+        draftStore.clear(old)
+        draft = AdminDraft()
+        submitMessage = "Discarded local staged changes."
+        siteContent = null
+        closePainting()
+        if (authenticated) refreshPaintings()
+        if (tab == AdminTab.Site) loadSite()
+    }
+
+    suspend fun bitmap(url: String, maxDimension: Int = 1024): Bitmap? =
+        repo.loadBitmap(url, maxDimension)
+
     fun artworkUrl(item: ArtworkItem): String = repo.artworkUrl(item)
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }
+
+    private fun setDraft(next: AdminDraft) {
+        draft = next
+        draftStore.save(next)
+        submitMessage = null
+    }
 
     private fun displayName(resolver: ContentResolver, uri: Uri): String? {
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
