@@ -12,7 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 
-enum class AdminTab { Art, Add, Settings }
+enum class AdminTab { Art, Add, Site, Settings }
 
 class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val tokenStore = TokenStore(application)
@@ -34,6 +34,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var removalDispatched by mutableStateOf(false); private set
     var chosenUris by mutableStateOf<List<Uri>>(emptyList()); private set
     var addMessage by mutableStateOf<String?>(null); private set
+    var siteContent by mutableStateOf<SiteContent?>(null); private set
+    var siteMessage by mutableStateOf<String?>(null); private set
     var bandPreviews by mutableStateOf<List<BandPreview>>(emptyList()); private set
     var bandHidden by mutableStateOf<Set<Int>>(emptySet()); private set
     var bandMessage by mutableStateOf<String?>(null); private set
@@ -197,6 +199,32 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             } finally { busy = false }
         }
     }
+    fun loadSite() {
+        if (siteContent != null) return
+        viewModelScope.launch { siteContent = runCatching { repo.loadSiteContent() }.getOrDefault(SiteContent()) }
+    }
+
+    fun setSite(x: SiteContent) {
+        siteContent = x
+        if (siteMessage?.startsWith("Saved") == true) siteMessage = null
+    }
+
+    fun saveSite() {
+        val x = siteContent ?: return
+        busy = true
+        siteMessage = "Saving…"
+        viewModelScope.launch {
+            try {
+                repo.saveSiteContent(x)
+                siteMessage = "Saved — live after the next deploy."
+            } catch (e: Exception) {
+                siteMessage = e.message
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     fun loadBands() {
         val id = selectedId ?: return
         if (bandLoading || bandPreviews.isNotEmpty()) return

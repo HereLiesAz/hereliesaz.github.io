@@ -89,8 +89,8 @@ private val Good = Color(0xFFB0E0B0)
             Column(Modifier.background(Void)) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     AdminTab.entries.forEach { item ->
-                        if (vm.tab == item) Button({ vm.tab = item }) { Text(if (item == AdminTab.Add) "add art" else item.name.lowercase()) }
-                        else OutlinedButton({ vm.tab = item }) { Text(if (item == AdminTab.Add) "add art" else item.name.lowercase()) }
+                        if (vm.tab == item) Button({ vm.tab = item; if (item == AdminTab.Site) vm.loadSite() }) { Text(if (item == AdminTab.Add) "add art" else item.name.lowercase()) }
+                        else OutlinedButton({ vm.tab = item; if (item == AdminTab.Site) vm.loadSite() }) { Text(if (item == AdminTab.Add) "add art" else item.name.lowercase()) }
                     }
                 }
                 HorizontalDivider(color = Ink.copy(alpha = 0.18f))
@@ -101,6 +101,7 @@ private val Good = Color(0xFFB0E0B0)
             when (vm.tab) {
                 AdminTab.Art -> PaintingsScreen(vm)
                 AdminTab.Add -> AddPaintingScreen(vm)
+                AdminTab.Site -> SiteContentScreen(vm)
                 AdminTab.Settings -> TokenScreen(vm)
             }
         }
@@ -248,6 +249,79 @@ private val Good = Color(0xFFB0E0B0)
     }
 }
 
+
+@Composable private fun SiteContentScreen(vm: AdminViewModel) {
+    LaunchedEffect(Unit) { vm.loadSite() }
+    val content = vm.siteContent ?: run {
+        Text("loading…", modifier = Modifier.padding(vertical = 12.dp))
+        return
+    }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Site", style = MaterialTheme.typography.titleLarge)
+        OutlinedTextField(
+            content.about,
+            { vm.setSite(content.copy(about = it)) },
+            label = { Text("About text") },
+            minLines = 4,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text("Menu links", style = MaterialTheme.typography.titleMedium)
+        content.menuLinks.forEachIndexed { index, link ->
+            Column(Modifier.fillMaxWidth().background(Panel).padding(8.dp)) {
+                OutlinedTextField(
+                    link.label,
+                    { value ->
+                        val links = content.menuLinks.toMutableList()
+                        links[index] = link.copy(label = value)
+                        vm.setSite(content.copy(menuLinks = links))
+                    },
+                    label = { Text("label") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    link.href,
+                    { value ->
+                        val links = content.menuLinks.toMutableList()
+                        links[index] = link.copy(href = value)
+                        vm.setSite(content.copy(menuLinks = links))
+                    },
+                    label = { Text("href") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        link.external,
+                        { value ->
+                            val links = content.menuLinks.toMutableList()
+                            links[index] = link.copy(external = value)
+                            vm.setSite(content.copy(menuLinks = links))
+                        },
+                    )
+                    Text("new tab")
+                    Spacer(Modifier.weight(1f))
+                    DangerButton({
+                        vm.setSite(
+                            content.copy(
+                                menuLinks = content.menuLinks.filterIndexed { i, _ -> i != index },
+                            ),
+                        )
+                    }) { Text("remove") }
+                }
+            }
+        }
+        OutlinedButton({
+            vm.setSite(content.copy(menuLinks = content.menuLinks + MenuLink()))
+        }) { Text("+ add link") }
+        Button(vm::saveSite, enabled = !vm.busy) {
+            Text(if (vm.busy) "saving…" else "save")
+        }
+        vm.siteMessage?.let { StatusText(it) }
+        Spacer(Modifier.height(40.dp))
+    }
+}
 
 @Composable private fun NetworkImage(url: String, vm: AdminViewModel, modifier: Modifier = Modifier) {
     val bitmap by produceState<android.graphics.Bitmap?>(null, url) { value = runCatching { vm.bitmap(url) }.getOrNull() }
