@@ -30,13 +30,6 @@ require(canonicalVersionCodeLong <= 2_100_000_000L) {
 }
 val canonicalVersionCode = canonicalVersionCodeLong.toInt()
 
-val releaseVersionName =
-    providers.gradleProperty("releaseVersionName").orElse(canonicalVersionName)
-val releaseVersionCode =
-    providers.gradleProperty("releaseVersionCode")
-        .orElse(canonicalVersionCode.toString())
-        .map(String::toInt)
-
 val signingStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 val signingStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
 val signingKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
@@ -50,8 +43,8 @@ android {
         applicationId = "com.hereliesaz.admin"
         minSdk = 28
         targetSdk = 36
-        versionCode = releaseVersionCode.get()
-        versionName = releaseVersionName.get()
+        versionCode = canonicalVersionCode
+        versionName = canonicalVersionName
     }
 
     val releaseSigning = if (
