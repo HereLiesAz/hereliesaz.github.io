@@ -49,6 +49,25 @@ private val Good = Color(0xFFB0E0B0)
 }
 
 @Composable fun AdminApp(vm: AdminViewModel = viewModel()) {
+    var confirmDiscard by remember { mutableStateOf(false) }
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Discard staged changes?") },
+            text = { Text("This only discards the local draft. Nothing has been submitted to GitHub yet.") },
+            confirmButton = {
+                DangerButton({
+                    confirmDiscard = false
+                    vm.discardDraft()
+                }) { Text("discard") }
+            },
+            dismissButton = {
+                TextButton({ confirmDiscard = false }) { Text("keep") }
+            },
+        )
+    }
+
     vm.availableUpdate?.let { update ->
         AlertDialog(
             onDismissRequest = vm::dismissUpdate,
@@ -99,6 +118,36 @@ private val Good = Color(0xFFB0E0B0)
                             }
                         }
                     }
+                }
+
+                if (vm.pendingCount > 0) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            vm.pendingCount.toString() + " staged",
+                            modifier = Modifier.weight(1f),
+                            color = Good,
+                        )
+                        TextButton(
+                            onClick = { confirmDiscard = true },
+                            enabled = !vm.submitBusy,
+                        ) {
+                            Text("discard")
+                        }
+                        Button(
+                            onClick = vm::submitChanges,
+                            enabled = !vm.submitBusy,
+                        ) {
+                            Text(if (vm.submitBusy) "submitting…" else "submit all")
+                        }
+                    }
+                }
+
+                vm.submitMessage?.let {
+                    StatusText(it, Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
                 }
                 HorizontalDivider(color = Ink.copy(alpha = 0.18f))
             }
@@ -230,7 +279,7 @@ private val Good = Color(0xFFB0E0B0)
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
             title = { Text("Remove $id?") },
-            text = { Text("This deletes the source photo and any baked data. It cannot be undone from this app.") },
+            text = { Text("This stages the removal. Nothing will be deleted until you tap Submit All.") },
             confirmButton = {
                 DangerButton({ confirmRemove = false; vm.removePainting() }) { Text("remove") }
             },
@@ -311,21 +360,15 @@ private val Good = Color(0xFFB0E0B0)
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(vm::savePainting, enabled = !vm.busy && !vm.removalDispatched) {
-                Text(if (vm.busy) "working…" else "save")
+            Button(vm::savePainting, enabled = !vm.busy && !vm.removalStaged) {
+                Text("stage details")
             }
-            DangerButton({ confirmRemove = true }, !vm.busy && !vm.removalDispatched) {
-                Text(if (vm.removalDispatched) "removal dispatched" else "remove from site")
+            DangerButton({ confirmRemove = true }, !vm.busy && !vm.removalStaged) {
+                Text(if (vm.removalStaged) "removal staged" else "stage removal")
             }
         }
 
         vm.editorMessage?.let { StatusText(it) }
-        if (vm.removalDispatched) {
-            OpenLinkButton(
-                "watch removal run",
-                "https://github.com/HereLiesAz/hereliesaz.github.io/actions/workflows/remove_painting.yml",
-            )
-        }
         Spacer(Modifier.height(40.dp))
     }
 }
@@ -374,7 +417,7 @@ private val Good = Color(0xFFB0E0B0)
 
         if (vm.bandPreviews.isNotEmpty()) {
             Button(vm::saveBands, enabled = !vm.busy && vm.bandHidden.size < vm.bandPreviews.size) {
-                Text("save layers")
+                Text("stage layers")
             }
         }
         vm.bandMessage?.let { StatusText(it) }
@@ -397,20 +440,19 @@ private val Good = Color(0xFFB0E0B0)
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Add art", style = MaterialTheme.typography.titleLarge)
-        Text("Pick one or more artwork images. Each uploads to public/assets/ and starts processing for exactly the new art ids.")
+        Text("Pick one or more artwork images. They stay on this device until you tap Submit All.")
         OutlinedButton({ launcher.launch(arrayOf("image/*")) }, enabled = !vm.busy) { Text("choose photos") }
         Text(vm.chosenUris.size.toString() + " selected")
         Button(
             { vm.uploadChosen(context.contentResolver) },
             enabled = vm.chosenUris.isNotEmpty() && !vm.busy,
         ) {
-            Text(if (vm.busy) "working…" else "upload " + vm.chosenUris.size)
+            Text(if (vm.busy) "working…" else "stage " + vm.chosenUris.size)
+        }
+        if (vm.draft.uploads.isNotEmpty()) {
+            Text(vm.draft.uploads.size.toString() + " photo(s) staged in this draft.", color = Good)
         }
         vm.addMessage?.let { StatusText(it) }
-        OpenLinkButton(
-            "watch theater bake runs",
-            "https://github.com/HereLiesAz/hereliesaz.github.io/actions/workflows/theater_bake.yml",
-        )
     }
 }
 
@@ -484,7 +526,7 @@ private val Good = Color(0xFFB0E0B0)
         }) { Text("+ add link") }
 
         Button(vm::saveSite, enabled = !vm.busy) {
-            Text(if (vm.busy) "saving…" else "save")
+            Text("stage site")
         }
         vm.siteMessage?.let { StatusText(it) }
         Spacer(Modifier.height(40.dp))
@@ -511,14 +553,16 @@ private val Good = Color(0xFFB0E0B0)
     )
 }
 
-@Composable private fun StatusText(message: String) {
+@Composable private fun StatusText(message: String, modifier: Modifier = Modifier) {
+    val loadedCleanly =
+        message.startsWith("Loaded") && !message.contains("Could not", ignoreCase = true)
     val good =
         message.startsWith("Verified") ||
-        message.startsWith("Saved") ||
-        message.startsWith("Uploaded") ||
-        message.startsWith("Loaded") ||
-        message.startsWith("Removal completed")
-    Text(message, color = if (good) Good else Ink.copy(alpha = 0.78f))
+        message.startsWith("Staged") ||
+        message.startsWith("Submitted") ||
+        message.startsWith("Discarded") ||
+        loadedCleanly
+    Text(message, modifier = modifier, color = if (good) Good else Ink.copy(alpha = 0.78f))
 }
 
 @Composable private fun OpenLinkButton(label: String, url: String) {
