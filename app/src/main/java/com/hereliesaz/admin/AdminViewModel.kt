@@ -733,6 +733,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 selectedArtworkIds = emptySet()
                 removalStaged = false
                 dedupReport = null
+                dedupDisplayedRunId = null
 
                 submitMessage = if (result.dispatchWarnings.isEmpty()) {
                     "Submitted " + toSubmit.changeCount + " changes in one commit."
