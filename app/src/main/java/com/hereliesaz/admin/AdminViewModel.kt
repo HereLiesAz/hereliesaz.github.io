@@ -169,7 +169,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         selectedArtworkIds = emptySet()
         artMessage = null
         selectedArtwork = null
+        stopDedupPolling()
         dedupReport = null
+        dedupDisplayedRunId = null
+        dedupExpectedRequestId = null
         dedupMessage = null
     }
 
@@ -330,8 +333,18 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (dedupReport == null) {
-            repo.latestAvailableDedupReport(runs)?.let(::showDedupSnapshot)
+        val newestSuccessfulRun = runs.firstOrNull {
+            it.status == "completed" && it.conclusion == "success"
+        }
+        if (
+            newestSuccessfulRun != null &&
+            newestSuccessfulRun.id != dedupDisplayedRunId
+        ) {
+            repo.latestAvailableDedupReport(runs)?.let { snapshot ->
+                if (snapshot.runId != dedupDisplayedRunId) {
+                    showDedupSnapshot(snapshot)
+                }
+            }
         }
 
         dedupExpectedRequestId?.let { expected ->
