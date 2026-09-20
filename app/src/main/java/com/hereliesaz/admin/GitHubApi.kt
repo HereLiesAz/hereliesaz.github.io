@@ -162,20 +162,6 @@ class GitHubApi(private val tokenStore: TokenStore) {
         }
     }
 
-    suspend fun putFile(path: String, bytes: ByteArray, message: String, sha: String? = null) {
-        val body = JSONObject().put("message", message).put("content", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("branch", BRANCH)
-        if (sha != null) body.put("sha", sha)
-        request("/repos/$OWNER/$REPO/contents/" + encodePath(path), "PUT", body)
-    }
-
-    suspend fun deleteFile(path: String, message: String, sha: String) {
-        request(
-            "/repos/$OWNER/$REPO/contents/" + encodePath(path),
-            "DELETE",
-            JSONObject().put("message", message).put("sha", sha).put("branch", BRANCH),
-        )
-    }
-
     suspend fun dispatchWorkflow(workflowFile: String, inputs: Map<String, String> = emptyMap()) {
         val inputJson = JSONObject()
         inputs.forEach { (k, v) -> inputJson.put(k, v) }
