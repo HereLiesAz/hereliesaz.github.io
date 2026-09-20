@@ -140,7 +140,11 @@ class GitHubUpdater(private val context: Context) {
         }
 
         if (archive.longVersionCode <= installed.longVersionCode) {
-            error("Downloaded APK is not newer than the installed app.")
+            error(
+                "Downloaded APK is not newer than the installed app " +
+                    "(downloaded versionCode " + archive.longVersionCode +
+                    ", installed versionCode " + installed.longVersionCode + ").",
+            )
         }
     }
 
