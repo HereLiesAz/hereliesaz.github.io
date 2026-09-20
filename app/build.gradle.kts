@@ -4,7 +4,7 @@ plugins {
 }
 
 val canonicalVersionProperties = java.util.Properties().apply {
-    rootProject.file("version.properties").inputStream().use(::load)
+    rootProject.file("version.properties").inputStream().use { load(it) }
 }
 fun canonicalVersionPart(name: String, range: IntRange): Int {
     val value = canonicalVersionProperties.getProperty(name)?.toIntOrNull()
