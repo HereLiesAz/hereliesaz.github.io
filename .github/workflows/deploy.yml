@@ -4,10 +4,6 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Process Art (Turbo 56)", "Theater Bake", "Remove Painting", "Bootstrap Art (5 Images)"]
-    types:
-      - completed
 
 permissions:
   contents: read
