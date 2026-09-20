@@ -58,6 +58,14 @@ class GitHubApi(private val tokenStore: TokenStore) {
     ): String {
         if (mutations.isEmpty()) return parentSha
 
+        val branchRef = request("/repos/$OWNER/$REPO/git/ref/heads/" + encodeSegment(BRANCH))
+            ?: error("Could not read the branch reference")
+        val currentHead = branchRef.getJSONObject("object").getString("sha")
+        if (currentHead != parentSha) {
+            error("main changed while the draft was being prepared. Refresh and submit again.")
+        }
+        val refNodeId = branchRef.getString("node_id")
+
         val parent = request("/repos/$OWNER/$REPO/git/commits/" + encodeSegment(parentSha))
             ?: error("Could not read parent commit")
         val baseTreeSha = parent.getJSONObject("tree").getString("sha")
@@ -105,13 +113,40 @@ class GitHubApi(private val tokenStore: TokenStore) {
         ) ?: error("Could not create Git commit")
 
         val commitSha = commit.getString("sha")
-        request(
-            "/repos/$OWNER/$REPO/git/refs/heads/" + encodeSegment(BRANCH),
-            "PATCH",
+        val updateRefQuery =
+            "mutation(\\$input: UpdateRefInput!) { " +
+                "updateRef(input: \\$input) { ref { name target { oid } } } }"
+        val variables = JSONObject().put(
+            "input",
             JSONObject()
-                .put("sha", commitSha)
+                .put("refId", refNodeId)
+                .put("oid", commitSha)
                 .put("force", false),
         )
+        val updateResponse = request(
+            "/graphql",
+            "POST",
+            JSONObject()
+                .put("query", updateRefQuery)
+                .put("variables", variables),
+        ) ?: error("GitHub returned no response while advancing main")
+
+        if (updateResponse.has("errors")) {
+            error(
+                "GitHub refused to advance main: " +
+                    updateResponse.getJSONArray("errors").toString(),
+            )
+        }
+
+        val updatedOid = updateResponse
+            .optJSONObject("data")
+            ?.optJSONObject("updateRef")
+            ?.optJSONObject("ref")
+            ?.optJSONObject("target")
+            ?.optString("oid")
+        if (updatedOid != commitSha) {
+            error("GitHub did not advance main to the staged commit.")
+        }
         return commitSha
     }
 
