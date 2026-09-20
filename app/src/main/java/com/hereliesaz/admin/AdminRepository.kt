@@ -134,6 +134,15 @@ class AdminRepository(private val api: GitHubApi) {
             workflowFile = "dedup_scan.yml",
             perPage = 30,
             event = "workflow_dispatch",
+            branch = ADMIN_BRANCH,
+        )
+
+    suspend fun listPublishRuns(): List<WorkflowRun> =
+        api.listWorkflowRuns(
+            workflowFile = "publish_admin_staging.yml",
+            perPage = 20,
+            event = "workflow_dispatch",
+            branch = GitHubApi.BRANCH,
         )
 
     suspend fun loadDedupReport(runId: Long): DedupReport? {
