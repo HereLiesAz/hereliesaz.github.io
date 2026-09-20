@@ -10,6 +10,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -53,6 +55,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var dedupReport by mutableStateOf<DedupReport?>(null); private set
     var dedupBusy by mutableStateOf(false); private set
     var dedupMessage by mutableStateOf<String?>(null); private set
+    private var dedupDisplayedRunId: Long? = null
+    private var dedupExpectedRequestId: String? = null
+    private var dedupPollingJob: Job? = null
 
     var bandPreviews by mutableStateOf<List<BandPreview>>(emptyList()); private set
     var bandHidden by mutableStateOf<Set<Int>>(emptySet()); private set
@@ -164,7 +169,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         selectedArtworkIds = emptySet()
         artMessage = null
         selectedArtwork = null
+        stopDedupPolling()
         dedupReport = null
+        dedupDisplayedRunId = null
+        dedupExpectedRequestId = null
         dedupMessage = null
     }
 
@@ -265,29 +273,162 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 " for deletion. Nothing will be deleted until Submit All."
     }
 
+    fun startDedupPolling() {
+        if (dedupPollingJob?.isActive == true) return
+        dedupPollingJob = viewModelScope.launch {
+            while (true) {
+                runCatching { pollDedupStatus() }
+                    .onFailure { error ->
+                        dedupMessage =
+                            "Could not refresh dedup status: " +
+                                (error.message ?: "unknown error")
+                    }
+                delay(DEDUP_SCREEN_POLL_MS)
+            }
+        }
+    }
+
+    fun stopDedupPolling() {
+        dedupPollingJob?.cancel()
+        dedupPollingJob = null
+    }
+
     fun scanForDuplicates() {
         if (dedupBusy) return
-        dedupBusy = true
-        dedupMessage = "Starting dedup scan…"
+
         val requestId = UUID.randomUUID().toString()
+        dedupExpectedRequestId = requestId
+        dedupBusy = true
+        dedupMessage =
+            if (dedupReport == null) {
+                "Queueing dedup scan…"
+            } else {
+                "Queueing a newer dedup scan. Showing the latest completed report meanwhile."
+            }
 
         viewModelScope.launch {
             try {
-                val report = repo.runDedupScan(requestId) { status ->
-                    dedupMessage = status
-                }
-                dedupReport = report
-                dedupMessage =
-                    "Found " + report.exactCount + " exact, " +
-                        report.compressedCount + " compressed-copy, and " +
-                        report.similarCount + " similar-image pair" +
-                        (if (report.similarCount == 1) "" else "s") + "."
+                repo.dispatchDedupScan(requestId)
+                startDedupPolling()
             } catch (e: Exception) {
-                dedupMessage = e.message ?: "Dedup scan failed."
-            } finally {
+                dedupExpectedRequestId = null
                 dedupBusy = false
+                dedupMessage = e.message ?: "Could not queue dedup scan."
             }
         }
+    }
+
+    private suspend fun pollDedupStatus() {
+        val runs = repo.listDedupRuns()
+        if (runs.isEmpty()) {
+            dedupBusy = dedupExpectedRequestId != null
+            if (dedupReport == null) {
+                dedupMessage =
+                    if (dedupBusy) {
+                        "Waiting for the queued dedup scan to appear…"
+                    } else {
+                        "No dedup scans have run yet."
+                    }
+            }
+            return
+        }
+
+        val newestSuccessfulRun = runs.firstOrNull {
+            it.status == "completed" && it.conclusion == "success"
+        }
+        if (
+            newestSuccessfulRun != null &&
+            newestSuccessfulRun.id != dedupDisplayedRunId
+        ) {
+            repo.latestAvailableDedupReport(runs)?.let { snapshot ->
+                if (snapshot.runId != dedupDisplayedRunId) {
+                    showDedupSnapshot(snapshot)
+                }
+            }
+        }
+
+        dedupExpectedRequestId?.let { expected ->
+            val requested = runs.firstOrNull { it.displayTitle.contains(expected) }
+            if (requested == null) {
+                dedupBusy = true
+                dedupMessage =
+                    if (dedupReport == null) {
+                        "Waiting for the queued dedup scan to appear…"
+                    } else {
+                        "A newer scan is queued. Showing the latest completed report until it is ready."
+                    }
+                return
+            }
+            dedupExpectedRequestId = null
+        }
+
+        val latest = runs.first()
+        if (latest.status != "completed") {
+            dedupBusy = true
+            dedupMessage =
+                when (latest.status) {
+                    "queued" ->
+                        "Newest dedup scan is queued."
+                    "in_progress" ->
+                        "Newest dedup scan is running."
+                    else ->
+                        "Newest dedup scan is " + latest.status + "."
+                } +
+                    if (dedupReport != null) {
+                        " Showing the latest completed report until it is ready."
+                    } else {
+                        ""
+                    }
+            return
+        }
+
+        if (latest.conclusion == "success") {
+            if (dedupDisplayedRunId != latest.id) {
+                val report = repo.loadDedupReport(latest.id)
+                if (report == null) {
+                    dedupBusy = true
+                    dedupMessage =
+                        if (dedupReport == null) {
+                            "Newest scan finished. Waiting for its report…"
+                        } else {
+                            "Newest scan finished. Showing the previous report until the new report is ready."
+                        }
+                    return
+                }
+                showDedupSnapshot(DedupReportSnapshot(latest.id, report))
+            }
+            dedupBusy = false
+            dedupMessage = dedupSummary(dedupReport)
+            return
+        }
+
+        dedupBusy = false
+        val fallback = repo.latestAvailableDedupReport(runs.drop(1))
+        if (dedupReport == null && fallback != null) {
+            showDedupSnapshot(fallback)
+        }
+        dedupMessage =
+            "Newest dedup scan ended with " +
+                (latest.conclusion ?: "an unknown result") +
+                if (dedupReport != null) {
+                    ". Showing the most recent successful report."
+                } else {
+                    ". No successful report is available yet."
+                }
+    }
+
+    private fun showDedupSnapshot(snapshot: DedupReportSnapshot) {
+        dedupDisplayedRunId = snapshot.runId
+        dedupReport = snapshot.report
+    }
+
+    private fun dedupSummary(report: DedupReport?): String {
+        report ?: return "No dedup report is available yet."
+        return "Latest completed scan: " +
+            report.exactCount + " exact, " +
+            report.compressedCount + " compressed-copy, and " +
+            report.similarCount + " similar-image pair" +
+            (if (report.similarCount == 1) "" else "s") + "."
     }
 
     fun stageDedupRemoval(image: DedupImage) {
@@ -299,8 +440,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         )
         persistDraft(
             draft.copy(
-                metaUpdates = draft.metaUpdates - image.id,
-                bandUpdates = draft.bandUpdates - image.id,
                 removals = draft.removals + (image.id to removal),
             ),
         )
@@ -312,6 +451,22 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 "Staged " + image.id + " for deletion. Nothing is deleted until Submit All."
             }
+    }
+
+    fun undoDedupRemoval(image: DedupImage) {
+        if (image.id !in draft.removals) {
+            dedupMessage = image.id + " is not queued for deletion."
+            return
+        }
+
+        persistDraft(
+            draft.copy(
+                removals = draft.removals - image.id,
+            ),
+        )
+        dedupMessage =
+            "Unstaged " + image.id + ". It will not be deleted when Submit All is pressed."
+        refreshPaintings()
     }
 
     fun stageAllSuggestedDuplicates() {
@@ -339,8 +494,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         ids.forEach { id ->
             val image = imagesById[id] ?: return@forEach
             next = next.copy(
-                metaUpdates = next.metaUpdates - id,
-                bandUpdates = next.bandUpdates - id,
                 removals = next.removals + (
                     id to StagedRemoval(
                         id = id,
@@ -576,6 +729,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 selectedArtworkIds = emptySet()
                 removalStaged = false
                 dedupReport = null
+                dedupDisplayedRunId = null
 
                 submitMessage = if (result.dispatchWarnings.isEmpty()) {
                     "Submitted " + toSubmit.changeCount + " changes in one commit."
@@ -617,6 +771,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     fun dedupImageUrl(image: DedupImage): String = repo.dedupImageUrl(image)
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }
+
+    companion object {
+        private const val DEDUP_SCREEN_POLL_MS = 4_000L
+    }
 
     private fun persistDraft(next: AdminDraft) {
         draft = next

@@ -172,8 +172,25 @@ class GitHubApi(private val tokenStore: TokenStore) {
         )
     }
 
-    suspend fun listWorkflowRuns(workflowFile: String, perPage: Int = 5): List<WorkflowRun> {
-        val json = request("/repos/$OWNER/$REPO/actions/workflows/" + encodeSegment(workflowFile) + "/runs?per_page=$perPage") ?: return emptyList()
+    suspend fun listWorkflowRuns(
+        workflowFile: String,
+        perPage: Int = 5,
+        event: String? = null,
+    ): List<WorkflowRun> {
+        val query = buildString {
+            append("?per_page=")
+            append(perPage)
+            if (!event.isNullOrBlank()) {
+                append("&event=")
+                append(encodeSegment(event))
+            }
+        }
+        val json = request(
+            "/repos/$OWNER/$REPO/actions/workflows/" +
+                encodeSegment(workflowFile) +
+                "/runs" +
+                query,
+        ) ?: return emptyList()
         val runs = json.optJSONArray("workflow_runs") ?: JSONArray()
         return buildList {
             for (i in 0 until runs.length()) {

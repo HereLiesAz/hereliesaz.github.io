@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -117,59 +116,35 @@ class AdminRepository(private val api: GitHubApi) {
             relative.split('/').joinToString("/") { GitHubApi.encodeSegment(it) }
     }
 
-    suspend fun runDedupScan(
-        requestId: String,
-        onStatus: (String) -> Unit = {},
-    ): DedupReport {
-        onStatus("Starting dedup scan…")
+    suspend fun dispatchDedupScan(requestId: String) {
         api.dispatchWorkflow("dedup_scan.yml", mapOf("request_id" to requestId))
+    }
 
-        val deadline = System.currentTimeMillis() + DEDUP_SCAN_TIMEOUT_MS
-        var run: WorkflowRun? = null
+    suspend fun listDedupRuns(): List<WorkflowRun> =
+        api.listWorkflowRuns(
+            workflowFile = "dedup_scan.yml",
+            perPage = 30,
+            event = "workflow_dispatch",
+        )
 
-        while (System.currentTimeMillis() < deadline) {
-            delay(DEDUP_POLL_MS)
-            val candidate = api.listWorkflowRuns("dedup_scan.yml", 20)
-                .firstOrNull { it.displayTitle.contains(requestId) }
-            if (candidate == null) {
-                onStatus("Waiting for the scan runner…")
-                continue
-            }
-
-            run = candidate
-            if (candidate.status == "completed") break
-            onStatus(
-                when (candidate.status) {
-                    "queued" -> "Dedup scan queued…"
-                    "in_progress" -> "Scanning the photo library…"
-                    else -> "Dedup scan " + candidate.status + "…"
-                },
-            )
-        }
-
-        val finished = run ?: error("The dedup scan never appeared in GitHub Actions.")
-        if (finished.status != "completed") {
-            error("The dedup scan timed out.")
-        }
-        if (finished.conclusion != "success") {
-            error("The dedup scan finished with " + (finished.conclusion ?: "an unknown result") + ".")
-        }
-
-        onStatus("Downloading dedup report…")
-        val artifactDeadline = System.currentTimeMillis() + DEDUP_ARTIFACT_TIMEOUT_MS
-        var artifact: WorkflowArtifact? = null
-        while (System.currentTimeMillis() < artifactDeadline) {
-            artifact = api.listRunArtifacts(finished.id)
-                .firstOrNull { it.name == "dedup-report-$requestId" && !it.expired }
-            if (artifact != null) break
-            delay(2_000L)
-        }
-
-        val readyArtifact = artifact ?: error("The dedup scan finished, but its report artifact is missing.")
-        val zip = api.downloadArtifactZip(readyArtifact.id)
-        val json = extractJsonFromZip(zip)
-            ?: error("The dedup report artifact did not contain JSON.")
+    suspend fun loadDedupReport(runId: Long): DedupReport? {
+        val artifact = api.listRunArtifacts(runId)
+            .firstOrNull { it.name.startsWith("dedup-report-") && !it.expired }
+            ?: return null
+        val zip = api.downloadArtifactZip(artifact.id)
+        val json = extractJsonFromZip(zip) ?: return null
         return parseDedupReport(json)
+    }
+
+    suspend fun latestAvailableDedupReport(
+        runs: List<WorkflowRun>,
+    ): DedupReportSnapshot? {
+        for (run in runs) {
+            if (run.status != "completed" || run.conclusion != "success") continue
+            val report = runCatching { loadDedupReport(run.id) }.getOrNull() ?: continue
+            return DedupReportSnapshot(run.id, report)
+        }
+        return null
     }
 
     suspend fun loadBitmap(url: String, maxDimension: Int = 1024): Bitmap? =
@@ -483,8 +458,5 @@ class AdminRepository(private val api: GitHubApi) {
             setOf("jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif")
         private const val REMOVAL_POLL_MS = 5_000L
         private const val REMOVAL_POLL_MAX_MS = 20 * 60 * 1_000L
-        private const val DEDUP_POLL_MS = 3_000L
-        private const val DEDUP_SCAN_TIMEOUT_MS = 30 * 60 * 1_000L
-        private const val DEDUP_ARTIFACT_TIMEOUT_MS = 60_000L
     }
 }
