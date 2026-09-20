@@ -821,7 +821,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             publishPollingJob?.cancel()
-            publishPollingJob = viewModelScope.launch {
+            publishPollingJob = viewModelScope.launch poll@{
                 var step = 0
                 while (true) {
                     val runs = runCatching { repo.listPublishRuns() }
@@ -831,7 +831,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                             publishMessage =
                                 "Could not check publication status: " +
                                     (error.message ?: "unknown error")
-                            return@launch
+                            return@poll
                         }
 
                     val run = runs.firstOrNull { it.displayTitle.contains(requestId) }
@@ -850,7 +850,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                         publishMessage = "Publication completed successfully."
                         refreshUnpublishedState()
                         refreshPaintings()
-                        return@launch
+                        return@poll
                     } else {
                         publishBusy = false
                         publishFailure = true
@@ -858,7 +858,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                             "Publication failed: " +
                                 (run.conclusion ?: "unknown failure") +
                                 ". The submitted staging changes were kept and can be published again."
-                        return@launch
+                        return@poll
                     }
 
                     val delayMs = when (step) {
