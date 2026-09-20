@@ -79,10 +79,11 @@ private val Good = Color(0xFFB0E0B0)
         )
     }
     if (!vm.authenticated) {
-        Surface(Modifier.fillMaxSize(), color = Void) { TokenScreen(vm, Modifier.padding(16.dp)) }
+        Surface(Modifier.fillMaxSize().safeDrawingPadding(), color = Void) { TokenScreen(vm, Modifier.padding(16.dp)) }
         return
     }
     Scaffold(
+        modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         containerColor = Void,
         topBar = {
             Column(Modifier.background(Void)) {
