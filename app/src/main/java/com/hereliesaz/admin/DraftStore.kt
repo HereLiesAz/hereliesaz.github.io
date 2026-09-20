@@ -150,7 +150,7 @@ class DraftStore(context: Context) {
         return AdminDraft(
             metaUpdates = meta,
             bandUpdates = bands,
-            siteContent = root.optJSONObject("siteContent")?.let(::decodeSite),
+            siteContent = root.optJSONObject("siteContent")?.let { decodeSite(it) },
             uploads = uploads,
             removals = removals,
         )
