@@ -230,10 +230,18 @@ def name_similarity(a: ImageInfo, b: ImageInfo) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
+def quality_key(image: ImageInfo) -> tuple[int, int, int, int, str]:
+    return (
+        image.pixels,
+        image.bytes,
+        len(image.meta_tokens),
+        -len(image.filename),
+        image.filename.lower(),
+    )
+
+
 def keep_remove(a: ImageInfo, b: ImageInfo) -> tuple[ImageInfo, ImageInfo]:
-    key_a = (a.pixels, a.bytes, -len(a.filename), a.filename.lower())
-    key_b = (b.pixels, b.bytes, -len(b.filename), b.filename.lower())
-    return (a, b) if key_a >= key_b else (b, a)
+    return (a, b) if quality_key(a) >= quality_key(b) else (b, a)
 
 
 def pair_payload(
@@ -268,7 +276,7 @@ def exact_pairs(images: list[ImageInfo]) -> tuple[list[dict[str, Any]], set[tupl
     for members in groups.values():
         if len(members) < 2:
             continue
-        members = sorted(members, key=lambda x: (x.pixels, x.bytes), reverse=True)
+        members = sorted(members, key=quality_key, reverse=True)
         keep = members[0]
         for other in members[1:]:
             key = tuple(sorted((keep.id, other.id)))
