@@ -238,6 +238,135 @@ class AdminRepository(private val api: GitHubApi) {
         result
     }
 
+    suspend fun submitDraft(
+        draft: AdminDraft,
+        uploadFiles: Map<String, PickedFile>,
+    ): SubmitResult {
+        require(!draft.isEmpty) { "There are no staged changes to submit." }
+
+        val baseSha = api.getBranchHeadSha()
+        val tree = api.listRepoTree(baseSha)
+        val mutations = mutableListOf<RepoMutation>()
+
+        if (draft.metaUpdates.isNotEmpty() || draft.removals.isNotEmpty()) {
+            val file = api.getFile(META_PATH, baseSha)
+            val root = parseObject(file?.content)
+            draft.metaUpdates.forEach { (id, entry) ->
+                root.put(id, JSONObject().apply {
+                    put("title", entry.title)
+                    put("description", entry.description)
+                    put("tags", JSONArray(entry.tags))
+                    put("forSale", entry.forSale)
+                    if (entry.forSale && entry.price != null) {
+                        put("price", entry.price)
+                        put("currency", entry.currency)
+                    }
+                })
+            }
+            draft.removals.keys.forEach(root::remove)
+            mutations += RepoMutation(
+                META_PATH,
+                (root.toString(2) + "\n").toByteArray(Charsets.UTF_8),
+            )
+        }
+
+        if (draft.bandUpdates.isNotEmpty() || draft.removals.isNotEmpty()) {
+            val file = api.getFile(BAND_OVERRIDES_PATH, baseSha)
+            val root = parseObject(file?.content)
+            draft.bandUpdates.forEach { (id, hidden) ->
+                if (hidden.isEmpty()) {
+                    root.remove(id)
+                } else {
+                    root.put(id, JSONObject().put("hidden", JSONArray(hidden.sorted())))
+                }
+            }
+            draft.removals.keys.forEach(root::remove)
+            mutations += RepoMutation(
+                BAND_OVERRIDES_PATH,
+                (root.toString(2) + "\n").toByteArray(Charsets.UTF_8),
+            )
+        }
+
+        draft.siteContent?.let { content ->
+            val links = JSONArray()
+            content.menuLinks.forEach { link ->
+                links.put(
+                    JSONObject()
+                        .put("label", link.label)
+                        .put("href", link.href)
+                        .put("external", link.external),
+                )
+            }
+            val root = JSONObject()
+                .put("about", content.about)
+                .put("menuLinks", links)
+            mutations += RepoMutation(
+                SITE_PATH,
+                (root.toString(2) + "\n").toByteArray(Charsets.UTF_8),
+            )
+        }
+
+        draft.uploads.forEach { staged ->
+            val picked = uploadFiles[staged.id]
+                ?: error("Staged upload " + staged.filename + " could not be read.")
+            mutations += RepoMutation(
+                "public/assets/" + staged.filename,
+                picked.bytes,
+            )
+        }
+
+        draft.removals.values.forEach { removal ->
+            val sourceFilename = removal.sourceFilename
+                ?: fetchTheaterMeta(removal.id)?.sourceImage
+                ?: return@forEach
+            val publicPath = "public/assets/$sourceFilename"
+            val publicEntry = tree.firstOrNull { it.path == publicPath && it.type == "blob" }
+            if (publicEntry != null) {
+                mutations += RepoMutation(publicPath, null)
+                if (publicEntry.mode == "120000" || removal.sourceIsSymlink) {
+                    val rawPath = "public/assets/raw/$sourceFilename"
+                    if (tree.any { it.path == rawPath && it.type == "blob" }) {
+                        mutations += RepoMutation(rawPath, null)
+                    }
+                }
+            }
+        }
+
+        val commitSha = api.commitBatch(
+            mutations = mutations,
+            message = "admin android: submit " + draft.changeCount + " staged changes",
+            parentSha = baseSha,
+        )
+
+        val warnings = mutableListOf<String>()
+
+        if (draft.uploads.isNotEmpty()) {
+            runCatching {
+                dispatchBake(draft.uploads.map { it.id })
+            }.onFailure {
+                warnings += "The changes were committed, but the theater bake did not dispatch: " +
+                    (it.message ?: "unknown error")
+            }
+        }
+
+        if (draft.removals.isNotEmpty()) {
+            runCatching {
+                removalMutex.withLock {
+                    waitForNoActiveRemovalRun()
+                    api.dispatchWorkflow(
+                        "remove_painting.yml",
+                        mapOf("ids" to draft.removals.keys.joinToString(",")),
+                    )
+                }
+            }.onFailure {
+                warnings += "The changes were committed, but the removal workflow did not dispatch: " +
+                    (it.message ?: "unknown error")
+            }
+        }
+
+        return SubmitResult(commitSha, warnings)
+    }
+
     suspend fun uploadPainting(item: PickedFile): String {
         val safe = sanitizeIdAndFilename(item.displayName)
         api.putFile(
