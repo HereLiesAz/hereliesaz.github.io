@@ -111,54 +111,6 @@ class GitHubApi(private val tokenStore: TokenStore) {
         }
     }
 
-    suspend fun createRelease(
-        tag: String,
-        name: String,
-        notes: String,
-        prerelease: Boolean,
-    ): Pair<Long, String> {
-        val body = JSONObject()
-            .put("tag_name", tag)
-            .put("target_commitish", BRANCH)
-            .put("name", name)
-            .put("body", notes)
-            .put("draft", false)
-            .put("prerelease", prerelease)
-        val json = request("/repos/$OWNER/$REPO/releases", "POST", body)
-            ?: throw GitHubApiException("GitHub returned an empty release response.", 0)
-        return json.getLong("id") to json.optString("html_url")
-    }
-
-    suspend fun uploadReleaseAsset(
-        releaseId: Long,
-        filename: String,
-        bytes: ByteArray,
-    ) = withContext(Dispatchers.IO) {
-        val token = tokenStore.load()
-        if (token.isBlank()) throw GitHubApiException("No gh_token saved in the app.", 401)
-        val encodedName = encodeSegment(filename)
-        val conn = (URL("https://uploads.github.com/repos/$OWNER/$REPO/releases/$releaseId/assets?name=$encodedName").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            doOutput = true
-            setFixedLengthStreamingMode(bytes.size)
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("Authorization", "Bearer $token")
-            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
-            setRequestProperty("Content-Type", "application/vnd.android.package-archive")
-        }
-        try {
-            conn.outputStream.use { it.write(bytes) }
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val detail = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                throw GitHubApiException("Release asset upload failed: $code $detail", code)
-            }
-        } finally {
-            conn.disconnect()
-        }
-    }
     suspend fun publicBytes(url: String): ByteArray = withContext(Dispatchers.IO) {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000; readTimeout = 30_000; requestMethod = "GET"; setRequestProperty("Accept", "*/*")
