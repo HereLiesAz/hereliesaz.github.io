@@ -440,8 +440,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         )
         persistDraft(
             draft.copy(
-                metaUpdates = draft.metaUpdates - image.id,
-                bandUpdates = draft.bandUpdates - image.id,
                 removals = draft.removals + (image.id to removal),
             ),
         )
@@ -496,8 +494,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         ids.forEach { id ->
             val image = imagesById[id] ?: return@forEach
             next = next.copy(
-                metaUpdates = next.metaUpdates - id,
-                bandUpdates = next.bandUpdates - id,
                 removals = next.removals + (
                     id to StagedRemoval(
                         id = id,
