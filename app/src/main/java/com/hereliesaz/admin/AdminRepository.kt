@@ -121,7 +121,11 @@ class AdminRepository(private val api: GitHubApi) {
     }
 
     suspend fun listDedupRuns(): List<WorkflowRun> =
-        api.listWorkflowRuns("dedup_scan.yml", 30)
+        api.listWorkflowRuns(
+            workflowFile = "dedup_scan.yml",
+            perPage = 30,
+            event = "workflow_dispatch",
+        )
 
     suspend fun loadDedupReport(runId: Long): DedupReport? {
         val artifact = api.listRunArtifacts(runId)
