@@ -55,9 +55,17 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var dedupReport by mutableStateOf<DedupReport?>(null); private set
     var dedupBusy by mutableStateOf(false); private set
     var dedupMessage by mutableStateOf<String?>(null); private set
+    var dedupFailure by mutableStateOf(false); private set
     private var dedupDisplayedRunId: Long? = null
     private var dedupExpectedRequestId: String? = null
     private var dedupPollingJob: Job? = null
+    private var dedupPollStep = 0
+
+    var unpublishedChanges by mutableStateOf(false); private set
+    var publishBusy by mutableStateOf(false); private set
+    var publishMessage by mutableStateOf<String?>(null); private set
+    var publishFailure by mutableStateOf(false); private set
+    private var publishPollingJob: Job? = null
 
     var bandPreviews by mutableStateOf<List<BandPreview>>(emptyList()); private set
     var bandHidden by mutableStateOf<Set<Int>>(emptySet()); private set
@@ -72,7 +80,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         checkForUpdates(silent = true)
-        if (authenticated) refreshPaintings()
+        if (authenticated) {
+            refreshPaintings()
+            refreshUnpublishedState()
+        }
     }
 
     fun checkForUpdates(silent: Boolean = false) {
@@ -149,6 +160,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                         authenticated = true
                         authMessage = "Verified — write access confirmed."
                         refreshPaintings()
+                        refreshUnpublishedState()
                     }
                 }
             } catch (e: Exception) {
@@ -174,6 +186,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         dedupDisplayedRunId = null
         dedupExpectedRequestId = null
         dedupMessage = null
+        dedupFailure = false
+        publishPollingJob?.cancel()
+        publishPollingJob = null
+        unpublishedChanges = false
+        publishMessage = null
+        publishFailure = false
     }
 
     fun refreshPaintings() {
@@ -275,15 +293,24 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startDedupPolling() {
         if (dedupPollingJob?.isActive == true) return
+        dedupPollStep = 0
         dedupPollingJob = viewModelScope.launch {
             while (true) {
                 runCatching { pollDedupStatus() }
                     .onFailure { error ->
+                        dedupFailure = true
                         dedupMessage =
-                            "Could not refresh dedup status: " +
+                            "Dedup status check failed: " +
                                 (error.message ?: "unknown error")
                     }
-                delay(DEDUP_SCREEN_POLL_MS)
+
+                val delayMs = when (dedupPollStep) {
+                    0 -> 5_000L
+                    1 -> 10_000L
+                    else -> 20_000L
+                }
+                dedupPollStep = (dedupPollStep + 1).coerceAtMost(2)
+                delay(delayMs)
             }
         }
     }
@@ -299,6 +326,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val requestId = UUID.randomUUID().toString()
         dedupExpectedRequestId = requestId
         dedupBusy = true
+        dedupFailure = false
         dedupMessage =
             if (dedupReport == null) {
                 "Queueing dedup scan…"
@@ -309,10 +337,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 repo.dispatchDedupScan(requestId)
+                stopDedupPolling()
                 startDedupPolling()
             } catch (e: Exception) {
                 dedupExpectedRequestId = null
                 dedupBusy = false
+                dedupFailure = true
                 dedupMessage = e.message ?: "Could not queue dedup scan."
             }
         }
@@ -321,6 +351,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun pollDedupStatus() {
         val runs = repo.listDedupRuns()
         if (runs.isEmpty()) {
+            dedupFailure = false
             dedupBusy = dedupExpectedRequestId != null
             if (dedupReport == null) {
                 dedupMessage =
@@ -364,6 +395,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
         val latest = runs.first()
         if (latest.status != "completed") {
+            dedupFailure = false
             dedupBusy = true
             dedupMessage =
                 when (latest.status) {
@@ -398,18 +430,20 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 showDedupSnapshot(DedupReportSnapshot(latest.id, report))
             }
             dedupBusy = false
+            dedupFailure = false
             dedupMessage = dedupSummary(dedupReport)
             return
         }
 
         dedupBusy = false
+        dedupFailure = true
         val fallback = repo.latestAvailableDedupReport(runs.drop(1))
         if (dedupReport == null && fallback != null) {
             showDedupSnapshot(fallback)
         }
         dedupMessage =
-            "Newest dedup scan ended with " +
-                (latest.conclusion ?: "an unknown result") +
+            "Newest dedup scan failed: " +
+                (latest.conclusion ?: "unknown failure") +
                 if (dedupReport != null) {
                     ". Showing the most recent successful report."
                 } else {
@@ -731,10 +765,14 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 dedupReport = null
                 dedupDisplayedRunId = null
 
+                unpublishedChanges = true
                 submitMessage = if (result.dispatchWarnings.isEmpty()) {
-                    "Submitted " + toSubmit.changeCount + " changes in one commit."
+                    "Submitted " + toSubmit.changeCount +
+                        " changes in one staging commit. Nothing is live until Publish Site."
                 } else {
-                    "Submitted in one commit. " + result.dispatchWarnings.joinToString(" ")
+                    "Submitted in one staging commit. " +
+                        result.dispatchWarnings.joinToString(" ") +
+                        " Nothing is live until Publish Site."
                 }
 
                 siteContent = null
@@ -747,6 +785,90 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                         " Your staged changes are still saved on this device."
             } finally {
                 submitBusy = false
+            }
+        }
+    }
+
+    fun refreshUnpublishedState() {
+        if (!authenticated) return
+        viewModelScope.launch {
+            unpublishedChanges = runCatching { repo.hasUnpublishedChanges() }
+                .getOrDefault(unpublishedChanges)
+        }
+    }
+
+    fun publishSite() {
+        if (publishBusy) return
+        if (!draft.isEmpty) {
+            publishFailure = true
+            publishMessage = "Submit the local staged changes first; Publish Site only publishes submitted changes."
+            return
+        }
+
+        publishBusy = true
+        publishFailure = false
+        val requestId = UUID.randomUUID().toString()
+        publishMessage = "Queueing publication…"
+
+        viewModelScope.launch {
+            try {
+                repo.publishSite(requestId)
+            } catch (e: Exception) {
+                publishBusy = false
+                publishFailure = true
+                publishMessage = "Could not queue publication: " + (e.message ?: "unknown error")
+                return@launch
+            }
+
+            publishPollingJob?.cancel()
+            publishPollingJob = viewModelScope.launch poll@{
+                var step = 0
+                while (true) {
+                    val runs = runCatching { repo.listPublishRuns() }
+                        .getOrElse { error ->
+                            publishBusy = false
+                            publishFailure = true
+                            publishMessage =
+                                "Could not check publication status: " +
+                                    (error.message ?: "unknown error")
+                            return@poll
+                        }
+
+                    val run = runs.firstOrNull { it.displayTitle.contains(requestId) }
+                    if (run == null) {
+                        publishMessage = "Publication is queued; waiting for GitHub Actions to start it…"
+                    } else if (run.status != "completed") {
+                        publishMessage =
+                            when (run.status) {
+                                "queued" -> "Publication is queued."
+                                "in_progress" -> "Publishing staged changes…"
+                                else -> "Publication is " + run.status + "."
+                            }
+                    } else if (run.conclusion == "success") {
+                        publishBusy = false
+                        publishFailure = false
+                        publishMessage = "Publication completed successfully."
+                        refreshUnpublishedState()
+                        refreshPaintings()
+                        return@poll
+                    } else {
+                        publishBusy = false
+                        publishFailure = true
+                        publishMessage =
+                            "Publication failed: " +
+                                (run.conclusion ?: "unknown failure") +
+                                ". The submitted staging changes were kept and can be published again."
+                        return@poll
+                    }
+
+                    val delayMs = when (step) {
+                        0 -> 5_000L
+                        1 -> 10_000L
+                        else -> 20_000L
+                    }
+                    step = (step + 1).coerceAtMost(2)
+                    delay(delayMs)
+                }
             }
         }
     }
@@ -771,10 +893,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     fun dedupImageUrl(image: DedupImage): String = repo.dedupImageUrl(image)
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }
-
-    companion object {
-        private const val DEDUP_SCREEN_POLL_MS = 4_000L
-    }
 
     private fun persistDraft(next: AdminDraft) {
         draft = next

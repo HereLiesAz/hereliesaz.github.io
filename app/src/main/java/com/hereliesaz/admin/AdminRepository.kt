@@ -20,8 +20,9 @@ class AdminRepository(private val api: GitHubApi) {
     }
 
     suspend fun listSourcePaintings(): List<ArtworkItem> {
+        api.ensureBranch(ADMIN_BRANCH)
         val prefix = "public/assets/"
-        return api.listRepoTree()
+        return api.listRepoTree(ADMIN_BRANCH)
             .asSequence()
             .filter { it.type == "blob" && it.path.startsWith(prefix) }
             .mapNotNull { entry ->
@@ -40,12 +41,14 @@ class AdminRepository(private val api: GitHubApi) {
     }
 
     suspend fun loadMeta(): Map<String, PaintingMeta> {
-        val file = api.getFile(META_PATH) ?: return emptyMap()
+        api.ensureBranch(ADMIN_BRANCH)
+        val file = api.getFile(META_PATH, ADMIN_BRANCH) ?: return emptyMap()
         return parseMeta(file.content)
     }
 
     suspend fun loadBandOverrides(): Map<String, Set<Int>> {
-        val file = api.getFile(BAND_OVERRIDES_PATH) ?: return emptyMap()
+        api.ensureBranch(ADMIN_BRANCH)
+        val file = api.getFile(BAND_OVERRIDES_PATH, ADMIN_BRANCH) ?: return emptyMap()
         val root = parseObject(file.content)
         return root.keys().asSequence().associateWith { id ->
             val hidden = root.optJSONObject(id)?.optJSONArray("hidden") ?: JSONArray()
@@ -56,7 +59,8 @@ class AdminRepository(private val api: GitHubApi) {
     }
 
     suspend fun loadSiteContent(): SiteContent {
-        val file = api.getFile(SITE_PATH) ?: return SiteContent()
+        api.ensureBranch(ADMIN_BRANCH)
+        val file = api.getFile(SITE_PATH, ADMIN_BRANCH) ?: return SiteContent()
         return runCatching {
             val root = JSONObject(file.content)
             val a = root.optJSONArray("menuLinks") ?: JSONArray()
@@ -98,7 +102,7 @@ class AdminRepository(private val api: GitHubApi) {
         val filename = item.sourceFilename ?: return paintingUrl(item.id)
         val relative =
             if (item.sourceIsSymlink) "public/assets/raw/$filename" else "public/assets/$filename"
-        return "$RAW_MAIN_BASE/" +
+        return "$RAW_ADMIN_BASE/" +
             relative.split('/').joinToString("/") { GitHubApi.encodeSegment(it) }
     }
 
@@ -112,12 +116,17 @@ class AdminRepository(private val api: GitHubApi) {
             } else {
                 "public/assets/" + image.filename
             }
-        return "$RAW_MAIN_BASE/" +
+        return "$RAW_ADMIN_BASE/" +
             relative.split('/').joinToString("/") { GitHubApi.encodeSegment(it) }
     }
 
     suspend fun dispatchDedupScan(requestId: String) {
-        api.dispatchWorkflow("dedup_scan.yml", mapOf("request_id" to requestId))
+        api.ensureBranch(ADMIN_BRANCH)
+        api.dispatchWorkflow(
+            "dedup_scan.yml",
+            mapOf("request_id" to requestId),
+            ref = ADMIN_BRANCH,
+        )
     }
 
     suspend fun listDedupRuns(): List<WorkflowRun> =
@@ -125,6 +134,15 @@ class AdminRepository(private val api: GitHubApi) {
             workflowFile = "dedup_scan.yml",
             perPage = 30,
             event = "workflow_dispatch",
+            branch = ADMIN_BRANCH,
+        )
+
+    suspend fun listPublishRuns(): List<WorkflowRun> =
+        api.listWorkflowRuns(
+            workflowFile = "publish_admin_staging.yml",
+            perPage = 20,
+            event = "workflow_dispatch",
+            branch = GitHubApi.BRANCH,
         )
 
     suspend fun loadDedupReport(runId: Long): DedupReport? {
@@ -227,7 +245,7 @@ class AdminRepository(private val api: GitHubApi) {
     ): SubmitResult {
         require(!draft.isEmpty) { "There are no staged changes to submit." }
 
-        val baseSha = api.getBranchHeadSha()
+        val baseSha = api.ensureBranch(ADMIN_BRANCH)
         val tree = api.listRepoTree(baseSha)
         val mutations = mutableListOf<RepoMutation>()
 
@@ -319,38 +337,38 @@ class AdminRepository(private val api: GitHubApi) {
             mutations = mutations,
             message = "admin android: submit " + draft.changeCount + " staged changes",
             parentSha = baseSha,
+            branch = ADMIN_BRANCH,
         )
 
-        val warnings = mutableListOf<String>()
-
-        if (draft.uploads.isNotEmpty()) {
-            runCatching {
-                dispatchBake(draft.uploads.map { it.id })
-            }.onFailure {
-                warnings += "The changes were committed, but the theater bake did not dispatch: " +
-                    (it.message ?: "unknown error")
-            }
-        }
-
-        if (draft.removals.isNotEmpty()) {
-            runCatching {
-                api.dispatchWorkflow(
-                    "remove_painting.yml",
-                    mapOf("ids" to draft.removals.keys.joinToString(",")),
-                )
-            }.onFailure {
-                warnings += "The changes were committed, but the removal workflow did not dispatch: " +
-                    (it.message ?: "unknown error")
-            }
-        }
-
-        return SubmitResult(commitSha, warnings)
+        return SubmitResult(commitSha)
     }
 
-    suspend fun dispatchBake(ids: List<String>) {
-        if (ids.isNotEmpty()) {
-            api.dispatchWorkflow("theater_bake.yml", mapOf("ids" to ids.joinToString(",")))
-        }
+    suspend fun publishSite(requestId: String) {
+        api.ensureBranch(ADMIN_BRANCH)
+        api.dispatchWorkflow(
+            "publish_admin_staging.yml",
+            mapOf("request_id" to requestId),
+            ref = GitHubApi.BRANCH,
+        )
+    }
+
+    suspend fun hasUnpublishedChanges(): Boolean {
+        api.ensureBranch(ADMIN_BRANCH)
+        val mainTree = api.listRepoTree(GitHubApi.BRANCH)
+        val stagingTree = api.listRepoTree(ADMIN_BRANCH)
+        fun managed(tree: List<RepoTreeEntry>): Map<String, String> =
+            tree.asSequence()
+                .filter { entry ->
+                    entry.type == "blob" &&
+                        (
+                            entry.path.startsWith("public/assets/") ||
+                                entry.path == META_PATH ||
+                                entry.path == SITE_PATH ||
+                                entry.path == BAND_OVERRIDES_PATH
+                            )
+                }
+                .associate { it.path to it.sha }
+        return managed(mainTree) != managed(stagingTree)
     }
 
     private fun extractJsonFromZip(bytes: ByteArray): String? {
@@ -447,8 +465,9 @@ class AdminRepository(private val api: GitHubApi) {
 
     companion object {
         const val ART_DATA_BRANCH = "art-data"
-        const val RAW_MAIN_BASE =
-            "https://raw.githubusercontent.com/HereLiesAz/hereliesaz.github.io/main"
+        const val ADMIN_BRANCH = "admin-staging"
+        const val RAW_ADMIN_BASE =
+            "https://raw.githubusercontent.com/HereLiesAz/hereliesaz.github.io/admin-staging"
         const val RAW_ART_DATA_BASE =
             "https://raw.githubusercontent.com/HereLiesAz/hereliesaz.github.io/art-data"
         const val META_PATH = "public/meta.json"

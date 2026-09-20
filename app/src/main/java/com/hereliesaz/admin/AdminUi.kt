@@ -151,8 +151,35 @@ private val Good = Color(0xFFB0E0B0)
                     }
                 }
 
+                if (vm.unpublishedChanges || vm.publishBusy) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            if (vm.publishBusy) "publication in progress" else "submitted changes are not live",
+                            modifier = Modifier.weight(1f),
+                            color = if (vm.publishFailure) DangerInk else Ink.copy(alpha = 0.75f),
+                        )
+                        Button(
+                            onClick = vm::publishSite,
+                            enabled = !vm.publishBusy && vm.pendingCount == 0,
+                        ) {
+                            Text(if (vm.publishBusy) "publishing…" else "publish site")
+                        }
+                    }
+                }
+
                 vm.submitMessage?.let {
                     StatusText(it, Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+                }
+                vm.publishMessage?.let {
+                    Text(
+                        it,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        color = if (vm.publishFailure) DangerInk else Ink.copy(alpha = 0.78f),
+                    )
                 }
                 HorizontalDivider(color = Ink.copy(alpha = 0.18f))
             }
@@ -551,7 +578,13 @@ private enum class DedupFilter {
             color = Ink.copy(alpha = 0.65f),
         )
 
-        vm.dedupMessage?.let { StatusText(it) }
+        vm.dedupMessage?.let {
+            if (vm.dedupFailure) {
+                Text(it, color = DangerInk)
+            } else {
+                StatusText(it)
+            }
+        }
 
         if (report == null) {
             Spacer(Modifier.height(8.dp))
@@ -801,6 +834,20 @@ private fun formatBytes(bytes: Long): String =
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("Site", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "Submitted changes are held off production until Publish Site is pressed. " +
+                "Photo processing and deployment happen as one explicit publication.",
+            color = Ink.copy(alpha = 0.65f),
+        )
+        OutlinedButton(
+            onClick = vm::publishSite,
+            enabled = !vm.publishBusy && vm.pendingCount == 0 && vm.unpublishedChanges,
+        ) {
+            Text(if (vm.publishBusy) "publishing…" else "publish site")
+        }
+        vm.publishMessage?.let {
+            Text(it, color = if (vm.publishFailure) DangerInk else Ink.copy(alpha = 0.78f))
+        }
         OutlinedTextField(
             content.about,
             { vm.setSite(content.copy(about = it)) },
