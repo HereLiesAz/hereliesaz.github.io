@@ -3,8 +3,38 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val releaseVersionName = providers.gradleProperty("releaseVersionName").orElse("1.0.0")
-val releaseVersionCode = providers.gradleProperty("releaseVersionCode").orElse("1").map(String::toInt)
+val canonicalVersionProperties = java.util.Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+fun canonicalVersionPart(name: String, range: IntRange): Int {
+    val value = canonicalVersionProperties.getProperty(name)?.toIntOrNull()
+        ?: error("version.properties is missing a valid $name")
+    require(value in range) { "$name=$value is outside Android versionCode bounds $range" }
+    return value
+}
+
+val canonicalMajor = canonicalVersionPart("versionMajor", 0..20)
+val canonicalMinor = canonicalVersionPart("versionMinor", 0..99)
+val canonicalPatch = canonicalVersionPart("versionPatch", 0..99)
+val canonicalBuild = canonicalVersionPart("versionBuild", 0..9999)
+val canonicalVersionName = "$canonicalMajor.$canonicalMinor.$canonicalPatch.$canonicalBuild"
+val canonicalVersionCodeLong =
+    canonicalMajor * 100_000_000L +
+        canonicalMinor * 1_000_000L +
+        canonicalPatch * 10_000L +
+        canonicalBuild
+require(canonicalVersionCodeLong <= 2_100_000_000L) {
+    "Canonical version $canonicalVersionName exceeds Android's versionCode limit"
+}
+val canonicalVersionCode = canonicalVersionCodeLong.toInt()
+
+val releaseVersionName =
+    providers.gradleProperty("releaseVersionName").orElse(canonicalVersionName)
+val releaseVersionCode =
+    providers.gradleProperty("releaseVersionCode")
+        .orElse(canonicalVersionCode.toString())
+        .map(String::toInt)
+
 val signingStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 val signingStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
 val signingKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
