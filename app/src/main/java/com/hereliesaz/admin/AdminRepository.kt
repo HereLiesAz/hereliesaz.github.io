@@ -19,6 +19,27 @@ class AdminRepository(private val api: GitHubApi) {
         val arr = JSONArray(api.publicText("$PUBLIC_BASE/data/theater/_manifest.json"))
         return List(arr.length()) { arr.getString(it) }
     }
+
+    suspend fun listSourcePaintings(): List<ArtworkItem> {
+        val prefix = "public/assets/"
+        return api.listRepoTree()
+            .asSequence()
+            .filter { it.type == "blob" && it.path.startsWith(prefix) }
+            .mapNotNull { entry ->
+                val relative = entry.path.removePrefix(prefix)
+                if ('/' in relative || !isImageFilename(relative)) return@mapNotNull null
+                val dot = relative.lastIndexOf('.')
+                val id = if (dot > 0) relative.substring(0, dot) else relative
+                ArtworkItem(
+                    id = id,
+                    sourceFilename = relative,
+                    sourceIsSymlink = entry.mode == "120000",
+                )
+            }
+            .sortedBy { it.id.lowercase() }
+            .toList()
+    }
+
     suspend fun loadMeta(): Map<String, PaintingMeta> {
         val file = api.getFile(META_PATH) ?: return emptyMap()
         return parseMeta(file.content)
@@ -82,8 +103,19 @@ class AdminRepository(private val api: GitHubApi) {
             List(centers.length()) { centers.getDouble(it) },
         )
     }
-    fun paintingUrl(id: String): String = "$PUBLIC_BASE/data/theater/" + GitHubApi.encodeSegment(id) + ".painting.webp"
-    fun depthUrl(depthFile: String): String = "$PUBLIC_BASE/data/theater/" + GitHubApi.encodeSegment(depthFile)
+
+    fun paintingUrl(id: String): String =
+        "$PUBLIC_BASE/data/theater/" + GitHubApi.encodeSegment(id) + ".painting.webp"
+
+    fun artworkUrl(item: ArtworkItem): String {
+        if (item.baked) return paintingUrl(item.id)
+        val filename = item.sourceFilename ?: return paintingUrl(item.id)
+        val relative = if (item.sourceIsSymlink) "assets/raw/$filename" else "assets/$filename"
+        return "$PUBLIC_BASE/" + relative.split('/').joinToString("/") { GitHubApi.encodeSegment(it) }
+    }
+
+    fun depthUrl(depthFile: String): String =
+        "$PUBLIC_BASE/data/theater/" + GitHubApi.encodeSegment(depthFile)
 
     suspend fun loadBitmap(url: String, maxDimension: Int = 1024): Bitmap? = withContext(Dispatchers.Default) {
         val bytes = api.publicBytes(url)
@@ -130,17 +162,44 @@ class AdminRepository(private val api: GitHubApi) {
     suspend fun dispatchBake(ids: List<String>) {
         if (ids.isNotEmpty()) api.dispatchWorkflow("theater_bake.yml", mapOf("ids" to ids.joinToString(",")))
     }
-    suspend fun removePainting(id: String) {
-        val errors = mutableListOf<String>(); var dispatched = false
+
+    suspend fun removePainting(item: ArtworkItem) {
+        val id = item.id
+        val errors = mutableListOf<String>()
+        var dispatched = false
+
         try {
-            val src = fetchTheaterMeta(id)?.sourceImage
-            if (!src.isNullOrBlank()) {
-                val path = "public/assets/$src"
-                api.getFile(path)?.let { api.deleteFile(path, "admin android: remove source photo for $id [skip-grind]", it.sha) }
+            val sourceFilename = item.sourceFilename ?: fetchTheaterMeta(id)?.sourceImage
+            if (!sourceFilename.isNullOrBlank()) {
+                val tree = api.listRepoTree()
+                val publicPath = "public/assets/$sourceFilename"
+                val publicEntry = tree.firstOrNull { it.path == publicPath && it.type == "blob" }
+                if (publicEntry != null) {
+                    api.deleteFile(
+                        publicPath,
+                        "admin android: remove source photo for $id [skip-grind]",
+                        publicEntry.sha,
+                    )
+                    if (publicEntry.mode == "120000") {
+                        val rawPath = "public/assets/raw/$sourceFilename"
+                        val rawEntry = tree.firstOrNull { it.path == rawPath && it.type == "blob" }
+                        if (rawEntry != null) {
+                            api.deleteFile(
+                                rawPath,
+                                "admin android: remove raw source photo for $id [skip-grind]",
+                                rawEntry.sha,
+                            )
+                        }
+                    }
+                }
             }
-        } catch (e: Exception) { errors += "source photo: " + e.message }
+        } catch (e: Exception) {
+            errors += "source photo: " + e.message
+        }
+
         try { saveMetaEntry(id, null) } catch (e: Exception) { errors += "metadata: " + e.message }
         try { saveBandOverrideEntry(id, null) } catch (e: Exception) { errors += "band overrides: " + e.message }
+
         try {
             removalMutex.withLock {
                 waitForNoActiveRemovalRun()
@@ -149,12 +208,20 @@ class AdminRepository(private val api: GitHubApi) {
                 waitForNoActiveRemovalRun()
             }
             dispatched = true
-        } catch (e: Exception) { errors += "removal workflow dispatch: " + e.message }
+        } catch (e: Exception) {
+            errors += "removal workflow dispatch: " + e.message
+        }
+
         if (errors.isNotEmpty()) {
-            val prefix = if (dispatched) "Removal dispatched, but cleanup had errors: " else "Cleanup ran, but the removal workflow never dispatched: "
+            val prefix = if (dispatched) {
+                "Removal dispatched, but cleanup had errors: "
+            } else {
+                "Cleanup ran, but the removal workflow never dispatched: "
+            }
             throw RemovalException(prefix + errors.joinToString("; "), dispatched)
         }
     }
+
     private suspend fun waitForNoActiveRemovalRun() {
         val deadline = System.currentTimeMillis() + REMOVAL_POLL_MAX_MS
         while (true) {
@@ -163,6 +230,13 @@ class AdminRepository(private val api: GitHubApi) {
             delay(REMOVAL_POLL_MS)
         }
     }
+
+    private fun isImageFilename(filename: String): Boolean {
+        val dot = filename.lastIndexOf('.')
+        if (dot < 0 || dot == filename.lastIndex) return false
+        return filename.substring(dot + 1).lowercase() in IMAGE_EXTENSIONS
+    }
+
     private fun parseMeta(text: String): Map<String, PaintingMeta> {
         val root = parseObject(text)
         return root.keys().asSequence().associateWith { id ->
@@ -171,11 +245,13 @@ class AdminRepository(private val api: GitHubApi) {
         }
     }
     private fun parseObject(text: String?): JSONObject = if (text.isNullOrBlank()) JSONObject() else runCatching { JSONObject(text) }.getOrDefault(JSONObject())
+
     companion object {
         const val PUBLIC_BASE = "https://hereliesaz.com"
         const val META_PATH = "public/meta.json"
         const val SITE_PATH = "public/site-content.json"
         const val BAND_OVERRIDES_PATH = "public/band-overrides.json"
+        private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif")
         private const val REMOVAL_POLL_MS = 5_000L
         private const val REMOVAL_POLL_MAX_MS = 20 * 60 * 1_000L
     }
