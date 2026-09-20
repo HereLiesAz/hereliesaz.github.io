@@ -653,7 +653,7 @@ private enum class DedupFilter {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(kindLabel, style = MaterialTheme.typography.titleMedium)
-            Text(certainty, color = Good)
+            Text("certainty " + certainty, color = Good)
         }
 
         if (pair.reasons.isNotEmpty()) {
