@@ -21,6 +21,30 @@ class GitHubApi(private val tokenStore: TokenStore) {
         }
         return TokenVerification(repo.optJSONObject("owner")?.optString("login").orEmpty(), canWrite, actionsOk)
     }
+
+    suspend fun listRepoTree(ref: String = BRANCH): List<RepoTreeEntry> {
+        val json = request("/repos/$OWNER/$REPO/git/trees/" + encodeSegment(ref) + "?recursive=1")
+            ?: error("Empty repository tree response")
+        if (json.optBoolean("truncated", false)) {
+            error("GitHub returned a truncated repository tree; refusing to hide part of the photo library.")
+        }
+        val tree = json.optJSONArray("tree") ?: JSONArray()
+        return buildList {
+            for (i in 0 until tree.length()) {
+                val entry = tree.getJSONObject(i)
+                add(
+                    RepoTreeEntry(
+                        path = entry.optString("path"),
+                        mode = entry.optString("mode"),
+                        type = entry.optString("type"),
+                        sha = entry.optString("sha"),
+                        size = if (entry.has("size")) entry.optLong("size") else null,
+                    ),
+                )
+            }
+        }
+    }
+
     suspend fun getFile(path: String): RepoFile? {
         return try {
             val json = request("/repos/$OWNER/$REPO/contents/" + encodePath(path) + "?ref=$BRANCH") ?: return null
