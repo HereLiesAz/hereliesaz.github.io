@@ -4,9 +4,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.util.zip.ZipInputStream
 import kotlin.math.max
 
 class AdminRepository(private val api: GitHubApi) {
@@ -102,6 +105,72 @@ class AdminRepository(private val api: GitHubApi) {
 
     fun depthUrl(depthFile: String): String =
         "$RAW_ART_DATA_BASE/theater/" + GitHubApi.encodeSegment(depthFile)
+
+    fun dedupImageUrl(image: DedupImage): String {
+        val relative =
+            if (image.sourceIsSymlink) {
+                "public/assets/raw/" + image.filename
+            } else {
+                "public/assets/" + image.filename
+            }
+        return "$RAW_MAIN_BASE/" +
+            relative.split('/').joinToString("/") { GitHubApi.encodeSegment(it) }
+    }
+
+    suspend fun runDedupScan(
+        requestId: String,
+        onStatus: (String) -> Unit = {},
+    ): DedupReport {
+        onStatus("Starting dedup scan…")
+        api.dispatchWorkflow("dedup_scan.yml", mapOf("request_id" to requestId))
+
+        val deadline = System.currentTimeMillis() + DEDUP_SCAN_TIMEOUT_MS
+        var run: WorkflowRun? = null
+
+        while (System.currentTimeMillis() < deadline) {
+            delay(DEDUP_POLL_MS)
+            val candidate = api.listWorkflowRuns("dedup_scan.yml", 20)
+                .firstOrNull { it.displayTitle.contains(requestId) }
+            if (candidate == null) {
+                onStatus("Waiting for the scan runner…")
+                continue
+            }
+
+            run = candidate
+            if (candidate.status == "completed") break
+            onStatus(
+                when (candidate.status) {
+                    "queued" -> "Dedup scan queued…"
+                    "in_progress" -> "Scanning the photo library…"
+                    else -> "Dedup scan " + candidate.status + "…"
+                },
+            )
+        }
+
+        val finished = run ?: error("The dedup scan never appeared in GitHub Actions.")
+        if (finished.status != "completed") {
+            error("The dedup scan timed out.")
+        }
+        if (finished.conclusion != "success") {
+            error("The dedup scan finished with " + (finished.conclusion ?: "an unknown result") + ".")
+        }
+
+        onStatus("Downloading dedup report…")
+        val artifactDeadline = System.currentTimeMillis() + DEDUP_ARTIFACT_TIMEOUT_MS
+        var artifact: WorkflowArtifact? = null
+        while (System.currentTimeMillis() < artifactDeadline) {
+            artifact = api.listRunArtifacts(finished.id)
+                .firstOrNull { it.name == "dedup-report-$requestId" && !it.expired }
+            if (artifact != null) break
+            delay(2_000L)
+        }
+
+        val readyArtifact = artifact ?: error("The dedup scan finished, but its report artifact is missing.")
+        val zip = api.downloadArtifactZip(readyArtifact.id)
+        val json = extractJsonFromZip(zip)
+            ?: error("The dedup report artifact did not contain JSON.")
+        return parseDedupReport(json)
+    }
 
     suspend fun loadBitmap(url: String, maxDimension: Int = 1024): Bitmap? =
         withContext(Dispatchers.Default) {
@@ -309,6 +378,73 @@ class AdminRepository(private val api: GitHubApi) {
         }
     }
 
+    private fun extractJsonFromZip(bytes: ByteArray): String? {
+        var result: String? = null
+        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                if (!entry.isDirectory && entry.name.endsWith(".json", ignoreCase = true)) {
+                    result = zip.bufferedReader(Charsets.UTF_8).readText()
+                    break
+                }
+            }
+        }
+        return result
+    }
+
+    private fun parseDedupReport(text: String): DedupReport {
+        val root = JSONObject(text)
+        val pairsArray = root.optJSONArray("pairs") ?: JSONArray()
+
+        fun parseImage(obj: JSONObject): DedupImage =
+            DedupImage(
+                id = obj.optString("id"),
+                filename = obj.optString("filename"),
+                sourceIsSymlink = obj.optBoolean("sourceIsSymlink", false),
+                bytes = obj.optLong("bytes", 0L),
+                width = if (obj.isNull("width")) null else obj.optInt("width"),
+                height = if (obj.isNull("height")) null else obj.optInt("height"),
+            )
+
+        val pairs = buildList {
+            for (i in 0 until pairsArray.length()) {
+                val item = pairsArray.getJSONObject(i)
+                val reasonsArray = item.optJSONArray("reasons") ?: JSONArray()
+                val reasons = List(reasonsArray.length()) { index ->
+                    reasonsArray.optString(index)
+                }
+                val kind = when (item.optString("kind")) {
+                    "exact" -> DedupKind.Exact
+                    "compressed" -> DedupKind.Compressed
+                    else -> DedupKind.Similar
+                }
+                add(
+                    DedupPair(
+                        kind = kind,
+                        certainty = item.optDouble("certainty", 0.0),
+                        left = parseImage(item.getJSONObject("left")),
+                        right = parseImage(item.getJSONObject("right")),
+                        reasons = reasons,
+                        suggestedKeepId = item.optString("suggestedKeepId")
+                            .takeIf { it.isNotBlank() && it != "null" },
+                        suggestedRemoveId = item.optString("suggestedRemoveId")
+                            .takeIf { it.isNotBlank() && it != "null" },
+                    ),
+                )
+            }
+        }
+
+        return DedupReport(
+            imageCount = root.optInt("imageCount", 0),
+            pairCount = root.optInt("pairCount", pairs.size),
+            exactCount = root.optInt("exactCount", 0),
+            compressedCount = root.optInt("compressedCount", 0),
+            similarCount = root.optInt("similarCount", 0),
+            pairs = pairs,
+            scanErrorCount = root.optJSONArray("scanErrors")?.length() ?: 0,
+        )
+    }
+
     private fun isImageFilename(filename: String): Boolean {
         val dot = filename.lastIndexOf('.')
         if (dot < 0 || dot == filename.lastIndex) return false
@@ -347,5 +483,8 @@ class AdminRepository(private val api: GitHubApi) {
             setOf("jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif")
         private const val REMOVAL_POLL_MS = 5_000L
         private const val REMOVAL_POLL_MAX_MS = 20 * 60 * 1_000L
+        private const val DEDUP_POLL_MS = 3_000L
+        private const val DEDUP_SCAN_TIMEOUT_MS = 30 * 60 * 1_000L
+        private const val DEDUP_ARTIFACT_TIMEOUT_MS = 60_000L
     }
 }
