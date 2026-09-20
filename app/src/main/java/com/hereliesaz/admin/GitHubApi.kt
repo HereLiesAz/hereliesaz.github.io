@@ -206,6 +206,7 @@ class GitHubApi(private val tokenStore: TokenStore) {
         workflowFile: String,
         perPage: Int = 5,
         event: String? = null,
+        branch: String? = null,
     ): List<WorkflowRun> {
         val query = buildString {
             append("?per_page=")
@@ -213,6 +214,10 @@ class GitHubApi(private val tokenStore: TokenStore) {
             if (!event.isNullOrBlank()) {
                 append("&event=")
                 append(encodeSegment(event))
+            }
+            if (!branch.isNullOrBlank()) {
+                append("&branch=")
+                append(encodeSegment(branch))
             }
         }
         val json = request(
