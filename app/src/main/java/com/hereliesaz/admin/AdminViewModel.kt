@@ -11,9 +11,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
-import java.util.UUID
 
-enum class AdminTab { Paintings, Add, Site, Release, Settings }
+enum class AdminTab { Art, Add, Settings }
 
 class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val tokenStore = TokenStore(application)
@@ -25,7 +24,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var tokenInput by mutableStateOf(tokenStore.load())
     var authMessage by mutableStateOf<String?>(null); private set
     var busy by mutableStateOf(false); private set
-    var tab by mutableStateOf(AdminTab.Paintings)
+    var tab by mutableStateOf(AdminTab.Art)
     var paintings by mutableStateOf<List<String>?>(null); private set
     var meta by mutableStateOf<Map<String, PaintingMeta>>(emptyMap()); private set
     var filter by mutableStateOf("")
@@ -35,20 +34,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var removalDispatched by mutableStateOf(false); private set
     var chosenUris by mutableStateOf<List<Uri>>(emptyList()); private set
     var addMessage by mutableStateOf<String?>(null); private set
-    var siteContent by mutableStateOf<SiteContent?>(null); private set
-    var siteMessage by mutableStateOf<String?>(null); private set
     var bandPreviews by mutableStateOf<List<BandPreview>>(emptyList()); private set
     var bandHidden by mutableStateOf<Set<Int>>(emptySet()); private set
     var bandMessage by mutableStateOf<String?>(null); private set
     var bandLoading by mutableStateOf(false); private set
     var theaterMeta by mutableStateOf<TheaterMeta?>(null); private set
-
-    var releaseVersion by mutableStateOf("")
-    var releaseNotes by mutableStateOf("")
-    var releasePrerelease by mutableStateOf(false)
-    var releaseBusy by mutableStateOf(false); private set
-    var releaseMessage by mutableStateOf<String?>(null); private set
-    var releaseUrl by mutableStateOf<String?>(null); private set
 
     var availableUpdate by mutableStateOf<UpdateInfo?>(null); private set
     var updateBusy by mutableStateOf(false); private set
@@ -207,20 +197,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             } finally { busy = false }
         }
     }
-    fun loadSite() {
-        if (siteContent != null) return
-        viewModelScope.launch { siteContent = runCatching { repo.loadSiteContent() }.getOrDefault(SiteContent()) }
-    }
-    fun setSite(x: SiteContent) { siteContent = x; if (siteMessage?.startsWith("Saved") == true) siteMessage = null }
-    fun saveSite() {
-        val x = siteContent ?: return
-        busy = true; siteMessage = "Saving…"
-        viewModelScope.launch {
-            try { repo.saveSiteContent(x); siteMessage = "Saved — live after the next deploy." }
-            catch (e: Exception) { siteMessage = e.message }
-            finally { busy = false }
-        }
-    }
     fun loadBands() {
         val id = selectedId ?: return
         if (bandLoading || bandPreviews.isNotEmpty()) return
@@ -249,42 +225,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             finally { busy = false }
         }
     }
-    fun publishRelease() {
-        val version = releaseVersion.trim()
-        if (version.isBlank()) {
-            releaseMessage = "Enter a release version."
-            return
-        }
-        if (!tokenStore.hasToken()) {
-            releaseMessage = "Save and verify gh_token in this app before starting a release."
-            return
-        }
-
-        releaseBusy = true
-        releaseUrl = null
-        releaseMessage = "Dispatching centralized GitHub Release workflow…"
-
-        viewModelScope.launch {
-            try {
-                api.dispatchWorkflow(
-                    "android-release-apk.yml",
-                    mapOf(
-                        "version" to version,
-                        "request_id" to UUID.randomUUID().toString(),
-                        "notes" to releaseNotes.trim(),
-                        "prerelease" to releasePrerelease.toString(),
-                    ),
-                )
-                releaseUrl = "https://github.com/HereLiesAz/hereliesaz.github.io/releases"
-                releaseMessage = "Release dispatched to the centralized workflow. It will appear in GitHub Releases after the central build completes."
-            } catch (e: Exception) {
-                releaseMessage = e.message ?: "Release dispatch failed."
-            } finally {
-                releaseBusy = false
-            }
-        }
-    }
-
     suspend fun bitmap(url: String, maxDimension: Int = 1024): Bitmap? = repo.loadBitmap(url, maxDimension)
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }

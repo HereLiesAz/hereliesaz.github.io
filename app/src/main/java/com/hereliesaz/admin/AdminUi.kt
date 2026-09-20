@@ -89,8 +89,8 @@ private val Good = Color(0xFFB0E0B0)
             Column(Modifier.background(Void)) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     AdminTab.entries.forEach { item ->
-                        if (vm.tab == item) Button({ vm.tab = item; if (item == AdminTab.Site) vm.loadSite() }) { Text(item.name.lowercase()) }
-                        else OutlinedButton({ vm.tab = item; if (item == AdminTab.Site) vm.loadSite() }) { Text(item.name.lowercase()) }
+                        if (vm.tab == item) Button({ vm.tab = item }) { Text(if (item == AdminTab.Add) "add art" else item.name.lowercase()) }
+                        else OutlinedButton({ vm.tab = item }) { Text(if (item == AdminTab.Add) "add art" else item.name.lowercase()) }
                     }
                 }
                 HorizontalDivider(color = Ink.copy(alpha = 0.18f))
@@ -99,10 +99,8 @@ private val Good = Color(0xFFB0E0B0)
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp)) {
             when (vm.tab) {
-                AdminTab.Paintings -> PaintingsScreen(vm)
+                AdminTab.Art -> PaintingsScreen(vm)
                 AdminTab.Add -> AddPaintingScreen(vm)
-                AdminTab.Site -> SiteContentScreen(vm)
-                AdminTab.Release -> ReleaseScreen(vm)
                 AdminTab.Settings -> TokenScreen(vm)
             }
         }
@@ -140,10 +138,10 @@ private val Good = Color(0xFFB0E0B0)
     vm.selectedId?.let { PaintingEditorScreen(vm, it); return }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Paintings (" + (vm.paintings?.size?.toString() ?: "…") + ")", style = MaterialTheme.typography.titleLarge)
+            Text("Art (" + (vm.paintings?.size?.toString() ?: "…") + ")", style = MaterialTheme.typography.titleLarge)
             OutlinedButton(vm::refreshPaintings, enabled = vm.paintings != null) { Text(if (vm.paintings == null) "refreshing…" else "refresh") }
         }
-        Text("This list comes from the live theater manifest. Background bake/removal and redeploy must finish before changes appear.", color = Ink.copy(alpha = 0.65f))
+        Text("Artwork shown here comes from the live gallery manifest. Background processing and redeploy must finish before changes appear.", color = Ink.copy(alpha = 0.65f))
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(vm.filter, { vm.filter = it }, label = { Text("filter") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Spacer(Modifier.height(8.dp))
@@ -240,8 +238,8 @@ private val Good = Color(0xFFB0E0B0)
         vm.chooseUris(uris)
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Add paintings", style = MaterialTheme.typography.titleLarge)
-        Text("Pick one or more photos. Each uploads to public/assets/ and dispatches theater_bake.yml for exactly the new ids.")
+        Text("Add art", style = MaterialTheme.typography.titleLarge)
+        Text("Pick one or more artwork images. Each uploads to public/assets/ and starts processing for exactly the new art ids.")
         OutlinedButton({ launcher.launch(arrayOf("image/*")) }, enabled = !vm.busy) { Text("choose photos") }
         Text(vm.chosenUris.size.toString() + " selected")
         Button({ vm.uploadChosen(context.contentResolver) }, enabled = vm.chosenUris.isNotEmpty() && !vm.busy) { Text(if (vm.busy) "working…" else "upload " + vm.chosenUris.size) }
@@ -250,102 +248,6 @@ private val Good = Color(0xFFB0E0B0)
     }
 }
 
-
-@Composable private fun ReleaseScreen(vm: AdminViewModel) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Publish Android release", style = MaterialTheme.typography.titleLarge)
-        Text(
-            "The gh_token saved in this app starts the release. The centralized HereLiesAz/workflows job builds and signs the APK, then publishes it to GitHub Releases using the repository GH_TOKEN secret.",
-            color = Ink.copy(alpha = 0.72f),
-        )
-
-        OutlinedTextField(
-            value = vm.tokenInput,
-            onValueChange = { vm.tokenInput = it },
-            label = { Text("gh_token") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = vm::verifyAndSaveToken,
-                enabled = vm.tokenInput.isNotBlank() && !vm.busy && !vm.releaseBusy,
-            ) { Text("save & verify gh_token") }
-            if (vm.authenticated || vm.tokenInput.isNotBlank()) {
-                DangerButton(vm::clearToken, !vm.busy && !vm.releaseBusy) { Text("clear") }
-            }
-        }
-        vm.authMessage?.let { StatusText(it) }
-
-        HorizontalDivider(color = Ink.copy(alpha = 0.18f))
-
-        OutlinedTextField(
-            value = vm.releaseVersion,
-            onValueChange = { vm.releaseVersion = it },
-            label = { Text("version (example: 1.0.1)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = vm.releaseNotes,
-            onValueChange = { vm.releaseNotes = it },
-            label = { Text("release notes (optional)") },
-            minLines = 4,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = vm.releasePrerelease,
-                onCheckedChange = { vm.releasePrerelease = it },
-                enabled = !vm.releaseBusy,
-            )
-            Text("prerelease")
-        }
-
-        Button(
-            onClick = vm::publishRelease,
-            enabled = vm.authenticated &&
-                vm.releaseVersion.isNotBlank() &&
-                !vm.releaseBusy &&
-                !vm.busy,
-        ) {
-            Text(if (vm.releaseBusy) "building / publishing…" else "build & publish GitHub Release")
-        }
-
-        vm.releaseMessage?.let { StatusText(it) }
-        vm.releaseUrl?.let { OpenLinkButton("open published release", it) }
-        Spacer(Modifier.height(40.dp))
-    }
-}
-
-@Composable private fun SiteContentScreen(vm: AdminViewModel) {
-    LaunchedEffect(Unit) { vm.loadSite() }
-    val content = vm.siteContent ?: run { Text("loading…", modifier = Modifier.padding(vertical = 12.dp)); return }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Site content", style = MaterialTheme.typography.titleLarge)
-        OutlinedTextField(content.about, { vm.setSite(content.copy(about = it)) }, label = { Text("About (menu paragraph)") }, minLines = 4, modifier = Modifier.fillMaxWidth())
-        Text("Menu links", style = MaterialTheme.typography.titleMedium)
-        content.menuLinks.forEachIndexed { index, link ->
-            Column(Modifier.fillMaxWidth().background(Panel).padding(8.dp)) {
-                OutlinedTextField(link.label, { value -> val links = content.menuLinks.toMutableList(); links[index] = link.copy(label = value); vm.setSite(content.copy(menuLinks = links)) }, label = { Text("label") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(link.href, { value -> val links = content.menuLinks.toMutableList(); links[index] = link.copy(href = value); vm.setSite(content.copy(menuLinks = links)) }, label = { Text("href") }, modifier = Modifier.fillMaxWidth())
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(link.external, { value -> val links = content.menuLinks.toMutableList(); links[index] = link.copy(external = value); vm.setSite(content.copy(menuLinks = links)) })
-                    Text("new tab"); Spacer(Modifier.weight(1f))
-                    DangerButton({ vm.setSite(content.copy(menuLinks = content.menuLinks.filterIndexed { i, _ -> i != index })) }) { Text("remove") }
-                }
-            }
-        }
-        OutlinedButton({ vm.setSite(content.copy(menuLinks = content.menuLinks + MenuLink())) }) { Text("+ add link") }
-        Button(vm::saveSite, enabled = !vm.busy) { Text(if (vm.busy) "saving…" else "save") }
-        vm.siteMessage?.let { StatusText(it) }
-        Spacer(Modifier.height(40.dp))
-    }
-}
 
 @Composable private fun NetworkImage(url: String, vm: AdminViewModel, modifier: Modifier = Modifier) {
     val bitmap by produceState<android.graphics.Bitmap?>(null, url) { value = runCatching { vm.bitmap(url) }.getOrNull() }
