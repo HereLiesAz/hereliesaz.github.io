@@ -519,6 +519,11 @@ private enum class DedupFilter {
 }
 
 @Composable private fun DedupScreen(vm: AdminViewModel) {
+    DisposableEffect(vm) {
+        vm.startDedupPolling()
+        onDispose { vm.stopDedupPolling() }
+    }
+
     var filter by remember { mutableStateOf(DedupFilter.All) }
     val report = vm.dedupReport
 
@@ -718,11 +723,19 @@ private enum class DedupFilter {
             remove -> Text("suggested remove", color = DangerInk)
         }
 
-        DangerButton(
-            onClick = { vm.stageDedupRemoval(image) },
-            enabled = !queued,
-        ) {
-            Text(if (queued) "queued" else "delete")
+        if (queued) {
+            OutlinedButton(
+                onClick = { vm.undoDedupRemoval(image) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("undo")
+            }
+        } else {
+            DangerButton(
+                onClick = { vm.stageDedupRemoval(image) },
+            ) {
+                Text("delete")
+            }
         }
     }
 }
