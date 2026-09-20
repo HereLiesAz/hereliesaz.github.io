@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageOps
+from PIL import ExifTags, Image, ImageOps
 
 try:
     from pillow_heif import register_heif_opener
@@ -22,6 +22,18 @@ except Exception:
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif"}
 COPY_WORDS = re.compile(r"(?:[-_ ](?:copy|compressed|small|smaller|medium|large|thumb|thumbnail|edited|edit|export|resized|scaled)|\s*\(\d+\))+$", re.I)
 TOKEN_RE = re.compile(r"[a-z0-9]+")
+EXIF_META_TAGS = {
+    "Make",
+    "Model",
+    "DateTime",
+    "DateTimeOriginal",
+    "Software",
+    "Artist",
+    "ImageDescription",
+    "XPTitle",
+    "XPComment",
+    "XPKeywords",
+}
 
 
 @dataclass
@@ -159,6 +171,16 @@ def inspect(path: Path, meta: dict[str, Any]) -> ImageInfo:
     )
     try:
         with Image.open(path) as raw:
+            combined_meta = set(base["meta_tokens"])
+            try:
+                for tag_id, value in raw.getexif().items():
+                    tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                    if tag_name in EXIF_META_TAGS:
+                        combined_meta.update(tokens(value))
+            except Exception:
+                pass
+            base["meta_tokens"] = frozenset(combined_meta)
+
             image = ImageOps.exif_transpose(raw)
             width, height = image.size
             return ImageInfo(
@@ -328,6 +350,8 @@ def analyze_pair(a: ImageInfo, b: ImageInfo):
         reasons.append("similar filename")
     if meta >= 0.8:
         reasons.append("matching artwork metadata")
+    if a.bytes == b.bytes:
+        reasons.append("same file size")
     if a.width == b.width and a.height == b.height and a.width is not None:
         reasons.append("same dimensions")
     elif asp >= 0.99:
