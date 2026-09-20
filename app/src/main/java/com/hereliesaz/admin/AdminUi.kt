@@ -4,9 +4,12 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -199,10 +202,36 @@ private val Good = Color(0xFFB0E0B0)
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable private fun PaintingsScreen(vm: AdminViewModel) {
     vm.selectedArtwork?.let {
         PaintingEditorScreen(vm, it)
         return
+    }
+
+    var confirmBulkRemove by remember { mutableStateOf(false) }
+    if (confirmBulkRemove) {
+        val count = vm.selectedArtworkIds.size
+        AlertDialog(
+            onDismissRequest = { confirmBulkRemove = false },
+            title = { Text("Stage $count for deletion?") },
+            text = {
+                Text(
+                    "These photos will be queued for deletion. Nothing is deleted until you tap Submit All.",
+                )
+            },
+            confirmButton = {
+                DangerButton({
+                    confirmBulkRemove = false
+                    vm.stageSelectedForRemoval()
+                }) {
+                    Text("stage deletion")
+                }
+            },
+            dismissButton = {
+                TextButton({ confirmBulkRemove = false }) { Text("cancel") }
+            },
+        )
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -211,16 +240,48 @@ private val Good = Color(0xFFB0E0B0)
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Art (" + (vm.paintings?.size?.toString() ?: "…") + ")", style = MaterialTheme.typography.titleLarge)
-            OutlinedButton(vm::refreshPaintings, enabled = vm.paintings != null) {
+            Text(
+                "Art (" + (vm.paintings?.size?.toString() ?: "…") + ")",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            OutlinedButton(
+                vm::refreshPaintings,
+                enabled = vm.paintings != null && !vm.multiSelectionActive,
+            ) {
                 Text(if (vm.paintings == null) "refreshing…" else "refresh")
             }
         }
 
+        if (vm.multiSelectionActive) {
+            Row(
+                Modifier.fillMaxWidth().background(Panel).padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    vm.selectedArtworkIds.size.toString() + " selected",
+                    modifier = Modifier.weight(1f),
+                    color = Good,
+                )
+                TextButton(vm::clearArtworkSelection) {
+                    Text("clear")
+                }
+                DangerButton({ confirmBulkRemove = true }) {
+                    Text("delete selected")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
         Text(
-            "This is the complete source-photo library. A live badge means that photo also has a finished theater bake on the deployed gallery.",
+            if (vm.multiSelectionActive) {
+                "Tap photos to add or remove them from the selection."
+            } else {
+                "Long-press a photo to start multi-selection."
+            },
             color = Ink.copy(alpha = 0.65f),
         )
+
         vm.artMessage?.let {
             Spacer(Modifier.height(6.dp))
             StatusText(it)
@@ -250,18 +311,42 @@ private val Good = Color(0xFFB0E0B0)
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(visible, key = { it.id }) { item ->
+                val selected = item.id in vm.selectedArtworkIds
                 Column(
                     Modifier
-                        .background(Panel)
-                        .clickable { vm.selectPainting(item) }
+                        .background(if (selected) Good.copy(alpha = 0.12f) else Panel)
+                        .border(
+                            width = if (selected) 2.dp else 0.dp,
+                            color = if (selected) Good else Color.Transparent,
+                        )
+                        .combinedClickable(
+                            onClick = {
+                                if (vm.multiSelectionActive) {
+                                    vm.toggleArtworkSelection(item)
+                                } else {
+                                    vm.selectPainting(item)
+                                }
+                            },
+                            onLongClick = {
+                                vm.toggleArtworkSelection(item)
+                            },
+                        )
                         .padding(6.dp),
                 ) {
-                    NetworkImage(vm.artworkUrl(item), vm, Modifier.fillMaxWidth().aspectRatio(1f))
-                    Text(vm.meta[item.id]?.title?.ifBlank { item.id } ?: item.id)
-                    Text(
-                        if (item.baked) "live" else "source only",
-                        color = if (item.baked) Good else Ink.copy(alpha = 0.5f),
+                    NetworkImage(
+                        vm.artworkUrl(item),
+                        vm,
+                        Modifier.fillMaxWidth().aspectRatio(1f),
                     )
+                    Text(vm.meta[item.id]?.title?.ifBlank { item.id } ?: item.id)
+                    if (selected) {
+                        Text("selected", color = Good)
+                    } else {
+                        Text(
+                            if (item.baked) "live" else "source only",
+                            color = if (item.baked) Good else Ink.copy(alpha = 0.5f),
+                        )
+                    }
                     if (vm.meta[item.id]?.forSale == true) Text("for sale", color = Good)
                 }
             }
