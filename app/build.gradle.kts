@@ -1,9 +1,11 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val canonicalVersionProperties = java.util.Properties().apply {
+val canonicalVersionProperties = Properties().apply {
     rootProject.file("version.properties").inputStream().use { load(it) }
 }
 fun canonicalVersionPart(name: String, range: IntRange): Int {
