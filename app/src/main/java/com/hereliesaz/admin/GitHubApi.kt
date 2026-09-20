@@ -51,18 +51,44 @@ class GitHubApi(private val tokenStore: TokenStore) {
         return json.getJSONObject("object").getString("sha")
     }
 
+    suspend fun branchExists(ref: String): Boolean =
+        try {
+            request("/repos/$OWNER/$REPO/git/ref/heads/" + encodeSegment(ref))
+            true
+        } catch (e: GitHubApiException) {
+            if (e.status == 404) false else throw e
+        }
+
+    suspend fun ensureBranch(ref: String, baseRef: String = BRANCH): String {
+        if (branchExists(ref)) return getBranchHeadSha(ref)
+        val baseSha = getBranchHeadSha(baseRef)
+        return try {
+            request(
+                "/repos/$OWNER/$REPO/git/refs",
+                "POST",
+                JSONObject()
+                    .put("ref", "refs/heads/$ref")
+                    .put("sha", baseSha),
+            )
+            baseSha
+        } catch (e: GitHubApiException) {
+            if (e.status == 422 && branchExists(ref)) getBranchHeadSha(ref) else throw e
+        }
+    }
+
     suspend fun commitBatch(
         mutations: List<RepoMutation>,
         message: String,
         parentSha: String,
+        branch: String = BRANCH,
     ): String {
         if (mutations.isEmpty()) return parentSha
 
-        val branchRef = request("/repos/$OWNER/$REPO/git/ref/heads/" + encodeSegment(BRANCH))
+        val branchRef = request("/repos/$OWNER/$REPO/git/ref/heads/" + encodeSegment(branch))
             ?: error("Could not read the branch reference")
         val currentHead = branchRef.getJSONObject("object").getString("sha")
         if (currentHead != parentSha) {
-            error("main changed while the draft was being prepared. Refresh and submit again.")
+            error(branch + " changed while the draft was being prepared. Refresh and submit again.")
         }
         val refNodeId = branchRef.getString("node_id")
 
@@ -129,11 +155,11 @@ class GitHubApi(private val tokenStore: TokenStore) {
             JSONObject()
                 .put("query", updateRefQuery)
                 .put("variables", variables),
-        ) ?: error("GitHub returned no response while advancing main")
+        ) ?: error("GitHub returned no response while advancing " + branch)
 
         if (updateResponse.has("errors")) {
             error(
-                "GitHub refused to advance main: " +
+                "GitHub refused to advance " + branch + ": " +
                     updateResponse.getJSONArray("errors").toString(),
             )
         }
@@ -145,7 +171,7 @@ class GitHubApi(private val tokenStore: TokenStore) {
             ?.optJSONObject("target")
             ?.optString("oid")
         if (updatedOid != commitSha) {
-            error("GitHub did not advance main to the staged commit.")
+            error("GitHub did not advance " + branch + " to the staged commit.")
         }
         return commitSha
     }
@@ -162,13 +188,17 @@ class GitHubApi(private val tokenStore: TokenStore) {
         }
     }
 
-    suspend fun dispatchWorkflow(workflowFile: String, inputs: Map<String, String> = emptyMap()) {
+    suspend fun dispatchWorkflow(
+        workflowFile: String,
+        inputs: Map<String, String> = emptyMap(),
+        ref: String = BRANCH,
+    ) {
         val inputJson = JSONObject()
         inputs.forEach { (k, v) -> inputJson.put(k, v) }
         request(
             "/repos/$OWNER/$REPO/actions/workflows/" + encodeSegment(workflowFile) + "/dispatches",
             "POST",
-            JSONObject().put("ref", BRANCH).put("inputs", inputJson),
+            JSONObject().put("ref", ref).put("inputs", inputJson),
         )
     }
 
