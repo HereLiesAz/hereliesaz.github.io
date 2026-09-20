@@ -11,8 +11,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
+import java.util.UUID
 
-enum class AdminTab { Art, Add, Site, Settings }
+enum class AdminTab { Art, Dedup, Add, Site, Settings }
 
 class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val tokenStore = TokenStore(application)
@@ -48,6 +49,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     var siteContent by mutableStateOf<SiteContent?>(null); private set
     var siteMessage by mutableStateOf<String?>(null); private set
+
+    var dedupReport by mutableStateOf<DedupReport?>(null); private set
+    var dedupBusy by mutableStateOf(false); private set
+    var dedupMessage by mutableStateOf<String?>(null); private set
 
     var bandPreviews by mutableStateOf<List<BandPreview>>(emptyList()); private set
     var bandHidden by mutableStateOf<Set<Int>>(emptySet()); private set
@@ -159,6 +164,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         selectedArtworkIds = emptySet()
         artMessage = null
         selectedArtwork = null
+        dedupReport = null
+        dedupMessage = null
     }
 
     fun refreshPaintings() {
@@ -256,6 +263,101 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             "Staged " + targets.size + " photo" +
                 (if (targets.size == 1) "" else "s") +
                 " for deletion. Nothing will be deleted until Submit All."
+    }
+
+    fun scanForDuplicates() {
+        if (dedupBusy) return
+        dedupBusy = true
+        dedupMessage = "Starting dedup scan…"
+        val requestId = UUID.randomUUID().toString()
+
+        viewModelScope.launch {
+            try {
+                val report = repo.runDedupScan(requestId) { status ->
+                    dedupMessage = status
+                }
+                dedupReport = report
+                dedupMessage =
+                    "Found " + report.exactCount + " exact, " +
+                        report.compressedCount + " compressed-copy, and " +
+                        report.similarCount + " similar-image pair" +
+                        (if (report.similarCount == 1) "" else "s") + "."
+            } catch (e: Exception) {
+                dedupMessage = e.message ?: "Dedup scan failed."
+            } finally {
+                dedupBusy = false
+            }
+        }
+    }
+
+    fun stageDedupRemoval(image: DedupImage) {
+        val alreadyStaged = image.id in draft.removals
+        val removal = StagedRemoval(
+            id = image.id,
+            sourceFilename = image.filename,
+            sourceIsSymlink = image.sourceIsSymlink,
+        )
+        persistDraft(
+            draft.copy(
+                metaUpdates = draft.metaUpdates - image.id,
+                bandUpdates = draft.bandUpdates - image.id,
+                removals = draft.removals + (image.id to removal),
+            ),
+        )
+        meta = meta - image.id
+        paintings = paintings?.filterNot { it.id == image.id }
+        dedupMessage =
+            if (alreadyStaged) {
+                image.id + " is already queued for deletion."
+            } else {
+                "Staged " + image.id + " for deletion. Nothing is deleted until Submit All."
+            }
+    }
+
+    fun stageAllSuggestedDuplicates() {
+        val report = dedupReport ?: return
+        val imagesById = buildMap {
+            report.pairs.forEach { pair ->
+                put(pair.left.id, pair.left)
+                put(pair.right.id, pair.right)
+            }
+        }
+        val ids = report.pairs
+            .asSequence()
+            .filter { it.kind == DedupKind.Exact || it.kind == DedupKind.Compressed }
+            .mapNotNull { it.suggestedRemoveId }
+            .distinct()
+            .filter { it !in draft.removals }
+            .toList()
+
+        if (ids.isEmpty()) {
+            dedupMessage = "No new duplicate-removal suggestions to stage."
+            return
+        }
+
+        var next = draft
+        ids.forEach { id ->
+            val image = imagesById[id] ?: return@forEach
+            next = next.copy(
+                metaUpdates = next.metaUpdates - id,
+                bandUpdates = next.bandUpdates - id,
+                removals = next.removals + (
+                    id to StagedRemoval(
+                        id = id,
+                        sourceFilename = image.filename,
+                        sourceIsSymlink = image.sourceIsSymlink,
+                    )
+                ),
+            )
+        }
+        persistDraft(next)
+        val idSet = ids.toSet()
+        meta = meta.filterKeys { it !in idSet }
+        paintings = paintings?.filterNot { it.id in idSet }
+        dedupMessage =
+            "Staged " + ids.size + " suggested duplicate" +
+                (if (ids.size == 1) "" else "s") +
+                " for deletion. Review the draft, then Submit All."
     }
 
     fun selectPainting(item: ArtworkItem) {
@@ -473,6 +575,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 draft = AdminDraft()
                 selectedArtworkIds = emptySet()
                 removalStaged = false
+                dedupReport = null
 
                 submitMessage = if (result.dispatchWarnings.isEmpty()) {
                     "Submitted " + toSubmit.changeCount + " changes in one commit."
@@ -511,6 +614,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         repo.loadBitmap(url, maxDimension)
 
     fun artworkUrl(item: ArtworkItem): String = repo.artworkUrl(item)
+    fun dedupImageUrl(image: DedupImage): String = repo.dedupImageUrl(image)
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }
 

@@ -161,6 +161,41 @@ class GitHubApiException(
     val status: Int,
 ) : Exception(message)
 
+enum class DedupKind {
+    Exact,
+    Compressed,
+    Similar,
+}
+
+data class DedupImage(
+    val id: String,
+    val filename: String,
+    val sourceIsSymlink: Boolean,
+    val bytes: Long,
+    val width: Int? = null,
+    val height: Int? = null,
+)
+
+data class DedupPair(
+    val kind: DedupKind,
+    val certainty: Double,
+    val left: DedupImage,
+    val right: DedupImage,
+    val reasons: List<String>,
+    val suggestedKeepId: String? = null,
+    val suggestedRemoveId: String? = null,
+)
+
+data class DedupReport(
+    val imageCount: Int,
+    val pairCount: Int,
+    val exactCount: Int,
+    val compressedCount: Int,
+    val similarCount: Int,
+    val pairs: List<DedupPair>,
+    val scanErrorCount: Int = 0,
+)
+
 data class UpdateInfo(
     val version: String,
     val tag: String,
