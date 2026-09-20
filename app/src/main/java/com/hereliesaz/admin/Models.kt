@@ -196,6 +196,11 @@ data class DedupReport(
     val scanErrorCount: Int = 0,
 )
 
+data class DedupReportSnapshot(
+    val runId: Long,
+    val report: DedupReport,
+)
+
 data class UpdateInfo(
     val version: String,
     val tag: String,
