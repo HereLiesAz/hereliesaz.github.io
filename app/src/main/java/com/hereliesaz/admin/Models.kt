@@ -10,6 +10,19 @@ data class PaintingMeta(
     val price: Double? = null,
     val currency: String = "USD",
 )
+data class ArtworkItem(
+    val id: String,
+    val sourceFilename: String? = null,
+    val sourceIsSymlink: Boolean = false,
+    val baked: Boolean = false,
+)
+data class RepoTreeEntry(
+    val path: String,
+    val mode: String,
+    val type: String,
+    val sha: String,
+    val size: Long? = null,
+)
 data class MenuLink(val label: String = "", val href: String = "", val external: Boolean = true)
 data class SiteContent(
     val about: String = DEFAULT_ABOUT,
@@ -55,7 +68,6 @@ fun sanitizeIdAndFilename(name: String): SanitizedFile {
 }
 class GitHubApiException(message: String, val status: Int) : Exception(message)
 class RemovalException(message: String, val dispatched: Boolean) : Exception(message)
-
 
 data class UpdateInfo(
     val version: String,

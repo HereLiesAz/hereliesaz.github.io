@@ -25,10 +25,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var authMessage by mutableStateOf<String?>(null); private set
     var busy by mutableStateOf(false); private set
     var tab by mutableStateOf(AdminTab.Art)
-    var paintings by mutableStateOf<List<String>?>(null); private set
+    var paintings by mutableStateOf<List<ArtworkItem>?>(null); private set
     var meta by mutableStateOf<Map<String, PaintingMeta>>(emptyMap()); private set
     var filter by mutableStateOf("")
-    var selectedId by mutableStateOf<String?>(null); private set
+    var artMessage by mutableStateOf<String?>(null); private set
+    var selectedArtwork by mutableStateOf<ArtworkItem?>(null); private set
     var paintingForm by mutableStateOf(PaintingForm())
     var editorMessage by mutableStateOf<String?>(null); private set
     var removalDispatched by mutableStateOf(false); private set
@@ -51,7 +52,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         checkForUpdates(silent = true)
         if (authenticated) refreshPaintings()
     }
-
 
     fun checkForUpdates(silent: Boolean = false) {
         if (updateBusy) return
@@ -117,35 +117,86 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             finally { busy = false }
         }
     }
+
     fun clearToken() {
-        tokenStore.clear(); tokenInput = ""; authenticated = false; authMessage = null; paintings = null; selectedId = null
+        tokenStore.clear()
+        tokenInput = ""
+        authenticated = false
+        authMessage = null
+        paintings = null
+        artMessage = null
+        selectedArtwork = null
     }
+
     fun refreshPaintings() {
         if (!authenticated) return
         paintings = null
+        artMessage = "Loading complete photo inventory…"
         viewModelScope.launch {
             try {
-                paintings = repo.listBakedPaintings()
-                meta = runCatching { repo.loadMeta() }.getOrDefault(emptyMap())
-            } catch (e: Exception) { paintings = emptyList(); editorMessage = e.message }
+                val source = repo.listSourcePaintings()
+                val bakedResult = runCatching { repo.listBakedPaintings() }
+                val bakedIds = bakedResult.getOrDefault(emptyList()).toSet()
+
+                val merged = linkedMapOf<String, ArtworkItem>()
+                source.forEach { item ->
+                    merged[item.id] = item.copy(baked = item.id in bakedIds)
+                }
+                bakedIds.forEach { id ->
+                    if (id !in merged) merged[id] = ArtworkItem(id = id, baked = true)
+                }
+                paintings = merged.values.sortedBy { it.id.lowercase() }
+
+                val metaResult = runCatching { repo.loadMeta() }
+                meta = metaResult.getOrDefault(emptyMap())
+
+                val warnings = buildList {
+                    bakedResult.exceptionOrNull()?.let {
+                        add("Could not read the live theater manifest: " + (it.message ?: "unknown error"))
+                    }
+                    metaResult.exceptionOrNull()?.let {
+                        add("Could not read painting metadata: " + (it.message ?: "unknown error"))
+                    }
+                }
+                artMessage = if (warnings.isEmpty()) {
+                    "Loaded " + source.size + " source photos; " + bakedIds.size + " are currently live/baked."
+                } else {
+                    "Loaded " + source.size + " source photos. " + warnings.joinToString(" ")
+                }
+            } catch (e: Exception) {
+                paintings = emptyList()
+                artMessage = e.message ?: "Could not load the photo inventory."
+            }
         }
     }
-    fun selectPainting(id: String) {
-        selectedId = id; editorMessage = null; removalDispatched = false
-        bandPreviews = emptyList(); bandHidden = emptySet(); theaterMeta = null
-        val x = meta[id] ?: PaintingMeta()
+
+    fun selectPainting(item: ArtworkItem) {
+        selectedArtwork = item
+        editorMessage = null
+        removalDispatched = false
+        bandPreviews = emptyList()
+        bandHidden = emptySet()
+        theaterMeta = null
+        val x = meta[item.id] ?: PaintingMeta()
         paintingForm = PaintingForm(
             x.title, x.description, x.tags.joinToString(", "), x.forSale,
             x.price?.let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }.orEmpty(),
             x.currency,
         )
     }
+
     fun closePainting() {
-        selectedId = null; editorMessage = null; removalDispatched = false
-        bandPreviews.forEach { it.bitmap.recycle() }; bandPreviews = emptyList(); theaterMeta = null
+        selectedArtwork = null
+        editorMessage = null
+        removalDispatched = false
+        bandPreviews.forEach { it.bitmap.recycle() }
+        bandPreviews = emptyList()
+        theaterMeta = null
     }
+
     fun savePainting() {
-        val id = selectedId ?: return
+        val item = selectedArtwork ?: return
+        val id = item.id
         if (paintingForm.forSale && paintingForm.price.isBlank()) { editorMessage = "Marked “for sale” needs a price."; return }
         val price = paintingForm.price.toDoubleOrNull()
         if (paintingForm.forSale && (price == null || price < 0)) { editorMessage = "Price must be a non-negative number."; return }
@@ -158,47 +209,79 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     paintingForm.forSale, if (paintingForm.forSale) price else null,
                     paintingForm.currency.trim().uppercase().ifBlank { "USD" },
                 )
-                repo.saveMetaEntry(id, entry); meta = meta + (id to entry); editorMessage = "Saved — live after the next deploy."
-            } catch (e: Exception) { editorMessage = e.message }
-            finally { busy = false }
+                repo.saveMetaEntry(id, entry)
+                meta = meta + (id to entry)
+                editorMessage = "Saved — live after the next deploy."
+            } catch (e: Exception) {
+                editorMessage = e.message
+            } finally {
+                busy = false
+            }
         }
     }
+
     fun removePainting() {
-        val id = selectedId ?: return
-        busy = true; removalDispatched = false
+        val item = selectedArtwork ?: return
+        busy = true
+        removalDispatched = false
         editorMessage = "Waiting for a safe removal slot. Existing removal runs are allowed to finish first."
         viewModelScope.launch {
-            try { repo.removePainting(id); removalDispatched = true; editorMessage = "Removal completed and dispatched. Refresh the list after the site redeploys." }
-            catch (e: RemovalException) { removalDispatched = e.dispatched; editorMessage = e.message }
-            catch (e: Exception) { editorMessage = e.message }
-            finally { busy = false }
+            try {
+                repo.removePainting(item)
+                removalDispatched = true
+                editorMessage = "Removal completed and dispatched. Refresh the list after the site redeploys."
+            } catch (e: RemovalException) {
+                removalDispatched = e.dispatched
+                editorMessage = e.message
+            } catch (e: Exception) {
+                editorMessage = e.message
+            } finally {
+                busy = false
+            }
         }
     }
+
     fun chooseUris(uris: List<Uri>) { chosenUris = uris; addMessage = null }
+
     fun uploadChosen(resolver: ContentResolver) {
         if (chosenUris.isEmpty()) return
         busy = true; addMessage = "Uploading…"
         viewModelScope.launch {
-            val uploaded = mutableListOf<String>(); var failure: Exception? = null; var failedAt = -1
+            val uploaded = mutableListOf<String>()
+            var failure: Exception? = null
+            var failedAt = -1
             for ((index, uri) in chosenUris.withIndex()) {
                 try {
                     val name = displayName(resolver, uri) ?: "photo"
                     val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Could not read $name")
                     uploaded += repo.uploadPainting(PickedFile(name, bytes))
-                } catch (e: Exception) { failure = e; failedAt = index; break }
+                } catch (e: Exception) {
+                    failure = e
+                    failedAt = index
+                    break
+                }
             }
             try {
-                if (uploaded.isNotEmpty()) { addMessage = "Dispatching bake for " + uploaded.joinToString(", ") + "…"; repo.dispatchBake(uploaded) }
+                if (uploaded.isNotEmpty()) {
+                    addMessage = "Dispatching bake for " + uploaded.joinToString(", ") + "…"
+                    repo.dispatchBake(uploaded)
+                }
                 if (failure != null) {
                     chosenUris = chosenUris.drop(failedAt)
                     addMessage = "Uploaded and dispatched " + uploaded.joinToString(", ") + "; stopped after: " + failure.message + ". " + chosenUris.size + " file(s) remain selected."
-                } else { chosenUris = emptyList(); addMessage = "Uploaded and dispatched: " + uploaded.joinToString(", ") + "." }
+                } else {
+                    chosenUris = emptyList()
+                    addMessage = "Uploaded and dispatched: " + uploaded.joinToString(", ") + "."
+                }
             } catch (e: Exception) {
                 chosenUris = chosenUris.drop(uploaded.size)
                 addMessage = "Uploaded " + uploaded.joinToString(", ") + " but bake dispatch failed: " + e.message + ". The source files are already on main."
-            } finally { busy = false }
+            } finally {
+                busy = false
+            }
         }
     }
+
     fun loadSite() {
         if (siteContent != null) return
         viewModelScope.launch { siteContent = runCatching { repo.loadSiteContent() }.getOrDefault(SiteContent()) }
@@ -226,36 +309,61 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadBands() {
-        val id = selectedId ?: return
+        val item = selectedArtwork ?: return
+        if (!item.baked) {
+            bandMessage = "This source photo has not been baked into the live theater yet."
+            return
+        }
         if (bandLoading || bandPreviews.isNotEmpty()) return
-        bandLoading = true; bandMessage = "Loading layers…"
+        bandLoading = true
+        bandMessage = "Loading layers…"
         viewModelScope.launch {
             try {
-                val t = repo.fetchTheaterMeta(id) ?: error("This painting has no theater metadata.")
-                val hidden = repo.loadBandOverrides()[id].orEmpty()
-                theaterMeta = t; bandHidden = hidden; bandPreviews = repo.buildBandPreviews(id, t, hidden); bandMessage = null
-            } catch (e: Exception) { bandMessage = e.message }
-            finally { bandLoading = false }
+                val t = repo.fetchTheaterMeta(item.id) ?: error("This painting has no theater metadata.")
+                val hidden = repo.loadBandOverrides()[item.id].orEmpty()
+                theaterMeta = t
+                bandHidden = hidden
+                bandPreviews = repo.buildBandPreviews(item.id, t, hidden)
+                bandMessage = null
+            } catch (e: Exception) {
+                bandMessage = e.message
+            } finally {
+                bandLoading = false
+            }
         }
     }
+
     fun toggleBand(index: Int) {
         bandHidden = bandHidden.toMutableSet().apply { if (!add(index)) remove(index) }
         bandPreviews = bandPreviews.map { it.copy(hidden = it.index in bandHidden) }
         if (bandMessage?.startsWith("Saved") == true) bandMessage = null
     }
+
     fun saveBands() {
-        val id = selectedId ?: return
-        if (bandPreviews.isNotEmpty() && bandHidden.size >= bandPreviews.size) { bandMessage = "At least one layer must stay visible."; return }
-        busy = true; bandMessage = "Saving layers…"
+        val id = selectedArtwork?.id ?: return
+        if (bandPreviews.isNotEmpty() && bandHidden.size >= bandPreviews.size) {
+            bandMessage = "At least one layer must stay visible."
+            return
+        }
+        busy = true
+        bandMessage = "Saving layers…"
         viewModelScope.launch {
-            try { repo.saveBandOverrideEntry(id, bandHidden); bandMessage = "Saved — live after the next deploy." }
-            catch (e: Exception) { bandMessage = e.message }
-            finally { busy = false }
+            try {
+                repo.saveBandOverrideEntry(id, bandHidden)
+                bandMessage = "Saved — live after the next deploy."
+            } catch (e: Exception) {
+                bandMessage = e.message
+            } finally {
+                busy = false
+            }
         }
     }
+
     suspend fun bitmap(url: String, maxDimension: Int = 1024): Bitmap? = repo.loadBitmap(url, maxDimension)
+    fun artworkUrl(item: ArtworkItem): String = repo.artworkUrl(item)
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }
+
     private fun displayName(resolver: ContentResolver, uri: Uri): String? {
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             val column = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
