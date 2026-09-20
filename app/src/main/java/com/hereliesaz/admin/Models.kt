@@ -161,11 +161,6 @@ class GitHubApiException(
     val status: Int,
 ) : Exception(message)
 
-class RemovalException(
-    message: String,
-    val dispatched: Boolean,
-) : Exception(message)
-
 data class UpdateInfo(
     val version: String,
     val tag: String,
