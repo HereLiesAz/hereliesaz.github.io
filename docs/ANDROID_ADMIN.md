@@ -4,11 +4,21 @@ This is the native Kotlin/Jetpack Compose rewrite of the web `/admin` surface.
 
 Package: `com.hereliesaz.admin`
 
-Feature parity includes GitHub token verification; live painting listing; metadata and for-sale editing; depth-layer previews and visibility overrides; multi-image source upload plus targeted Theater Bake dispatch; serialized painting removal; and site About/menu editing.
+Feature parity includes GitHub token verification; live painting listing; metadata and for-sale editing; depth-layer previews and visibility overrides; multi-image source upload and batch Theater Bake selection; serialized painting removal; and site About/menu editing.
 
 The GitHub PAT is encrypted at rest with Android Keystore (AES/GCM). The app talks directly to GitHub's REST API and live theater data. It is not a WebView wrapper.
 
 The web admin remains available as a fallback until explicitly retired.
+
+## Artwork batches and baked-status filtering
+
+In **Art**, the **all**, **baked**, and **not baked** filters use the live `art-data/theater/_manifest.json`. The text filter still works alongside them. An artwork with a source photo but no manifest entry is **not baked**; a manifest entry without a source photo is still **baked**. If the manifest cannot be read, the app reports that baked status is unavailable and prevents bulk baking rather than treating every photo as unbaked.
+
+Long-press a photo to start selection, then tap additional photos. **Bake N unbaked** queues exactly the selected source-backed, not-yet-baked IDs in a single `theater_bake.yml` dispatch against `admin-staging`, after confirmation. Selected baked-only entries are excluded. A failed dispatch leaves the selection intact. This queues processing; it does not claim the bake has finished. Refresh **Art** after processing to see the live manifest status.
+
+**Add art** can already pick multiple images, which are copied into the persistent local draft. **Submit All** commits that batch to `admin-staging`; **Publish Site** is the separate existing publishing flow for staged changes. Locally staged files cannot be selected for a direct bake until they have been submitted to the repository.
+
+**Workflow prerequisite:** This feature branch restores the existing centrally managed `theater_bake.yml` proxy to `main` when merged. The central workflow registry currently marks its binding obsolete and must recognize/activate the restored proxy before bake dispatch will run. The app surfaces dispatch failures rather than reporting a successful bake.
 
 ## Build
 

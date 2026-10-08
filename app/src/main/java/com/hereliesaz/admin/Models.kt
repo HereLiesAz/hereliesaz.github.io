@@ -18,6 +18,25 @@ data class ArtworkItem(
     val baked: Boolean = false,
 )
 
+/** Filter on live Theater Bake manifest membership, not local upload staging. */
+enum class BakeStatusFilter { All, Baked, NotBaked }
+
+/** Match one item against an already-resolved live bake status. */
+fun ArtworkItem.matchesBakeStatus(filter: BakeStatusFilter): Boolean = when (filter) {
+    BakeStatusFilter.All -> true
+    BakeStatusFilter.Baked -> baked
+    BakeStatusFilter.NotBaked -> !baked
+}
+
+/** Returns unique selected source IDs that do not yet have a Theater Bake manifest entry. */
+fun eligibleBakeIds(items: List<ArtworkItem>, selectedIds: Set<String>): List<String> =
+    items.asSequence()
+        .filter { it.id in selectedIds && !it.baked && it.sourceFilename != null }
+        .map { it.id }
+        .distinct()
+        .sorted()
+        .toList()
+
 data class RepoTreeEntry(
     val path: String,
     val mode: String,

@@ -40,6 +40,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     val multiSelectionActive: Boolean get() = selectedArtworkIds.isNotEmpty()
     var meta by mutableStateOf<Map<String, PaintingMeta>>(emptyMap()); private set
     var filter by mutableStateOf("")
+    var bakeStatusFilter by mutableStateOf(BakeStatusFilter.All)
+    var bakeStatusKnown by mutableStateOf(false); private set
+    val selectedBakeIds: List<String>
+        get() = if (bakeStatusKnown) eligibleBakeIds(paintings.orEmpty(), selectedArtworkIds) else emptyList()
+    var bakeBusy by mutableStateOf(false); private set
+    var bakeMessage by mutableStateOf<String?>(null); private set
     var artMessage by mutableStateOf<String?>(null); private set
     var selectedArtwork by mutableStateOf<ArtworkItem?>(null); private set
     var paintingForm by mutableStateOf(PaintingForm())
@@ -178,8 +184,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         authenticated = false
         authMessage = null
         paintings = null
+        bakeStatusKnown = false
         selectedArtworkIds = emptySet()
         artMessage = null
+        bakeMessage = null
         selectedArtwork = null
         stopDedupPolling()
         dedupReport = null
@@ -196,6 +204,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshPaintings() {
         if (!authenticated) return
+        bakeStatusKnown = false
         paintings = null
         selectedArtworkIds = emptySet()
         artMessage = "Loading complete photo inventory…"
@@ -203,6 +212,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val source = repo.listSourcePaintings()
                 val bakedResult = runCatching { repo.listBakedPaintings() }
+                bakeStatusKnown = bakedResult.isSuccess
+                if (!bakeStatusKnown) bakeStatusFilter = BakeStatusFilter.All
                 val bakedIds = bakedResult.getOrDefault(emptyList()).toSet()
 
                 val merged = linkedMapOf<String, ArtworkItem>()
@@ -252,6 +263,35 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearArtworkSelection() {
         selectedArtworkIds = emptySet()
+    }
+
+    /** Queues one confirmed group of unbaked source photos, retaining selection on failure. */
+    fun bakeSelected() {
+        if (bakeBusy) return
+        if (!bakeStatusKnown) {
+            bakeMessage = "Cannot verify which photos are baked. Refresh Art and retry."
+            return
+        }
+        val ids = selectedBakeIds
+        if (ids.isEmpty()) {
+            bakeMessage = "Select source photos that have not been baked."
+            return
+        }
+
+        bakeBusy = true
+        bakeMessage = "Queueing " + ids.size + " source photo(s) for Theater Bake…"
+        viewModelScope.launch {
+            try {
+                repo.dispatchTheaterBake(ids)
+                selectedArtworkIds = selectedArtworkIds - ids.toSet()
+                bakeMessage = "Submitted " + ids.size +
+                    " photo(s) to Theater Bake. Refresh Art after the workflow completes to see updated status."
+            } catch (e: Exception) {
+                bakeMessage = "Could not queue Theater Bake: " + (e.message ?: "unknown error")
+            } finally {
+                bakeBusy = false
+            }
+        }
     }
 
     fun stageSelectedForRemoval() {

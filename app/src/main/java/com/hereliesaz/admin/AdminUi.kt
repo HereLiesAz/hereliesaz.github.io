@@ -239,6 +239,32 @@ private val Good = Color(0xFFB0E0B0)
         return
     }
 
+    var confirmBulkBake by remember { mutableStateOf(false) }
+    if (confirmBulkBake) {
+        val count = vm.selectedBakeIds.size
+        AlertDialog(
+            onDismissRequest = { confirmBulkBake = false },
+            title = { Text("Bake $count source photos?") },
+            text = {
+                Text(
+                    "This queues the selected unbaked photos for Paper Theater processing on GitHub Actions. Model quotas may apply.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmBulkBake = false
+                        vm.bakeSelected()
+                    },
+                    enabled = count > 0 && !vm.bakeBusy,
+                ) { Text("queue bake") }
+            },
+            dismissButton = {
+                TextButton({ confirmBulkBake = false }) { Text("cancel") }
+            },
+        )
+    }
+
     var confirmBulkRemove by remember { mutableStateOf(false) }
     if (confirmBulkRemove) {
         val count = vm.selectedArtworkIds.size
@@ -283,21 +309,29 @@ private val Good = Color(0xFFB0E0B0)
         }
 
         if (vm.multiSelectionActive) {
-            Row(
+            Column(
                 Modifier.fillMaxWidth().background(Panel).padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(
-                    vm.selectedArtworkIds.size.toString() + " selected",
-                    modifier = Modifier.weight(1f),
-                    color = Good,
-                )
-                TextButton(vm::clearArtworkSelection) {
-                    Text("clear")
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        vm.selectedArtworkIds.size.toString() + " selected",
+                        modifier = Modifier.weight(1f),
+                        color = Good,
+                    )
+                    TextButton(vm::clearArtworkSelection) { Text("clear") }
                 }
-                DangerButton({ confirmBulkRemove = true }) {
-                    Text("delete selected")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { confirmBulkBake = true },
+                        enabled = vm.selectedBakeIds.isNotEmpty() && !vm.bakeBusy,
+                    ) {
+                        Text(if (vm.bakeBusy) "queueing…" else "bake " + vm.selectedBakeIds.size + " unbaked")
+                    }
+                    DangerButton({ confirmBulkRemove = true }) { Text("delete selected") }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -316,6 +350,10 @@ private val Good = Color(0xFFB0E0B0)
             Spacer(Modifier.height(6.dp))
             StatusText(it)
         }
+        vm.bakeMessage?.let {
+            Spacer(Modifier.height(6.dp))
+            StatusText(it)
+        }
         Spacer(Modifier.height(8.dp))
 
         OutlinedTextField(
@@ -326,12 +364,34 @@ private val Good = Color(0xFFB0E0B0)
             singleLine = true,
         )
         Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BakeStatusFilter.entries.forEach { status ->
+                FilterChip(
+                    selected = vm.bakeStatusFilter == status,
+                    enabled = vm.bakeStatusKnown || status == BakeStatusFilter.All,
+                    onClick = { vm.bakeStatusFilter = status },
+                    label = {
+                        Text(when (status) {
+                            BakeStatusFilter.All -> "all"
+                            BakeStatusFilter.Baked -> "baked"
+                            BakeStatusFilter.NotBaked -> "not baked"
+                        })
+                    },
+                )
+            }
+        }
 
         val visible = (vm.paintings ?: emptyList()).filter { item ->
-            vm.filter.isBlank() ||
-                item.id.contains(vm.filter, true) ||
-                item.sourceFilename.orEmpty().contains(vm.filter, true) ||
-                vm.meta[item.id]?.title.orEmpty().contains(vm.filter, true)
+            item.matchesBakeStatus(vm.bakeStatusFilter) &&
+                (
+                    vm.filter.isBlank() ||
+                        item.id.contains(vm.filter, true) ||
+                        item.sourceFilename.orEmpty().contains(vm.filter, true) ||
+                        vm.meta[item.id]?.title.orEmpty().contains(vm.filter, true)
+                )
         }
 
         LazyVerticalGrid(
@@ -373,8 +433,8 @@ private val Good = Color(0xFFB0E0B0)
                         Text("selected", color = Good)
                     } else {
                         Text(
-                            if (item.baked) "live" else "source only",
-                            color = if (item.baked) Good else Ink.copy(alpha = 0.5f),
+                            if (!vm.bakeStatusKnown) "bake status unavailable" else if (item.baked) "live" else "source only",
+                            color = if (vm.bakeStatusKnown && item.baked) Good else Ink.copy(alpha = 0.5f),
                         )
                     }
                     if (vm.meta[item.id]?.forSale == true) Text("for sale", color = Good)
@@ -417,7 +477,7 @@ private val Good = Color(0xFFB0E0B0)
 
         NetworkImage(vm.artworkUrl(item), vm, Modifier.fillMaxWidth().height(380.dp))
         Text(
-            if (item.baked) "live theater bake" else "source photo — not yet in the theater manifest",
+            if (!vm.bakeStatusKnown) "bake status unavailable" else if (item.baked) "live theater bake" else "source photo — not yet in the theater manifest",
             color = if (item.baked) Good else Ink.copy(alpha = 0.6f),
         )
 
