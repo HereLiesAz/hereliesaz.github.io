@@ -19,6 +19,7 @@ class AdminRepository(private val api: GitHubApi) {
         return List(arr.length()) { arr.getString(it) }
     }
 
+    /** Queues one Theater Bake workflow run for the given filename stems; does not wait for completion. */
     suspend fun dispatchTheaterBake(ids: List<String>) {
         require(ids.isNotEmpty()) { "Choose at least one unbaked source photo." }
         require(ids.none { ',' in it || '\n' in it || '\r' in it }) {
