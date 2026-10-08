@@ -40,6 +40,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     val multiSelectionActive: Boolean get() = selectedArtworkIds.isNotEmpty()
     var meta by mutableStateOf<Map<String, PaintingMeta>>(emptyMap()); private set
     var filter by mutableStateOf("")
+    var bakeStatusFilter by mutableStateOf(BakeStatusFilter.All)
+    val selectedBakeIds: List<String> get() = eligibleBakeIds(paintings.orEmpty(), selectedArtworkIds)
+    var bakeBusy by mutableStateOf(false); private set
+    var bakeMessage by mutableStateOf<String?>(null); private set
     var artMessage by mutableStateOf<String?>(null); private set
     var selectedArtwork by mutableStateOf<ArtworkItem?>(null); private set
     var paintingForm by mutableStateOf(PaintingForm())
@@ -180,6 +184,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         paintings = null
         selectedArtworkIds = emptySet()
         artMessage = null
+        bakeMessage = null
         selectedArtwork = null
         stopDedupPolling()
         dedupReport = null
@@ -252,6 +257,30 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearArtworkSelection() {
         selectedArtworkIds = emptySet()
+    }
+
+    fun bakeSelected() {
+        if (bakeBusy) return
+        val ids = selectedBakeIds
+        if (ids.isEmpty()) {
+            bakeMessage = "Select source photos that have not been baked."
+            return
+        }
+
+        bakeBusy = true
+        bakeMessage = "Queueing " + ids.size + " source photo(s) for Theater Bake…"
+        viewModelScope.launch {
+            try {
+                repo.dispatchTheaterBake(ids)
+                selectedArtworkIds = emptySet()
+                bakeMessage = "Submitted " + ids.size +
+                    " photo(s) to Theater Bake. Refresh Art after the workflow completes to see updated status."
+            } catch (e: Exception) {
+                bakeMessage = "Could not queue Theater Bake: " + (e.message ?: "unknown error")
+            } finally {
+                bakeBusy = false
+            }
+        }
     }
 
     fun stageSelectedForRemoval() {
