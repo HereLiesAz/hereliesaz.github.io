@@ -265,6 +265,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         selectedArtworkIds = emptySet()
     }
 
+    /** Queues one confirmed group of unbaked source photos, retaining selection on failure. */
     fun bakeSelected() {
         if (bakeBusy) return
         if (!bakeStatusKnown) {
@@ -282,7 +283,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 repo.dispatchTheaterBake(ids)
-                selectedArtworkIds = emptySet()
+                selectedArtworkIds = selectedArtworkIds - ids.toSet()
                 bakeMessage = "Submitted " + ids.size +
                     " photo(s) to Theater Bake. Refresh Art after the workflow completes to see updated status."
             } catch (e: Exception) {
