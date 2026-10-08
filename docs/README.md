@@ -13,6 +13,7 @@ This project intentionally keeps multiple art-processing representations of the 
 7. [**Setup**](./SETUP.md) — Python and Node environment setup.
 8. [**Aesthetic**](./AESTHETIC.md) — creative brief.
 9. [**Handoff**](./HANDOFF.md) — current state and working rules.
+10. [**Android Admin**](./ANDROID_ADMIN.md) — native app, batch bake selection, baked-status inventory filters, and release/update behavior.
 
 [`archive/`](./archive/) contains earlier planning/spec snapshots. A document being archived means it is not the current implementation reference; it does **not** mean every capability described in it has been rejected or should be removed.
 
