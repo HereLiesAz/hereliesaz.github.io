@@ -18,6 +18,22 @@ data class ArtworkItem(
     val baked: Boolean = false,
 )
 
+enum class BakeStatusFilter { All, Baked, NotBaked }
+
+fun ArtworkItem.matchesBakeStatus(filter: BakeStatusFilter): Boolean = when (filter) {
+    BakeStatusFilter.All -> true
+    BakeStatusFilter.Baked -> baked
+    BakeStatusFilter.NotBaked -> !baked
+}
+
+fun eligibleBakeIds(items: List<ArtworkItem>, selectedIds: Set<String>): List<String> =
+    items.asSequence()
+        .filter { it.id in selectedIds && !it.baked && it.sourceFilename != null }
+        .map { it.id }
+        .distinct()
+        .sorted()
+        .toList()
+
 data class RepoTreeEntry(
     val path: String,
     val mode: String,
