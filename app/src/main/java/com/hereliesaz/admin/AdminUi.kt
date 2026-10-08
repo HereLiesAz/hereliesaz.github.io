@@ -371,6 +371,7 @@ private val Good = Color(0xFFB0E0B0)
             BakeStatusFilter.entries.forEach { status ->
                 FilterChip(
                     selected = vm.bakeStatusFilter == status,
+                    enabled = vm.bakeStatusKnown || status == BakeStatusFilter.All,
                     onClick = { vm.bakeStatusFilter = status },
                     label = {
                         Text(when (status) {
@@ -432,8 +433,8 @@ private val Good = Color(0xFFB0E0B0)
                         Text("selected", color = Good)
                     } else {
                         Text(
-                            if (item.baked) "live" else "source only",
-                            color = if (item.baked) Good else Ink.copy(alpha = 0.5f),
+                            if (!vm.bakeStatusKnown) "bake status unavailable" else if (item.baked) "live" else "source only",
+                            color = if (vm.bakeStatusKnown && item.baked) Good else Ink.copy(alpha = 0.5f),
                         )
                     }
                     if (vm.meta[item.id]?.forSale == true) Text("for sale", color = Good)
@@ -476,7 +477,7 @@ private val Good = Color(0xFFB0E0B0)
 
         NetworkImage(vm.artworkUrl(item), vm, Modifier.fillMaxWidth().height(380.dp))
         Text(
-            if (item.baked) "live theater bake" else "source photo — not yet in the theater manifest",
+            if (!vm.bakeStatusKnown) "bake status unavailable" else if (item.baked) "live theater bake" else "source photo — not yet in the theater manifest",
             color = if (item.baked) Good else Ink.copy(alpha = 0.6f),
         )
 
