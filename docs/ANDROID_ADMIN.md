@@ -18,7 +18,7 @@ Long-press a photo to start selection, then tap additional photos. **Bake N unba
 
 **Add art** can already pick multiple images, which are copied into the persistent local draft. **Submit All** commits that batch to `admin-staging`; **Publish Site** is the separate existing publishing flow for staged changes. Locally staged files cannot be selected for a direct bake until they have been submitted to the repository.
 
-**Current infrastructure prerequisite:** `theater_bake.yml` exists on `admin-staging` but not on `main`; the central workflow registry currently marks its binding obsolete. GitHub workflow dispatch requires an active workflow on the default branch. Restore the centralized proxy/registry binding before the batch action can run successfully. The Android app surfaces a dispatch failure rather than reporting a successful bake.
+**Workflow prerequisite:** This feature branch restores the existing centrally managed `theater_bake.yml` proxy to `main` when merged. The central workflow registry currently marks its binding obsolete and must recognize/activate the restored proxy before bake dispatch will run. The app surfaces dispatch failures rather than reporting a successful bake.
 
 ## Build
 
