@@ -41,7 +41,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     var meta by mutableStateOf<Map<String, PaintingMeta>>(emptyMap()); private set
     var filter by mutableStateOf("")
     var bakeStatusFilter by mutableStateOf(BakeStatusFilter.All)
-    val selectedBakeIds: List<String> get() = eligibleBakeIds(paintings.orEmpty(), selectedArtworkIds)
+    var bakeStatusKnown by mutableStateOf(false); private set
+    val selectedBakeIds: List<String>
+        get() = if (bakeStatusKnown) eligibleBakeIds(paintings.orEmpty(), selectedArtworkIds) else emptyList()
     var bakeBusy by mutableStateOf(false); private set
     var bakeMessage by mutableStateOf<String?>(null); private set
     var artMessage by mutableStateOf<String?>(null); private set
@@ -182,6 +184,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         authenticated = false
         authMessage = null
         paintings = null
+        bakeStatusKnown = false
         selectedArtworkIds = emptySet()
         artMessage = null
         bakeMessage = null
@@ -201,6 +204,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshPaintings() {
         if (!authenticated) return
+        bakeStatusKnown = false
         paintings = null
         selectedArtworkIds = emptySet()
         artMessage = "Loading complete photo inventory…"
@@ -208,6 +212,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val source = repo.listSourcePaintings()
                 val bakedResult = runCatching { repo.listBakedPaintings() }
+                bakeStatusKnown = bakedResult.isSuccess
+                if (!bakeStatusKnown) bakeStatusFilter = BakeStatusFilter.All
                 val bakedIds = bakedResult.getOrDefault(emptyList()).toSet()
 
                 val merged = linkedMapOf<String, ArtworkItem>()
@@ -261,6 +267,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     fun bakeSelected() {
         if (bakeBusy) return
+        if (!bakeStatusKnown) {
+            bakeMessage = "Cannot verify which photos are baked. Refresh Art and retry."
+            return
+        }
         val ids = selectedBakeIds
         if (ids.isEmpty()) {
             bakeMessage = "Select source photos that have not been baked."
