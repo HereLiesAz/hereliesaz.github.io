@@ -12,7 +12,7 @@ The web admin remains available as a fallback until explicitly retired.
 
 ## Artwork batches and baked-status filtering
 
-In **Art**, the **all**, **baked**, and **not baked** filters use the live `art-data/theater/_manifest.json`. The text filter still works alongside them. An artwork with a source photo but no manifest entry is **not baked**; a manifest entry without a source photo is still **baked**.
+In **Art**, the **all**, **baked**, and **not baked** filters use the live `art-data/theater/_manifest.json`. The text filter still works alongside them. An artwork with a source photo but no manifest entry is **not baked**; a manifest entry without a source photo is still **baked**. If the manifest cannot be read, the app reports that baked status is unavailable and prevents bulk baking rather than treating every photo as unbaked.
 
 Long-press a photo to start selection, then tap additional photos. **Bake N unbaked** queues exactly the selected source-backed, not-yet-baked IDs in a single `theater_bake.yml` dispatch against `admin-staging`, after confirmation. Selected baked-only entries are excluded. A failed dispatch leaves the selection intact. This queues processing; it does not claim the bake has finished. Refresh **Art** after processing to see the live manifest status.
 
