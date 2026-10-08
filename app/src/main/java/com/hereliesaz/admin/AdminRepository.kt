@@ -19,6 +19,18 @@ class AdminRepository(private val api: GitHubApi) {
         return List(arr.length()) { arr.getString(it) }
     }
 
+    suspend fun dispatchTheaterBake(ids: List<String>) {
+        require(ids.isNotEmpty()) { "Choose at least one unbaked source photo." }
+        require(ids.none { ',' in it || '\n' in it || '\r' in it }) {
+            "A selected filename contains a comma or line break and cannot be sent as a bake ID."
+        }
+        api.dispatchWorkflow(
+            "theater_bake.yml",
+            mapOf("ids" to ids.joinToString(",")),
+            ref = ADMIN_BRANCH,
+        )
+    }
+
     suspend fun listSourcePaintings(): List<ArtworkItem> {
         api.ensureBranch(ADMIN_BRANCH)
         val prefix = "public/assets/"
