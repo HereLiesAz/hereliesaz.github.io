@@ -2,6 +2,7 @@
 # central-source-path: .github/workflows/theater_bake.yml
 # central-source-sha256: 30ac28112905711d6aa0e747a83ef2c966a6d5899808325906a1597527717d26
 # This file intentionally contains no repository secrets.
+# central-run-tracker: HereLiesAz/workflows
 name: Theater Bake
 on:
   workflow_dispatch:
@@ -10,27 +11,26 @@ on:
         description: "Comma-separated painting ids (filename stems in public/assets) to bake. Blank = the DEFAULT_IDS batch."
         required: false
         default: ""
-  # Crop-box edits retain their existing automated curated bake trigger.
-  # Do not bake the default paid batch simply because this proxy is restored.
+  # Pushing a change to THIS file — or to the hand-authored crop boxes —
+  # kicks off a bake of DEFAULT_IDS. That is how the batch runs before the
+  # workflow reaches the default branch (workflow_dispatch only lists once
+  # it's on the default branch). A crop-box change is picked up per-id by the
+  # baker's crop-change detection, so only the moved crops re-photorealize.
   push:
     paths:
+      - '.github/workflows/theater_bake.yml'
       - 'scripts/crops.json'
 
-permissions:
-  contents: read
-  id-token: write
+permissions: {}
 jobs:
-  central-dispatch:
+  central:
+    name: Hand-off
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
-      - name: Dispatch to HereLiesAz/workflows
+      - name: Point to central result
         env:
-          WORKFLOWS_GATEWAY_URL: ${{ vars.WORKFLOWS_GATEWAY_URL }}
-          EVENT_JSON: ${{ toJSON(github.event) }}
-          INPUTS_JSON: ${{ toJSON(inputs) }}
-          VARS_JSON: ${{ toJSON(vars) }}
-          SOURCE_WORKFLOW_PATH: .github/workflows/theater_bake.yml
-          SOURCE_SHA256: 30ac28112905711d6aa0e747a83ef2c966a6d5899808325906a1597527717d26
+          STATUS_CONTEXT: .github/workflows/theater_bake.yml
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: bash
-        run: "set -euo pipefail\n[[ -n \"${WORKFLOWS_GATEWAY_URL:-}\" ]] || { echo \"Repository variable WORKFLOWS_GATEWAY_URL is not configured.\" >&2; exit 1; }\noidc_response=\"$(curl --fail-with-body --silent --show-error -H \"Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}\" \"${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hereliesaz-workflows\")\"\noidc_token=\"$(jq -r '.value // empty' <<<\"$oidc_response\")\"\n[[ -n \"$oidc_token\" ]] || { echo \"GitHub did not issue an OIDC token.\" >&2; exit 1; }\necho \"::add-mask::$oidc_token\"\nDISPATCH_EVENT_JSON=\"$(jq -c '\n  def strip_noise:\n    if type == \"object\" then\n      with_entries(\n        select(.key as $k | [\n          \"url\", \"html_url\", \"avatar_url\", \"followers_url\", \"following_url\",\n          \"gists_url\", \"starred_url\", \"subscriptions_url\", \"organizations_url\",\n          \"repos_url\", \"events_url\", \"received_events_url\", \"node_id\", \"_links\"\n        ] | index($k) | not)\n      ) | map_values(strip_noise)\n    elif type == \"array\" then map(strip_noise)\n    else . end;\n  strip_noise\n' <<<\"$EVENT_JSON\")\"\npayload=\"$(jq -n   --arg repository \"$GITHUB_REPOSITORY\" --arg repository_id \"$GITHUB_REPOSITORY_ID\"   --arg repository_owner \"$GITHUB_REPOSITORY_OWNER\" --arg repository_owner_id \"$GITHUB_REPOSITORY_OWNER_ID\"   --arg sha \"$GITHUB_SHA\" --arg ref \"$GITHUB_REF\" --arg ref_name \"$GITHUB_REF_NAME\" --arg ref_type \"$GITHUB_REF_TYPE\"   --arg head_ref \"$GITHUB_HEAD_REF\" --arg base_ref \"$GITHUB_BASE_REF\" --arg actor \"$GITHUB_ACTOR\" --arg actor_id \"$GITHUB_ACTOR_ID\"   --arg event_name \"$GITHUB_EVENT_NAME\" --arg run_id \"$GITHUB_RUN_ID\" --arg run_number \"$GITHUB_RUN_NUMBER\" --arg run_attempt \"$GITHUB_RUN_ATTEMPT\"   --arg workflow_ref \"$GITHUB_WORKFLOW_REF\" --arg workflow_name \"$GITHUB_WORKFLOW\" --arg source_workflow_path \"$SOURCE_WORKFLOW_PATH\"   --arg source_sha256 \"$SOURCE_SHA256\" --argjson event \"$DISPATCH_EVENT_JSON\" --argjson inputs \"$INPUTS_JSON\" --argjson vars \"$VARS_JSON\"   '{repository:$repository,repository_id:$repository_id,repository_owner:$repository_owner,repository_owner_id:$repository_owner_id,sha:$sha,check_sha:($event.pull_request.head.sha // $sha),ref:$ref,ref_name:$ref_name,ref_type:$ref_type,head_ref:$head_ref,base_ref:$base_ref,actor:$actor,actor_id:$actor_id,event_name:$event_name,event:$event,inputs:$inputs,vars:$vars,run_id:$run_id,run_number:$run_number,run_attempt:$run_attempt,workflow_ref:$workflow_ref,workflow_name:$workflow_name,source_workflow_path:$source_workflow_path,source_sha256:$source_sha256}')\"\ncurl --fail-with-body --silent --show-error -X POST \"${WORKFLOWS_GATEWAY_URL%/}/dispatch\" -H \"Authorization: Bearer ${oidc_token}\" -H \"Content-Type: application/json\" --data-binary \"$payload\""
-    name: Dispatch
+        run: "set -euo pipefail\n# The build runs in HereLiesAz/workflows. Its result is reported on this commit as the\n# commit status named below: pending when the central run starts, then success or\n# failure. This job only points there and ends, so it never holds a runner while the\n# central run waits for one. (Trackers that followed the central run job-by-job held a\n# runner each for the whole build; under the account's concurrent-job limit they\n# starved the very runs they were waiting on: 2026-10-01, illumera waited 3h to start.)\n# No status at all means the gateway intentionally skipped this event.\n{\n  echo \"### Runs in HereLiesAz/workflows\"\n  echo\n  echo \"Result: commit status \\`$STATUS_CONTEXT\\` on \\`$TARGET_SHA\\`.\"\n  echo \"Central runs: $GITHUB_SERVER_URL/HereLiesAz/workflows/actions\"\n} >> \"$GITHUB_STEP_SUMMARY\"\necho \"Result is reported as commit status '$STATUS_CONTEXT' on $TARGET_SHA.\"\n"
