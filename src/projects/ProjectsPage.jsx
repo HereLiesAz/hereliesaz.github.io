@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
+import { safeHref } from '../siteContent';
 
 const STYLES = `
 .projects-shell {
@@ -70,7 +71,7 @@ export default function ProjectsPage() {
           .map(r => ({
             name: r.name,
             description: r.description || '',
-            url: r.homepage || `https://${USER.toLowerCase()}.github.io/${r.name}/`,
+            url: safeHref(r.homepage) || `https://${USER.toLowerCase()}.github.io/${r.name}/`,
             language: r.language,
             pushedAt: r.pushed_at,
           }))

@@ -65,6 +65,15 @@ function safeStringify(value) {
   }
 }
 
+// Pre-encoding character budget for the prefilled issue body (~6KB).
+const ISSUE_BODY_BUDGET = 6000;
+const STACK_BUDGET = 2000;
+
+function clip(text, max) {
+  const s = String(text ?? '');
+  return s.length > max ? `${s.slice(0, max)}\n…[truncated]` : s;
+}
+
 class JulesLogger {
   constructor() {
     this.logs = [];
@@ -107,7 +116,17 @@ class JulesLogger {
   }
 
   generateIssueUrl(error) {
-    const title = `[Auto-Report] Frontend Crash: ${safeErrorMessage(error)}`;
+    const title = `[Auto-Report] Frontend Crash: ${safeErrorMessage(error)}`.slice(0, 200);
+    // GitHub (and browsers/proxies) reject over-long ?body= URLs — after
+    // percent-encoding, a 100-entry log dump easily blows past ~8KB and the
+    // "report this" link just 414s. Cap the stack, then keep only the most
+    // RECENT log lines that still fit in the overall body budget.
+    const stack = clip(safeErrorStack(error), STACK_BUDGET);
+    const logBudget = Math.max(0, ISSUE_BODY_BUDGET - stack.length - 300);
+    const dump = this.getDump();
+    const logs = dump.length > logBudget
+      ? `…[${dump.length - logBudget} earlier chars truncated]\n${dump.slice(dump.length - logBudget)}`
+      : dump;
     const body = `
 ### Jules Auto-Report
 **Context:** Frontend Crash
@@ -115,12 +134,12 @@ class JulesLogger {
 
 ### Stack Trace
 \`\`\`
-${safeErrorStack(error)}
+${stack}
 \`\`\`
 
 ### Recent Logs
 \`\`\`
-${this.getDump()}
+${logs}
 \`\`\`
     `.trim();
 
