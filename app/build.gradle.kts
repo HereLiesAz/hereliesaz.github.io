@@ -34,9 +34,17 @@ val signingStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 val signingStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
 val signingKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
 val signingKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+val releaseSigningAvailable = listOf(
+    signingStoreFile, signingStorePassword, signingKeyAlias, signingKeyPassword,
+).none { it.isNullOrBlank() }
 
 android {
     namespace = "com.hereliesaz.admin"
+    // compileSdk tracks the newest SDK so the latest AndroidX/Compose
+    // artifacts (which require it) can be used; targetSdk deliberately stays
+    // one level behind until this app's runtime behaviour has been checked
+    // against the newer platform's behaviour changes. Bump targetSdk only
+    // after testing on that API level.
     compileSdk = 37
 
     defaultConfig {
@@ -65,6 +73,10 @@ android {
 
     buildTypes {
         getByName("release") {
+            // R8 minification is intentionally OFF: the app is small, uses no
+            // reflection-heavy libraries, and shrinking adds a class of
+            // release-only bugs for little gain. (There is therefore no
+            // proguard-rules.pro.) Revisit only with a tested keep-rule set.
             isMinifyEnabled = false
             releaseSigning?.let { signingConfig = it }
         }
@@ -82,6 +94,23 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+}
+
+// A release build without signing material would produce an unsigned (or
+// debug-signed) APK that can never self-update over an existing install
+// (see docs/ANDROID_ADMIN.md "Stable signing requirement"). Fail any
+// release-variant build up front instead of at install time. Debug builds
+// are unaffected.
+val missingReleaseSigning = !releaseSigningAvailable
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    doFirst {
+        if (missingReleaseSigning) {
+            throw GradleException(
+                "Release signing is not configured: set ANDROID_KEYSTORE_FILE, " +
+                    "ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD.",
+            )
+        }
     }
 }
 

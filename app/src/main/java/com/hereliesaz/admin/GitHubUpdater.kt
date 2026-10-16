@@ -78,12 +78,19 @@ class GitHubUpdater(private val context: Context) {
             conn.disconnect()
         }
 
-        update.assetDigest?.let { expected ->
-            val actual = "sha256:" + sha256(file)
-            if (!actual.equals(expected, ignoreCase = true)) {
-                file.delete()
-                error("Downloaded APK digest does not match GitHub's release digest.")
-            }
+        // Refuse to install without an integrity check: an asset with no
+        // GitHub-supplied sha256 digest can't be verified against what the
+        // release actually published, so treat it as untrusted rather than
+        // silently skipping the check.
+        val expected = update.assetDigest
+        if (expected == null) {
+            file.delete()
+            error("Release asset has no SHA-256 digest from GitHub; refusing to install an unverifiable APK.")
+        }
+        val actual = "sha256:" + sha256(file)
+        if (!actual.equals(expected, ignoreCase = true)) {
+            file.delete()
+            error("Downloaded APK digest does not match GitHub's release digest.")
         }
 
         validatePackageAndSignature(file)
