@@ -44,10 +44,10 @@ function BackgroundSweep() {
   // literal in JSX has no .set()/.copy(), so react-three-fiber's applyProps
   // falls through to `currentInstance.uniforms = value` on every re-render —
   // wholesale REPLACING the uniforms object, including whatever this
-  // component's own useFrame just wrote into it. Scene re-renders on every
-  // updateFrame() (i.e. continuously during scroll), which was silently
-  // stomping uLevel back to its initial 0 almost every frame — the sweep
-  // was computing correctly and never reaching the screen. A stable,
+  // component's own useFrame just wrote into it. Scene re-renders whenever
+  // currentSegmentIndex changes (each segment boundary crossed while
+  // scrolling) plus on graph/cluster updates — a uniforms literal would be
+  // stomped back to its initial 0 on every one of those. A stable,
   // useMemo'd material sidesteps prop-diffing entirely: the mutation below
   // is the only thing that ever touches uLevel.
   const material = useMemo(() => new THREE.ShaderMaterial({
@@ -160,12 +160,29 @@ export default function Scene() {
       })
       .catch(() => null);
 
+    // Probe that a fallback node's image actually exists before walking to
+    // it — a stale graph.json entry would otherwise mount as an invisible
+    // plane (TextureLoader error is swallowed) and leave a black segment.
+    const imageExists = (url) => new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
     const loadFromGraph = () => fetch('/graph.json')
       .then(r => (r.ok ? r.json() : null))
-      .then(g => {
+      .then(async g => {
         if (!g || !Array.isArray(g.nodes) || g.nodes.length === 0) return null;
-        const nodes = g.nodes.map(n => ({ ...n, image: "/assets/" + encodeURIComponent(n.image), theater: false }));
-        return { nodes, edges: Array.isArray(g.edges) ? g.edges : [] };
+        const candidates = g.nodes
+          .filter(n => typeof n.image === 'string' && n.image)
+          .map(n => ({ ...n, image: "/assets/" + encodeURIComponent(n.image), theater: false }));
+        const ok = await Promise.all(candidates.map(n => imageExists(n.image)));
+        const nodes = candidates.filter((_, i) => ok[i]);
+        if (nodes.length === 0) return null;
+        const ids = new Set(nodes.map(n => n.id));
+        const edges = (Array.isArray(g.edges) ? g.edges : [])
+          .filter(e => ids.has(e.source) && ids.has(e.target));
+        return { nodes, edges };
       })
       .catch(() => null);
 
@@ -231,10 +248,10 @@ export default function Scene() {
       <BackgroundSweep />
 
       <PerspectiveCamera makeDefault position={[0, 0, 0]} fov={CAMERA_FOV_DEG} near={0.01} />
-      
-      <ambientLight intensity={0.5} />
-      <pointLight position={[10, 10, 10]} intensity={1} />
-      
+
+      {/* No lights: every material in the scene is an unlit ShaderMaterial
+          or MeshBasicMaterial. */}
+
       {/* pages scales with the corpus (see `pages` above) so a full
           scroll can reach close to the whole graph, at PAGES_PER_SEGMENT
           pages per segment (see AnamorphicCam). Long per-segment scroll:

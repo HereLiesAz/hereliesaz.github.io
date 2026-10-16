@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import { NULL_DISTANCE, PAINTING_HEIGHT } from '../sceneConstants';
 import { applyHiddenBands } from '../utils/bandOverrides';
+import { prefersReducedMotion } from '../utils/reducedMotion';
 
 // Each painting group is positioned so its shared hinge point lands at a
 // world location marched forward down the pareidolia hinge chain (see
@@ -85,12 +86,73 @@ export function fetchTheaterMeta(id) {
 
 // ---- shaders ----------------------------------------------------------------
 
-// Shared vertex passthrough. All flats are unit planes scaled per-mesh.
+// Torn-paper vertex shader, shared by every flat. Each depth-band plane is
+// physically scattered and rotated while it is away from its null, so
+// between paintings the bands open into a real spatial cloud of scraps
+// instead of reading as one intact sheet from the camera's mostly head-on
+// view. uWipe is 1 exactly at the painting's resolved/null moment, so
+// chaos = 0 there and the original painting reconstructs perfectly; it
+// falls toward 0 while entering/leaving, which is when the scatter opens.
+//
+// The offsets are a pure function of uWipe — which is itself a function of
+// scroll position — so the shards are still stationary for a given camera
+// position; nothing animates on its own clock.
+//
+// uChaos scales the whole effect: 1 normally, 0 under prefers-reduced-motion
+// (see utils/reducedMotion.js), which leaves the flats as a plain parallax
+// stack with no rotation/drift.
 const flatVS = /* glsl */ `
 varying vec2 vUv;
+uniform float uBandMin;
+uniform float uBandMax;
+uniform float uWipe;
+uniform float uChaos;
+
+float bandHash(float n) {
+  return fract(sin(n * 9283.173 + 17.31) * 43758.5453123);
+}
+
+mat2 rot2(float a) {
+  float c = cos(a), s = sin(a);
+  return mat2(c, -s, s, c);
+}
+
 void main() {
   vUv = uv;
-  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+
+  float chaos = pow(clamp(1.0 - uWipe, 0.0, 1.0), 0.72) * uChaos;
+  float band = (uBandMin + uBandMax) * 0.5;
+
+  float r0 = bandHash(band + 0.11);
+  float r1 = bandHash(band + 1.73);
+  float r2 = bandHash(band + 3.91);
+  float r3 = bandHash(band + 7.17);
+  float r4 = bandHash(band + 11.53);
+
+  vec3 p = position;
+
+  // Give every depth slice a different torn-paper attitude. Rotation around
+  // Z is strongest because it visibly breaks the silhouette; X/Y tilt makes
+  // the pieces catch perspective as the camera threads through them.
+  float rz = (r0 * 2.0 - 1.0) * 0.62 * chaos;
+  p.xy = rot2(rz) * p.xy;
+
+  float rx = (r1 * 2.0 - 1.0) * 0.38 * chaos;
+  float ry = (r2 * 2.0 - 1.0) * 0.42 * chaos;
+  float cx = cos(rx), sx = sin(rx);
+  float cy = cos(ry), sy = sin(ry);
+  p.yz = mat2(cx, -sx, sx, cx) * p.yz;
+  p.xz = mat2(cy, sy, -sy, cy) * p.xz;
+
+  // Local x/y offsets are intentionally large: modelMatrix subsequently
+  // scales them by the painting's real plane dimensions, so the bands open
+  // into visibly separated scraps instead of a barely perceptible parallax
+  // stack. The z kick gives the camera something to fly between.
+  vec2 drift = vec2(r3 * 2.0 - 1.0, r4 * 2.0 - 1.0);
+  p.xy += drift * vec2(0.52, 0.42) * chaos;
+  p.z += (bandHash(band + 19.07) * 2.0 - 1.0) * 2.6 * chaos;
+
+  vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mvPosition;
 }
 `;
@@ -215,8 +277,10 @@ void main() {
   bool bandDiscard = false;
   if (uMode > 0.5 && uMode < 1.5) {
     float d = texture2D(uDepth, vUv).r;
-    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.05
-               + (vnoise(vUv * 320.0) - 0.5) * 0.012;
+    // Amplitudes tuned so the band edges read as fibrous torn paper
+    // rather than smooth topographic contours.
+    float tear = (vnoise(vUv * 48.0) - 0.5) * 0.095
+               + (vnoise(vUv * 320.0) - 0.5) * 0.026;
     // depth_bands_kmeans() pins the outermost band edges to exactly 0.0/1.0,
     // and depth is min-max normalized, so real pixels sit right at those
     // extremes. Without clamping, tear can push dj outside [0,1) for such a
@@ -258,7 +322,7 @@ void main() {
   // (no right-edge clip at coalescence) and uWipe=0 fully hides it — the
   // noise jitter + smoothstep band can't leak past either extreme.
   float wipeAt = mix(-0.1, 1.1, uWipe);
-  float wipeEdge = wipeAt + (vnoise(vUv * 40.0) - 0.5) * 0.06;
+  float wipeEdge = wipeAt + (vnoise(vUv * 40.0) - 0.5) * 0.13;
   float wipeGate = 1.0 - smoothstep(wipeEdge - 0.04, wipeEdge + 0.04, vUv.x);
   float op = uFade * wipeGate;
 
@@ -516,6 +580,8 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
         uPatchR:        { value: DEFAULT_PATCH_R },
         uReveal:        { value: 0 },
         uWipe:          { value: 1 },
+        // Torn-scatter strength (see flatVS): 0 under reduced motion.
+        uChaos:         { value: prefersReducedMotion() ? 0 : 1 },
         uBgLight:       { value: 0 },
         // A THREE.Color so we can convert the sampled sRGB paper colour into the
         // linear space the shader sees the (sRGB-decoded) painting texture in.
@@ -537,16 +603,25 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     const loader = new THREE.TextureLoader();
     const paintingUrl = `/data/theater/${encodeURIComponent(id)}.painting.webp`;
     const depthUrl    = `/data/theater/${encodeURIComponent(meta.depth.file || `${id}.depth.png`)}`;
-    Promise.all([
+    // allSettled, not all: if only ONE of the pair fails, Promise.all would
+    // reject and drop the other, already-decoded texture on the floor
+    // without ever disposing it.
+    Promise.allSettled([
       new Promise((res, rej) => loader.load(paintingUrl, res, undefined, rej)),
       new Promise((res, rej) => loader.load(depthUrl,    res, undefined, rej)),
-    ]).then(([painting, depth]) => {
+    ]).then(([pRes, dRes]) => {
+      const painting = pRes.status === 'fulfilled' ? pRes.value : null;
+      const depth    = dRes.status === 'fulfilled' ? dRes.value : null;
       // Mirrors the flatTex fallback loader's cancelled-branch dispose
       // above: a fast scroll can unmount this painting (Scene.jsx only
       // keeps a 3-segment window) while its full-res textures are still in
       // flight. Without disposing them here, a resolution arriving after
       // unmount decoded real GPU/CPU texture data that nothing ever frees.
-      if (cancelled) { painting.dispose(); depth.dispose(); return; }
+      if (cancelled || !painting || !depth) {
+        painting?.dispose();
+        depth?.dispose();
+        return;
+      }
       painting.colorSpace = THREE.SRGBColorSpace;
       painting.anisotropy = 4;
       depth.colorSpace = THREE.NoColorSpace;
@@ -736,6 +811,15 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
     // rotation and position). Cross-fade uses the local z.
     groupRef.current.worldToLocal(localCamPos.copy(camera.position));
 
+    // Fully faded → hide the whole group so its flats aren't even submitted
+    // for rasterisation (every fragment would only be discarded anyway).
+    // The incoming painting's fulcrum patch (role 2) shows independently of
+    // the wipe, so it keeps the group visible too.
+    groupRef.current.visible = flatMaterials.length > 0
+      ? (wipeReveal > 0 || role !== 0)
+      : fade > 0;
+
+    const chaosScale = prefersReducedMotion() ? 0 : 1;
     for (let i = 0; i < flatMaterials.length; i++) {
       const F = flats[i];
       const cross = Math.min(Math.abs(localCamPos.z - F.z) / CROSS_FADE, 1.0);
@@ -744,6 +828,7 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       // wipe. When the painting is dead (wipeReveal 0) nothing shows.
       U.uFade.value = cross;
       U.uWipe.value = wipeReveal;
+      U.uChaos.value = chaosScale;
       U.uRole.value = role;
       U.uReveal.value = reveal;
       if (patch) U.uPatchUv.value.set(patch[0], patch[1]);
