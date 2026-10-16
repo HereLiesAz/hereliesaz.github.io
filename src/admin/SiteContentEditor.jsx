@@ -1,15 +1,7 @@
 import { useEffect, useState } from 'react';
 import { loadSiteContent, saveSiteContent } from './data.js';
+import { DEFAULT_SITE_CONTENT, safeHref } from '../siteContent';
 
-const DEFAULT = {
-  about: 'The canvas is a closet. The paint is light. You navigate the dark by following what your eye almost-recognises.',
-  menuLinks: [
-    { label: 'github', href: 'https://github.com/HereLiesAz', external: true },
-    { label: 'instagram', href: 'https://instagram.com/hereliesaz', external: true },
-    { label: 'email', href: 'mailto:hereliesaz@gmail.com', external: false },
-    { label: 'projects', href: '/projects', external: false },
-  ],
-};
 
 /** Edits public/site-content.json — currently just the about paragraph
  * and the menu's link list (see src/components/Overlay.jsx). Intentionally
@@ -20,7 +12,13 @@ export default function SiteContentEditor() {
   const [status, setStatus] = useState(null); // null | 'saving' | 'saved' | { error }
 
   useEffect(() => {
-    loadSiteContent().then(c => setContent(c || DEFAULT)).catch(() => setContent(DEFAULT));
+    // Guard a file that parses but lacks menuLinks (or has a non-array
+    // there) — every render below maps over it.
+    const normalize = (c) => (c && typeof c === 'object'
+      ? { about: typeof c.about === 'string' ? c.about : DEFAULT_SITE_CONTENT.about,
+          menuLinks: Array.isArray(c.menuLinks) ? c.menuLinks : [] }
+      : DEFAULT_SITE_CONTENT);
+    loadSiteContent().then(c => setContent(normalize(c))).catch(() => setContent(DEFAULT_SITE_CONTENT));
   }, []);
 
   if (!content) return <div className="admin-panel"><p>loading…</p></div>;
@@ -33,7 +31,13 @@ export default function SiteContentEditor() {
   const addLink = () => setContent({ ...content, menuLinks: [...content.menuLinks, { label: '', href: '', external: true }] });
   const removeLink = (i) => setContent({ ...content, menuLinks: content.menuLinks.filter((_, j) => j !== i) });
 
+  const badLinks = content.menuLinks.filter(l => !safeHref(l.href));
+
   const save = async () => {
+    if (badLinks.length > 0) {
+      setStatus({ error: `Links must start with https://, http://, mailto: or / — fix: ${badLinks.map(l => l.label || l.href || '(blank)').join(', ')}` });
+      return;
+    }
     setStatus('saving');
     try {
       await saveSiteContent(content);

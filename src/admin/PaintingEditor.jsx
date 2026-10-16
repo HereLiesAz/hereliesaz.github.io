@@ -91,7 +91,10 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
     <div className="admin-panel">
       <div className="admin-row admin-row--between">
         <h2 style={{ wordBreak: 'break-all' }}>{id}</h2>
-        <button type="button" onClick={onClose} className="admin-btn-plain">close</button>
+        {/* Disabled mid-removal: closing would unmount this panel while
+            removePainting() is still awaiting the queued dispatch, losing
+            its success/failure report. */}
+        <button type="button" onClick={onClose} className="admin-btn-plain" disabled={status === 'removing'}>close</button>
       </div>
       <img src={`/data/theater/${encodeURIComponent(id)}.painting.webp`} alt="" className="admin-thumb-large" />
 
