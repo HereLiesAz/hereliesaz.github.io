@@ -1,5 +1,17 @@
+// Verifies that every node in public/graph.json (the legacy flat-image
+// fallback Scene.jsx loads when there is no theater bake) points at an image
+// that actually exists in public/assets/.
+//
+//   node scripts/verify-assets.cjs         check only; exit 1 on any missing
+//                                          image (run by `npm run verify`/CI)
+//   node scripts/verify-assets.cjs --fix   rewrite public/graph.json: remap
+//                                          each node to an existing id+ext,
+//                                          drop nodes with no file, and
+//                                          bridge edges around dropped nodes
 const fs = require('fs');
 const path = require('path');
+
+const FIX = process.argv.includes('--fix');
 
 const graphPath = path.join(__dirname, '../public/graph.json');
 const assetsDir = path.join(__dirname, '../public/assets');
@@ -38,6 +50,18 @@ graph.nodes.forEach(node => {
 });
 
 console.log('--- ASSET VERIFICATION ---');
+
+if (!FIX) {
+    const broken = graph.nodes.filter(n => !n.image || !assets.includes(n.image));
+    if (broken.length > 0) {
+        console.error(`public/graph.json: ${broken.length}/${graph.nodes.length} node image(s) missing from public/assets/:`);
+        broken.forEach(n => console.error(`- ${n.id}: ${n.image}`));
+        console.error('Run `node scripts/verify-assets.cjs --fix` to regenerate the fallback graph from files on disk.');
+        process.exit(1);
+    }
+    console.log(`- All ${graph.nodes.length} fallback graph images present.`);
+    process.exit(0);
+}
 
 // 1. Filter out missing nodes and Mapper Extensions
 const originalNodesCount = graph.nodes.length;

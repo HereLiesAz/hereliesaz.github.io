@@ -1,10 +1,64 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import { readdirSync, rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+// Vite copies public/ into dist/ wholesale, with no filter. Some of what
+// lives under public/ is source material that must stay on disk (scripts
+// read it) but must never be deployed:
+//   - public/assets/raw/   ~1 GB of uncropped originals, input to the bake
+//                          scripts (scripts/theater_baker.py etc.) only
+//   - *.HEIC anywhere      browsers can't display it; only the bake reads it
+//   - loose images directly in public/data/ (not in a subfolder) — strays;
+//                          the runtime only fetches JSON/bakes from there
+// This prunes them from dist/ after the copy. It deletes from the BUILD
+// OUTPUT only, never from public/.
+const SHIP_EXCLUDE_DIRS = ['assets/raw'];
+const HEIC_RE = /\.hei[cf]$/i;
+const LOOSE_DATA_IMAGE_RE = /\.(jpe?g|png|webp|tiff?|hei[cf])$/i;
+
+function walk(dir, visit) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) walk(p, visit);
+    else visit(p, e.name);
+  }
+}
+
+function excludeSourceMaterial() {
+  let outDir = 'dist';
+  return {
+    name: 'exclude-source-material',
+    apply: 'build',
+    configResolved(config) { outDir = resolve(config.root, config.build.outDir); },
+    // writeBundle runs after Vite's public/ copy, and before
+    // vite-plugin-pwa scans dist/ for its precache manifest in closeBundle.
+    writeBundle() {
+      let removed = 0;
+      for (const rel of SHIP_EXCLUDE_DIRS) {
+        rmSync(join(outDir, rel), { recursive: true, force: true });
+      }
+      walk(outDir, (p, name) => {
+        if (HEIC_RE.test(name)) { rmSync(p, { force: true }); removed++; }
+      });
+      const dataDir = join(outDir, 'data');
+      let dataEntries = [];
+      try { dataEntries = readdirSync(dataDir, { withFileTypes: true }); } catch { /* no data dir */ }
+      for (const e of dataEntries) {
+        if (e.isFile() && LOOSE_DATA_IMAGE_RE.test(e.name)) { rmSync(join(dataDir, e.name), { force: true }); removed++; }
+      }
+      this.info?.(`pruned ${SHIP_EXCLUDE_DIRS.join(', ')} and ${removed} source image(s) from ${outDir}`);
+    },
+  };
+}
 
 export default defineConfig({
   plugins: [
     react(),
+    excludeSourceMaterial(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'pwa-icon-512.png'],
