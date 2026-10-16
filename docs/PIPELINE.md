@@ -161,7 +161,7 @@ Recognized representation keys are:
 
 The deploy workflow runs `scripts/test_integrate_painting_bakes.py` before generating real sidecars.
 
-Runtime code can use `src/utils/paintingBake.js` to load the canonical manifest/records, enumerate variants, inspect transition graphs, or choose a preferred representation without changing the existing theater renderer.
+These records are generated at deploy time only (never committed) and no runtime code reads them yet; the theater renderer uses `public/data/theater/` directly. See [`INTEGRATION.md`](./INTEGRATION.md#runtime-consumers).
 
 ## Supporting and maintenance tools
 

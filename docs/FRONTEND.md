@@ -26,8 +26,11 @@ src/
 ├── index.css                      global styles, reduced-motion media query
 ├── store/
 │   └── useStore.jsx                Zustand: graph, segments, hinge placement, walk logic
+├── siteContent.js                 menu fallback copy (DEFAULT_SITE_CONTENT) + href allowlist
 ├── utils/
-│   └── Logger.js                   console hijack + crash log ring buffer + GitHub issue URL
+│   ├── Logger.js                   console hijack + crash log ring buffer + GitHub issue URL (~6KB cap)
+│   ├── reducedMotion.js            cached, listener-backed prefers-reduced-motion
+│   └── bandOverrides.js            folds admin-hidden depth bands into neighbours
 ├── components/
 │   ├── JulesBoundary.jsx            top-level React error boundary
 │   ├── Scene.jsx                    <Canvas>, data loading, background sweep mesh
@@ -66,7 +69,8 @@ the one place that's specifically guarded against that.
 Owns the R3F `<Canvas>` and the top-level data-loading effect: fetches
 `/data/theater/_manifest.json` + `/data/theater/graph.theater.json`,
 falling back to the legacy `/graph.json` (flat textured planes, no depth
-bands) if the theater bake is missing, and setting a `loadError` string
+bands; nodes whose image fails to load are skipped) if the theater bake
+is missing, and setting a `loadError` string
 in the store if *both* sources come up empty. `pages` (drei
 `ScrollControls`' total scrollable length) scales with the loaded corpus
 size rather than a fixed constant, so a full scroll can reach close to
@@ -86,9 +90,14 @@ No physical scene geometry moves; every visible change is the camera.
 Reads drei's `useScroll()` offset, maps it onto `segments` from the
 store, and:
 
-- Samples a per-segment `CatmullRomCurve3` (cached per segment index, not
-  rebuilt every frame) for camera position, eased with a smootherstep
-  (or a gentler quadratic curve under `prefers-reduced-motion`).
+- Samples a per-segment `CatmullRomCurve3` (cached per segment index,
+  placement generation and reduced-motion state, not rebuilt every frame)
+  for camera position, eased with a smootherstep. Each segment carries two
+  routes built by `divePath` in `useStore.jsx`: `path` (the hinge dive with
+  its deviation amplified plus a lateral arc, clamped to stay in front of
+  the hinge) and `calmPath` (the plain dive). Under
+  `prefers-reduced-motion` it uses `calmPath` and a gentler quadratic
+  easing.
 - Blends the look-at target through 3 phases per `lookTarget()`: the
   outgoing painting's center → the shared hinge point → the incoming
   painting's center (skipping the hinge detour under reduced motion).
@@ -129,7 +138,21 @@ menu modal, and the `loadError` message. Bypasses React reconciliation
 for the per-frame caption-opacity and title-text writes (a raw
 `useStore.subscribe` callback writing straight to DOM refs) since those
 tick every animation frame and a full Overlay re-render at that rate
-would be wasteful.
+would be wasteful; each DOM property is only written when its value
+actually changes.
+
+Menu links come from `/site-content.json`, falling back to
+`DEFAULT_SITE_CONTENT` in `src/siteContent.js` (kept in sync with that
+file). Every `href` must pass `safeHref()`'s allowlist (`https:`,
+`http:`, `mailto:` or a site-root `/path`); anything else is not
+rendered. Only site-root paths use wouter's `<Link>` (and close the menu
+on click); `mailto:` and other same-tab links are plain `<a>`.
+
+Accessibility scaffolding lives in `App.jsx`: the gallery is a `<main>`
+landmark with a visually hidden `<h1>`, a skip link (first Tab stop,
+jumps to the signature/menu button), and the canvas container carries
+`role="img"`, an `aria-label` and a visually hidden description of the
+keyboard controls. The caption is `aria-live="polite"`.
 
 The menu modal has real dialog semantics: `role="dialog"`/`aria-modal`/
 `aria-labelledby`, focus moves to the close button on open and back to
@@ -187,7 +210,13 @@ add/remove paintings and edit their metadata, curate which depth bands a
 painting renders (`BandEditor.jsx`, writing `public/band-overrides.json`
 — see below), or edit `public/site-content.json` (the gallery menu's
 links/about text), all via direct browser calls to the Contents and
-Actions APIs (`github.js`) — no backend. Adding a painting commits the
+Actions APIs (`github.js`, always `cache: 'no-store'`) — no backend. A new
+token is verified before it is stored, so a bad paste never replaces a
+working one. The JSON files are read-modify-written; if one exists but
+fails to parse, loading and saving throw (only a missing file is treated
+as empty) so a corrupted file is never silently overwritten. Uploaded
+photos whose sanitized id collides with an existing painting or file are
+renamed `id-2`, `id-3`, …. Adding a painting commits the
 photo to `public/assets/` and dispatches `theater_bake.yml`; removing one
 deletes the source photo and dispatches `remove_painting.yml` (batched —
 see its own comments and `data.js`'s `flushRemovalQueue()` for why one

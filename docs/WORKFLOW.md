@@ -1,9 +1,12 @@
 # Developer Workflow
 
 This document describes the pipeline as it actually exists in this repo
-today — not an aspirational `assets/raw/` staging layout from an earlier
-plan. Source photos live in a single flat directory, `public/assets/`
-(1180+ files), with no raw/processed split; scripts read from it directly.
+today. Scripts read source photos from `public/assets/`. Each top-level
+entry there is a symlink into `public/assets/raw/`, which holds the actual
+full-resolution files; there is no separate raw/processed pipeline stage.
+`raw/` and the symlinked originals are pruned from the production build
+(see the "What ships" section of the root README) — they are bake inputs,
+not site content.
 
 There are two independent, live GitHub Actions pipelines that both write
 to the orphan `art-data` branch (`keep_files: true`, so they layer rather
@@ -142,5 +145,8 @@ npm run dev
 ```bash
 npm run build
 ```
-This generates the static site in `dist/`. Baked art data is fetched at
-runtime from the `art-data` branch rather than bundled into `dist/`.
+This generates the static site in `dist/`. In CI, `deploy.yml` first checks
+out the `art-data` branch into `public/data/`, so the baked art data is
+copied into `dist/` and served from the same Pages origin. A local build
+only contains whatever is in your local `public/data/` (see `AGENTS.md`
+for linking an art-data worktree).
