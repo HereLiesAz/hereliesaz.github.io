@@ -69,11 +69,14 @@ const Gallery = () => {
   }, [ready, loadError]);
 
   useEffect(() => {
+    let hideTimer = null;
     const maxTimer = setTimeout(() => {
       setBootFading(true);
-      setTimeout(() => setBootVisible(false), BOOT_FADE_MS);
+      hideTimer = setTimeout(() => setBootVisible(false), BOOT_FADE_MS);
     }, BOOT_MAX_MS);
-    return () => clearTimeout(maxTimer);
+    // Clear BOTH timers: the inner hide timer can still be pending if the
+    // gallery unmounts (route change) inside the BOOT_FADE_MS window.
+    return () => { clearTimeout(maxTimer); clearTimeout(hideTimer); };
   }, []);
 
   // finding 2: no webglcontextlost/webglcontextrestored handling exists
@@ -118,7 +121,16 @@ const Gallery = () => {
   }, []);
 
   return (
-    <div style={{ width: '100%', height: '100%', background: '#000' }}>
+    <main
+      id="gallery"
+      tabIndex={-1}
+      style={{ width: '100%', height: '100%', background: '#000', outline: 'none' }}
+    >
+      {/* Skip link: the first Tab stop on the page. Jumps straight to the
+          menu (signature) button — the only interactive control the
+          gallery has — and announces how the canvas is driven. */}
+      <a className="skip-link" href="#ink-signature">skip to menu</a>
+      <h1 className="visually-hidden">HereLiesAz — paintings, in the dark</h1>
       <style>{`
         @keyframes jules-boot-pulse {
           0%, 100% { opacity: 0.25; }
@@ -132,10 +144,24 @@ const Gallery = () => {
         }
       `}</style>
 
-      {/* 3D Scene */}
-      <div ref={sceneContainerRef} style={{ width: '100%', height: '100%' }}>
+      {/* 3D Scene. The WebGL canvas has no inherent text alternative, so
+          the container carries one (role="img" + label) and a visually
+          hidden description of how to navigate it. */}
+      <div
+        ref={sceneContainerRef}
+        role="img"
+        aria-label="An endless scroll-driven flythrough of HereLiesAz paintings, each torn into depth layers that reassemble as you arrive."
+        aria-describedby="gallery-instructions"
+        style={{ width: '100%', height: '100%' }}
+      >
         <Scene />
       </div>
+      <p id="gallery-instructions" className="visually-hidden">
+        Scroll, or use the arrow, Page Up/Down, Home and End keys, to travel
+        between paintings. The current painting's title is announced at the
+        bottom of the screen; open the menu from the signature for contact
+        links and projects.
+      </p>
 
       {/* Loading Screen: drei's texture-load progress bar, restyled from
           its default full-screen opaque block into a small, non-blocking
@@ -238,7 +264,7 @@ const Gallery = () => {
 
       {/* UI Overlay */}
       <Overlay />
-    </div>
+    </main>
   );
 };
 

@@ -8,10 +8,10 @@ Native outputs remain authoritative. Integration is additive: no native artifact
 
 `scripts/integrate_painting_bakes.py` discovers the artifacts present in the deploy checkout and writes:
 
-```text
+~~~text
 public/data/integrated/_manifest.json
 public/data/integrated/{id}.painting-bake.json
-```
+~~~
 
 The machine-readable contract is `schemas/painting-bake.schema.json`.
 
@@ -84,26 +84,16 @@ This keeps both provenance and semantics intact for future combination logic.
 
 `.github/workflows/deploy.yml` performs integration after checking out `art-data` and before the Vite build:
 
-1. run `python3 -m unittest scripts/test_integrate_painting_bakes.py`;
-2. run `python3 scripts/integrate_painting_bakes.py --public-root public` against the real staged data;
-3. continue existing asset verification and Vite build/deploy.
+1. `rm -rf public/data/integrated` — any existing sidecars are deleted;
+2. run `python3 scripts/integrate_painting_bakes.py --public-root public --strict` against the real staged data;
+3. run `python3 scripts/validate_integrated_records.py --public-root public` against the schema;
+4. run `npm run verify` (which includes `python3 -m unittest scripts/test_integrate_painting_bakes.py`, the legacy asset check, and the Vite build) and deploy.
 
-This means sidecars always describe the exact artifact set being deployed and cannot become a separately maintained stale database.
+The sidecars are never committed. They always describe the exact artifact set being deployed and cannot become a separately maintained stale database. They ship with the site as static JSON under `/data/integrated/`.
 
-## Runtime API
+## Runtime consumers
 
-`src/utils/paintingBake.js` provides:
-
-- `loadPaintingBakeManifest()`;
-- `loadPaintingBake(id)`;
-- `representationVariants(record, key)`;
-- `hasRepresentation(record, key)`;
-- `availableRepresentations(record)`;
-- `transitionEdges(record, graphKey)`;
-- `preferredRepresentation(record, preference)`;
-- `clearPaintingBakeCache()`.
-
-The helper understands direct representations and variant collections. The current Paper Theater renderer is intentionally unchanged; alternate renderers can now discover all available data through one stable API instead of knowing every native path convention.
+None yet. The shipped Paper Theater renderer reads `public/data/theater/` directly and does not load the integrated records. An earlier helper, `src/utils/paintingBake.js`, exposed a discovery API over `/data/integrated/` but was never imported by any component; it was removed as dead code. A future renderer that wants another representation should fetch `/data/integrated/_manifest.json` and `/data/integrated/{id}.painting-bake.json` itself (or reintroduce a loader alongside its first real caller).
 
 ## Repairs made as part of integration
 
@@ -122,6 +112,6 @@ Removal requires an explicit decision that the capability is no longer wanted.
 
 ## Completion state
 
-The cross-pipeline integration layer is implemented: schema, discovery builder, variant preservation, Curator support, transition preservation, fixture tests, deploy-time generation, runtime loader, and repaired known path/runtime defects are all present on `main`.
+The cross-pipeline integration layer is implemented: schema, discovery builder, variant preservation, Curator support, transition preservation, fixture tests, deploy-time generation and validation, and repaired known path/runtime defects are all present on `main`. There is no runtime loader yet (see above).
 
 Future work can change how the gallery **combines or renders** these representations, but it no longer needs to invent another discovery/data-contract layer first.

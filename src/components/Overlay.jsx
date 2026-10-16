@@ -2,20 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import useStore from '../store/useStore';
 import { bgSweepLevel } from './TheaterPainting';
+import { DEFAULT_SITE_CONTENT, safeHref, isInternalPath } from '../siteContent';
 
-// Fallback matches /public/site-content.json exactly, so a missing or
-// malformed fetch (offline, 404 on a stale deploy) never blanks the menu
-// — it just silently keeps whatever shipped in this bundle. Edited via
-// the /admin app's "Site" tab, not by hand.
-const DEFAULT_SITE_CONTENT = {
-  about: 'The canvas is a closet. The paint is light. You navigate the dark by following what your eye almost-recognises.',
-  menuLinks: [
-    { label: 'github', href: 'https://github.com/HereLiesAz', external: true },
-    { label: 'instagram', href: 'https://instagram.com/hereliesaz', external: true },
-    { label: 'email', href: 'mailto:hereliesaz@gmail.com', external: false },
-    { label: 'projects', href: '/projects', external: false },
-  ],
-};
+// DEFAULT_SITE_CONTENT (the bundled fallback for /site-content.json) and
+// the link allowlist live in src/siteContent.js, shared with /admin.
 
 /**
  * The thin ink layer over the closet — see AESTHETIC §3, §6.
@@ -303,6 +293,9 @@ const Overlay = () => {
   const titleRef   = useRef(null);
   const priceRef   = useRef(null);
   const lastIdRef  = useRef(null);
+  const lastScrimRef      = useRef(null);
+  const lastOpacityRef    = useRef(null);
+  const lastVisibilityRef = useRef(null);
 
   useEffect(() => {
     const apply = (state) => {
@@ -312,9 +305,14 @@ const Overlay = () => {
               || start?.id || end?.id || null;
       // |cos(πr)| → 1 at the nulls, 0 at the mid-segment trough.
       const opacity = id ? Math.abs(Math.cos(state.transitionProgress * Math.PI)) : 0;
-      if (captionRef.current) {
+      if (captionRef.current && opacity !== lastOpacityRef.current) {
         captionRef.current.style.opacity = String(opacity);
-        captionRef.current.style.visibility = id ? 'visible' : 'hidden';
+        lastOpacityRef.current = opacity;
+      }
+      const visibility = id ? 'visible' : 'hidden';
+      if (captionRef.current && visibility !== lastVisibilityRef.current) {
+        captionRef.current.style.visibility = visibility;
+        lastVisibilityRef.current = visibility;
       }
       if (id !== lastIdRef.current) {
         const info = id ? state.meta?.[id] : null;
@@ -340,8 +338,12 @@ const Overlay = () => {
       // even against a fully white swept background, without going fully
       // opaque (the ink aesthetic elsewhere is deliberately translucent —
       // see .ink-modal-backdrop's 0.86).
-      if (overlayRef.current) {
-        overlayRef.current.style.setProperty('--ink-scrim', String(Math.min(0.78, bgSweepLevel())));
+      // Only touch the DOM when the value actually changes — this fires on
+      // every store update, and most of those leave the sweep untouched.
+      const scrim = Math.min(0.78, bgSweepLevel());
+      if (overlayRef.current && scrim !== lastScrimRef.current) {
+        overlayRef.current.style.setProperty('--ink-scrim', String(scrim));
+        lastScrimRef.current = scrim;
       }
     };
     apply(useStore.getState());
@@ -383,6 +385,7 @@ const Overlay = () => {
         type="button"
         className="ink-signature"
         onClick={toggleMenu}
+        id="ink-signature"
         aria-label="open menu"
         ref={signatureRef}
         // Excluded from the tab order while the modal is open, rather than
@@ -397,7 +400,7 @@ const Overlay = () => {
         </svg>
       </button>
 
-      <div ref={captionRef} className="ink-caption">
+      <div ref={captionRef} className="ink-caption" aria-live="polite">
         <div ref={titleRef} className="ink-caption__title" />
         <div ref={priceRef} className="ink-caption__price" />
       </div>
@@ -421,13 +424,25 @@ const Overlay = () => {
             <h2 id="ink-modal-title">here lies az</h2>
             <p>{siteContent.about}</p>
             <ul>
-              {siteContent.menuLinks.map(link => (
-                <li key={link.href}>
-                  {link.external
-                    ? <a href={link.href} target="_blank" rel="noreferrer noopener">{link.label}</a>
-                    : <Link href={link.href}>{link.label}</Link>}
-                </li>
-              ))}
+              {siteContent.menuLinks.map(link => {
+                // Drop anything outside the scheme allowlist (javascript:,
+                // data:, //host …) rather than render it.
+                const href = safeHref(link.href);
+                if (!href) return null;
+                return (
+                  <li key={href}>
+                    {link.external
+                      ? <a href={href} target="_blank" rel="noreferrer noopener">{link.label}</a>
+                      : isInternalPath(href)
+                        // Client-side route: close the menu as we navigate,
+                        // otherwise it stays open over the new page.
+                        ? <Link href={href} onClick={() => { if (useStore.getState().showMenu) toggleMenu(); }}>{link.label}</Link>
+                        // Same-tab, but not a router path (mailto: etc.) —
+                        // a plain anchor, never wouter's Link.
+                        : <a href={href}>{link.label}</a>}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         </div>

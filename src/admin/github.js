@@ -31,11 +31,19 @@ class GitHubApiError extends Error {
 }
 
 async function api(path, options = {}) {
-  const token = getToken();
+  // `options.token` lets verifyToken() test a candidate token WITHOUT
+  // persisting it first (see TokenSetup.jsx).
+  const { token: tokenOverride, ...fetchOptions } = options;
+  options = fetchOptions;
+  const token = tokenOverride || getToken();
   if (!token) throw new GitHubApiError('No GitHub token set — open Settings first.', 401);
   let res;
   try {
     res = await fetch(`https://api.github.com${path}`, {
+      // Never serve a cached response: getFile()'s sha must be current or
+      // the next PUT fails with a 409, and workflow-run polling must see
+      // fresh status.
+      cache: 'no-store',
       ...options,
       headers: {
         Accept: 'application/vnd.github+json',
@@ -155,12 +163,15 @@ export async function listWorkflowRuns(workflowFile, perPage = 5) {
  * This can only confirm Actions *read* access (listing workflows needs
  * nothing more), not write — verifying dispatch itself would mean
  * actually triggering a workflow just to check, which this deliberately
- * doesn't do. */
-export async function verifyToken() {
-  const data = await api(`/repos/${OWNER}/${REPO}`);
+ * doesn't do.
+ *
+ * `token` (optional) verifies a candidate token without storing it;
+ * omitted, the stored token is checked. */
+export async function verifyToken(token) {
+  const data = await api(`/repos/${OWNER}/${REPO}`, { token });
   let actionsOk = true;
   try {
-    await api(`/repos/${OWNER}/${REPO}/actions/workflows`);
+    await api(`/repos/${OWNER}/${REPO}/actions/workflows`, { token });
   } catch (e) {
     if (e.status === 403 || e.status === 404) actionsOk = false;
     else throw e;

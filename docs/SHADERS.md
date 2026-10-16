@@ -32,26 +32,40 @@ bands), sharing the same `flatVS`/`flatFS` pair.
 
 ### Vertex shader (`flatVS`)
 
-A plain passthrough — every flat is a unit `PlaneGeometry` scaled per-mesh
-in JS (`F.planeWidth * fitScale * F.scale`, computed in
-`TheaterPainting.jsx`), not in the shader:
+Every flat is a unit `PlaneGeometry` scaled per-mesh in JS
+(`F.planeWidth * fitScale * F.scale`, computed in `TheaterPainting.jsx`).
+The vertex shader adds the **torn-paper scatter**: away from its null,
+each depth-band plane is rotated (Z strongest, small X/Y tilt), drifted
+in x/y and kicked in z by amounts hashed from its band centre, so between
+paintings the bands open into a real cloud of scraps the camera flies
+through:
 
-```glsl
-varying vec2 vUv;
-void main() {
-  vUv = uv;
-  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * mvPosition;
-}
-```
+~~~glsl
+float chaos = pow(clamp(1.0 - uWipe, 0.0, 1.0), 0.72) * uChaos;
+// rotate p.xy by ±0.62·chaos, tilt yz/xz by ±0.38/0.42·chaos,
+// p.xy += drift · (0.52, 0.42) · chaos;  p.z += ±2.6 · chaos
+~~~
+
+- `uWipe` is 1 exactly at the painting's null, so `chaos` is 0 there and
+  the painting reassembles pixel-exact; the scatter is a pure function of
+  the scroll-driven wipe, never of time — the shards are stationary for
+  any given camera position.
+- `uChaos` is 1 normally and 0 under `prefers-reduced-motion` (read from
+  the cached `src/utils/reducedMotion.js`, no per-frame `matchMedia`), which
+  leaves a plain parallax stack.
+
+This used to be injected at runtime by monkey-patching
+`THREE.ShaderMaterial.prototype.setValues` (`src/utils/theaterMotionPatch.js`,
+matched on uniform names); it now lives directly in `TheaterPainting.jsx`.
 
 ### Fragment shader (`flatFS`)
 
 Per flat, in order:
 
 1. **Depth-band cutout.** Sample `uDepth` at `vUv`, jitter it by two
-   stacked value-noise terms — a coarse `vnoise(vUv * 48.0)` for the big
-   organic tears and a finer `vnoise(vUv * 320.0)` for paper-fiber grain —
+   stacked value-noise terms — a coarse `vnoise(vUv * 48.0)` (amplitude
+   0.095) for the big organic tears and a finer `vnoise(vUv * 320.0)`
+   (0.026) for paper-fiber grain —
    so the band boundary reads as a torn-paper edge instead of a razor
    line, and discard if the jittered depth falls outside
    `[uBandMin, uBandMax)`.

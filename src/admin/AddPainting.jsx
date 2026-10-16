@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { dispatchWorkflow, fileToBase64, putFile } from './github.js';
+import { dispatchWorkflow, fileToBase64, getFile, putFile } from './github.js';
+import { listBakedPaintings } from './data.js';
 
 /** Derives both the painting id and the filename actually uploaded from a
  * picked file's name. The id gets spliced into a comma-joined batch
@@ -18,6 +19,25 @@ function sanitizeIdAndFilename(name) {
   return { id, filename: `${id}${ext}` };
 }
 
+/** Returns a {id, filename} that collides with neither an already-baked
+ * painting, an existing source file on main, nor another file earlier in
+ * this same batch. Sanitizing can map distinct names onto one id
+ * ("a b.jpg" and "a_b.jpg"), and re-uploading a photo whose name matches an
+ * existing painting would otherwise hit putFile without a sha (rejected) or,
+ * worse, re-bake over an unrelated painting's id. Disambiguates with a
+ * numeric suffix: id-2, id-3, … */
+async function uniqueIdAndFilename(name, taken) {
+  const { id: baseId, filename: baseName } = sanitizeIdAndFilename(name);
+  const ext = baseName.slice(baseId.length);
+  for (let n = 1; ; n++) {
+    const id = n === 1 ? baseId : `${baseId}-${n}`;
+    const filename = `${id}${ext}`;
+    if (taken.has(id)) continue;
+    if (await getFile(`public/assets/${filename}`)) continue;
+    return { id, filename };
+  }
+}
+
 /** Uploads raw photo(s) to public/assets/ and dispatches theater_bake.yml
  * for exactly the new id(s) — the existing pipeline (crop → photorealize
  * → depth → hinge graph → validate → publish) does the rest, unchanged
@@ -25,7 +45,7 @@ function sanitizeIdAndFilename(name) {
  * .github/workflows/theater_bake.yml. */
 export default function AddPainting() {
   const [files, setFiles] = useState([]);
-  const [status, setStatus] = useState(null); // null | 'uploading' | 'baking' | 'done' | { error }
+  const [status, setStatus] = useState(null); // null | 'uploading' | 'baking' | { done, renamed } | { error }
   const [dispatchedIds, setDispatchedIds] = useState([]);
 
   const run = async () => {
@@ -34,6 +54,14 @@ export default function AddPainting() {
     const uploaded = [];
     const remaining = [...files];
     let uploadError = null;
+    let taken;
+    try {
+      taken = new Set(await listBakedPaintings());
+    } catch (e) {
+      setStatus({ error: `Could not load the existing painting list to check for id collisions: ${e.message}` });
+      return;
+    }
+    const renamed = [];
 
     // Sequential, not Promise.all: each successfully-uploaded file is a
     // real, non-rollback-able commit to main. On a failure partway
@@ -44,8 +72,10 @@ export default function AddPainting() {
     // API rejects).
     while (remaining.length > 0) {
       const file = remaining[0];
-      const { id, filename } = sanitizeIdAndFilename(file.name);
       try {
+        const { id, filename } = await uniqueIdAndFilename(file.name, taken);
+        if (id !== sanitizeIdAndFilename(file.name).id) renamed.push(`${file.name} → ${id}`);
+        taken.add(id);
         const b64 = await fileToBase64(file);
         await putFile(`public/assets/${filename}`, b64, `admin: add painting ${id}`);
         uploaded.push(id);
@@ -73,7 +103,7 @@ export default function AddPainting() {
         error: `${uploaded.length ? `Uploaded and dispatched ${uploaded.join(', ')}, but stopped` : 'Stopped'} after a failure: ${uploadError.message}. ${remaining.length} file(s) left in the picker — fix the issue and click upload again.`,
       });
     } else {
-      setStatus('done');
+      setStatus({ done: true, renamed });
     }
   };
 
@@ -99,9 +129,10 @@ export default function AddPainting() {
           {status === 'uploading' ? 'uploading…' : status === 'baking' ? 'dispatching bake…' : `upload ${files.length || ''}`.trim()}
         </button>
       </div>
-      {status === 'done' && (
+      {status?.done && (
         <p className="admin-ok" role="status" aria-live="polite">
           Uploaded and dispatched: {dispatchedIds.join(', ')}.{' '}
+          {status.renamed.length > 0 && <>Renamed to avoid an id collision: {status.renamed.join('; ')}.{' '}</>}
           <a href={`https://github.com/HereLiesAz/hereliesaz.github.io/actions/workflows/theater_bake.yml`} target="_blank" rel="noreferrer noopener">
             watch the bake run
           </a>.

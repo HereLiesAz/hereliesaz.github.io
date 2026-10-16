@@ -10,15 +10,18 @@ export default function TokenSetup({ onVerified }) {
 
   const save = async () => {
     setStatus('checking');
-    setToken(value.trim());
+    const candidate = value.trim();
+    // Verify the candidate BEFORE persisting it: a typo'd or under-scoped
+    // token must not replace a previously working one in localStorage.
     try {
-      const info = await verifyToken();
+      const info = await verifyToken(candidate);
       const canWrite = !!info.permissions?.push;
       if (!canWrite) {
         setStatus({ error: `Token works but has no write access to this repo (logged in as ${info.login}). Check the token's repository permissions.` });
       } else if (!info.actionsOk) {
         setStatus({ error: `Token has Contents write access but no Actions permission (logged in as ${info.login}) — adding or removing a painting dispatches a workflow, which needs Actions: Read and write too. Edit the token's permissions on GitHub and try again.` });
       } else {
+        setToken(candidate);
         setStatus('ok');
         onVerified?.();
       }

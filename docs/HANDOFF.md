@@ -90,12 +90,12 @@ The repo has an additive integration contract:
 
 On deploy, after `art-data` is checked out, the integration directory is deleted and regenerated from the current native artifacts:
 
-```text
+~~~text
 public/data/integrated/_manifest.json
 public/data/integrated/{id}.painting-bake.json
-```
+~~~
 
-The generated records are validated against `schemas/painting-bake.schema.json` before the site is allowed to deploy. Rebuilding the directory from scratch prevents sidecars for removed paintings from surviving a newer artifact set.
+The generated records are validated against `schemas/painting-bake.schema.json` before the site is allowed to deploy. They are never committed, and no runtime code reads them yet (the former `src/utils/paintingBake.js` loader was never imported and was removed). Rebuilding the directory from scratch prevents sidecars for removed paintings from surviving a newer artifact set.
 
 These sidecars **reference** native outputs. They do not rewrite or replace them. A painting can simultaneously expose theater, stroke-cloud, unified-shard, perspective-shard, semantic-layer, and flat-image representations.
 
@@ -117,13 +117,13 @@ The deployment can also follow successful runs of:
 
 It checks out `art-data`, verifies usable theater data, regenerates and schema-validates canonical integration records, installs Node dependencies with `npm ci`, runs `npm run verify`, uploads `dist`, and deploys Pages.
 
-`npm run verify` is intentionally source-checkout friendly: it checks Python syntax, runs the integration builder unit tests, verifies asset/fallback-graph consistency, validates the Capacitor web output directory, and performs the production Vite build. Deploy-only canonical schema validation runs after `art-data` has been checked out and integration records have been generated.
+`npm run verify` is intentionally source-checkout friendly: it checks Python syntax, runs the integration builder unit tests, verifies asset/fallback-graph consistency (`public/graph.json` images must exist), and performs the production Vite build. Deploy-only canonical schema validation runs after `art-data` has been checked out and integration records have been generated.
 
 The theater producer still validates its own native output with `scripts/validate_output.py` before publishing.
 
-### Android / Capacitor
+### Android
 
-Capacitor now points to Vite's real `dist` output directory. Native Android workflows are retained, but ordinary website pushes do not run Android CI because this repository does not currently contain the Gradle wrapper/project required to build it. Android CI is manually invokable and fails with an explicit preflight message until a reproducible native project is checked in or generated.
+The only Android app is the native Kotlin admin client under `app/` (see [`ANDROID_ADMIN.md`](./ANDROID_ADMIN.md)). The unused Capacitor wrapper (`capacitor.config.json` and the `@capacitor/*` npm dependencies) was removed — nothing built or imported it. `gradlew` is a lightweight bootstrapper rather than the standard Gradle wrapper (see the comment at its top): it downloads a pinned, checksum-verified Gradle distribution and runs it, so `./gradlew assembleDebug` works locally.
 
 ## Known work to do
 
@@ -131,8 +131,7 @@ Capacitor now points to Vite's real `dist` output directory. Native Android work
 2. Make the canonical `/data/integrated/_manifest.json` and per-painting records a first-class runtime discovery surface where that improves the renderer; do not replace the current theater path merely for architectural neatness.
 3. Define combination rules rather than replacement rules: painterly shard boundaries, theater-quality depth, semantic tags/objects, and both transition-graph families can all contribute to one painting experience.
 4. Production-test the existing modal keyboard-focus behavior across current desktop/mobile browsers.
-5. Establish a reproducible native Android project lifecycle (checked-in project or deterministic Capacitor generation) before re-enabling automatic Android build/release triggers.
-6. Lock the heavyweight ML dependency stack only after a known-good end-to-end bake confirms a compatible set; do not pin it blind.
+5. Lock the heavyweight ML dependency stack only after a known-good end-to-end bake confirms a compatible set; do not pin it blind.
 7. Move multi-client painting-removal serialization out of ephemeral browser memory if removals need to be safe across simultaneous tabs/devices.
 8. Decide on a durable painting identity independent of filename stems before multiple same-stem source files become a practical collision risk.
 

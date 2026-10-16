@@ -51,7 +51,7 @@ There is no repository `GH_TOKEN` secret requirement and no fallback to `github.
 
 The Android app checks the repository's latest GitHub Release automatically at startup and also exposes a manual **check for updates** action in Settings.
 
-When a newer `admin-vX.Y.Z` release contains an APK asset, the app can download it, verify GitHub's SHA-256 digest when supplied, confirm the APK package name, confirm its Android signing certificate matches the installed app, confirm its version code is newer, and then hand it to Android's package installer.
+When a newer `admin-vX.Y.Z` release contains an APK asset, the app can download it, verify GitHub's SHA-256 asset digest (an asset without one is refused, never installed unverified), confirm the APK package name, confirm its Android signing certificate matches the installed app, confirm its version code is newer, and then hand it to Android's package installer.
 
 Android does not allow a normal third-party app to silently replace itself. On first use, Android may require enabling **Install unknown apps** for HereLiesAz Admin; after that, the system installer still presents the update confirmation.
 
@@ -63,6 +63,8 @@ Self-updates require all release APKs to use the same signing key. The GitHub re
 - `ANDROID_KEYSTORE_PASSWORD`
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
+
+The Gradle build enforces the same rule locally: any release-variant build (`assembleRelease`, `bundleRelease`, …) fails at `preReleaseBuild` unless `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` are set. Debug builds need none of them. R8 minification is intentionally off for release builds (see the comment in `app/build.gradle.kts`).
 
 These are Android signing material only. They are not GitHub publishing credentials. GitHub Release publishing remains controlled exclusively by the `gh_token` saved inside the Android app.
 

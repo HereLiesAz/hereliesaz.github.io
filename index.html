@@ -2,6 +2,14 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
+    <!-- Content-Security-Policy. The inline gtag bootstrap below is allowed
+         by its sha256 hash: if you edit that inline script AT ALL (even
+         whitespace), recompute the base64 SHA-256 of the exact text between
+         its opening and closing tags (the browser console's CSP error also
+         prints the expected hash) and update 'sha256-…' here. style-src needs 'unsafe-inline' for
+         React style props and the overlay's injected <style>. api.github.com
+         is for /admin and /projects. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-w/nDD/Abt7E7vshcsSTGpuh+pVtR9K9uMC7BskS5jrI=' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://www.googletagmanager.com https://*.google-analytics.com; font-src 'self' data:; connect-src 'self' https://api.github.com https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-QEVWXVQY66"></script>
     <script>
@@ -16,13 +24,20 @@
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#000000" />
     <meta name="description" content="HereLiesAz — paintings, in the dark." />
+    <link rel="canonical" href="https://hereliesaz.github.io/" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta property="og:title" content="HereLiesAz" />
     <meta property="og:description" content="HereLiesAz — paintings, in the dark." />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="/pwa-icon-512.png" />
-    <meta name="twitter:card" content="summary" />
+    <meta property="og:url" content="https://hereliesaz.github.io/" />
+    <meta property="og:image" content="https://hereliesaz.github.io/placeholder.jpg" />
+    <meta property="og:image:width" content="640" />
+    <meta property="og:image:height" content="640" />
+    <meta property="og:image:alt" content="A dark blue, near-black painted surface — HereLiesAz" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="HereLiesAz" />
     <meta name="twitter:description" content="HereLiesAz — paintings, in the dark." />
+    <meta name="twitter:image" content="https://hereliesaz.github.io/placeholder.jpg" />
     <title>HereLiesAz</title>
     <style>
         html, body, #root {
@@ -35,11 +50,11 @@
             overflow: hidden;
         }
 
-        /* Reduced-motion accommodation (partial): this only reaches the DOM
-           overlay layer — CSS cannot touch the WebGL canvas, so the
-           scroll-driven camera flythrough and shader wipes (owned by
-           AnamorphicCam.jsx / Scene.jsx) are unaffected by this rule. Full
-           support would need an easing change in AnamorphicCam.jsx. */
+        /* Reduced motion, DOM half: this only reaches the DOM overlay layer
+           — CSS cannot touch the WebGL canvas. The canvas half lives in
+           JS: AnamorphicCam.jsx switches to each segment's calm camera
+           route and TheaterPainting.jsx zeroes the shard scatter (see
+           src/utils/reducedMotion.js). */
         @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after {
                 animation-duration: 0.001ms !important;
@@ -51,6 +66,17 @@
     </style>
 </head>
 <body>
+    <noscript>
+        <div style="padding: 2rem; max-width: 36rem; font-family: Georgia, serif; line-height: 1.6;">
+            <h1 style="font-weight: 400; letter-spacing: 0.2em;">HereLiesAz</h1>
+            <p>Paintings, in the dark. This gallery is an endless, scroll-driven
+            3D flythrough of the paintings of HereLiesAz, and needs JavaScript
+            and WebGL to run.</p>
+            <p><a href="https://github.com/HereLiesAz" style="color: #f4f0e6;">GitHub</a> ·
+            <a href="https://instagram.com/hereliesaz" style="color: #f4f0e6;">Instagram</a> ·
+            <a href="mailto:hereliesaz@gmail.com" style="color: #f4f0e6;">hereliesaz@gmail.com</a></p>
+        </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
 </body>

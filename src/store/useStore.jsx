@@ -209,19 +209,60 @@ function nullOffsetLocal(id) {
 // into-and-through-the-shards moment. Because consecutive paintings
 // share that hinge point (and only that point) the camera passing
 // through it reads as one continuous move, not a cut.
-function divePath(start, end, hinge, samples = 11) {
+//
+// Returns BOTH routes over the same DIVE_SAMPLES control points:
+//   calm — the plain hinge dive. Used under prefers-reduced-motion.
+//   path — the dramatic route: the calm route's deviation from the
+//          straight null-to-null chord amplified ×DIVE_AMPLIFY, plus a
+//          transient lateral arc and vertical swell. Both are zero at
+//          t = 0 and t = 1, so the nulls (coalescence viewpoints) are
+//          bit-identical between the two routes.
+// The amplified route is clamped to stay at least FOCUS_CLEARANCE in front
+// of the hinge plane (along `normal`), so it never overshoots past the
+// focus point — otherwise AnamorphicCam's lookTarget (which aims at the
+// hinge mid-transit) would flip the gaze 180° as the camera crossed it.
+const DIVE_SAMPLES = 11;
+const DIVE_AMPLIFY = 1.65;
+const FOCUS_CLEARANCE = 1.5;
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const WORLD_X = new THREE.Vector3(1, 0, 0);
+function divePath(start, end, hinge, focus, normal) {
+  const calm = [];
   const path = [];
-  for (let i = 0; i < samples; i++) {
-    const t = i / (samples - 1);
+  const chord = end.clone().sub(start);
+  const chordLength = chord.length();
+  const side = new THREE.Vector3();
+  if (chordLength > 1e-4) {
+    side.crossVectors(chord.clone().normalize(), WORLD_UP);
+    if (side.lengthSq() < 1e-5) side.crossVectors(chord.clone().normalize(), WORLD_X);
+    side.normalize();
+  }
+  // Sign derived from the endpoints so adjacent moves don't all sweep the
+  // same screen direction; stable for a given segment.
+  const sign = Math.sin((start.x + start.z + end.y) * 0.73) < 0 ? -1 : 1;
+  for (let i = 0; i < DIVE_SAMPLES; i++) {
+    const t = i / (DIVE_SAMPLES - 1);
     // Straight null-to-null baseline.
     const base = start.clone().lerp(end, t);
     // Hump peaking at mid-segment pulls the path onto the hinge, so the
     // camera dives in and back out rather than sliding past.
     const hump = Math.sin(Math.PI * t);
     const pull = Math.pow(hump, 1.4);
-    path.push(base.lerp(hinge, pull));
+    const c = base.clone().lerp(hinge, pull);
+    calm.push(c);
+
+    const p = base.clone().addScaledVector(c.clone().sub(base), DIVE_AMPLIFY);
+    if (chordLength > 1e-4) {
+      p.addScaledVector(side, Math.min(5.0, chordLength * 0.16) * hump * sign);
+      p.y += Math.sin(Math.PI * 2.0 * t) * Math.min(1.8, chordLength * 0.045) * hump;
+    }
+    if (focus && normal && t > 0 && t < 1) {
+      const ahead = p.clone().sub(focus).dot(normal);
+      if (ahead < FOCUS_CLEARANCE) p.addScaledVector(normal, FOCUS_CLEARANCE - ahead);
+    }
+    path.push(i === 0 || i === DIVE_SAMPLES - 1 ? c.clone() : p);
   }
-  return path;
+  return { path, calm };
 }
 
 // Given the already-placed cluster A, a target id, and the edge connecting
@@ -291,10 +332,12 @@ function computeSegmentPlacement(current, tid, edge, nodes) {
   const startLook = aPosVec.clone();
   const endLook   = bPosVec.clone();
 
-  const path = divePath(startPoint, endPoint, diveTarget, 11);
+  const { path, calm } = divePath(startPoint, endPoint, diveTarget, focus, avgNormal);
 
   const newSegment = {
     path,
+    // Reduced-motion route over the same nulls (see divePath).
+    calmPath: calm,
     startId: current.id,
     endId: tid,
     focus,
@@ -321,7 +364,7 @@ const useStore = create((set, get) => ({
   edges: [],
 
   activeClusters: [],   // [{ id, position, rotation, quat, image }]
-  segments: [],         // [{ path, startId, endId, focus, startLook, endLook }]
+  segments: [],         // [{ path, calmPath, startId, endId, focus, startLook, endLook, ... }]
   history: [],
 
   currentNodeId: null,
@@ -477,8 +520,16 @@ const useStore = create((set, get) => ({
           || { source: current.id, target: forcedTid, s_uv: [0.5, 0.5], t_uv: [0.5, 0.5] };
       tid = forcedTid;
     }
-    // If setStartNode already picked an edge for A's outgoing hinge, use
-    // the same edge if possible (so the placement is consistent).
+    // Root-segment only (segments still empty, no forcedTid — i.e. the
+    // backward buffer was empty and setStartNode is building the very
+    // first forward segment): setStartNode anchored the root so the s_uv
+    // of one pickEdge() result (stored as hingeUvOut) sits at the world
+    // origin. Prefer an edge leaving from that same patch so the first
+    // hinge really is the origin. This is cosmetic, not a correctness
+    // requirement: if no such edge survives the recent-ids filter, the
+    // normal pick below still works, because computeSegmentPlacement
+    // derives the hinge from A's actual position (hingeWorld), never from
+    // an assumed origin.
     if (!edge && current.hingeUvOut && segments.length === 0) {
       const cand = edges.filter(e =>
         e.source === current.id &&

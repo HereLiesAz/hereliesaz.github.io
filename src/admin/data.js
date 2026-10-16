@@ -12,10 +12,23 @@ const META_PATH = 'public/meta.json';
 const SITE_PATH = 'public/site-content.json';
 const BAND_OVERRIDES_PATH = 'public/band-overrides.json';
 
+/** Parses a repo JSON file. A MISSING file (null) is a normal first-run
+ * case and yields `fallback`; a file that exists but doesn't parse throws.
+ * Never coerce a parse failure to {} here: every save path is a
+ * read-modify-write, so that would silently overwrite the whole corrupted
+ * file with just the one entry being edited. */
+function parseJsonFile(file, path, fallback) {
+  if (!file) return fallback;
+  try {
+    return JSON.parse(file.content);
+  } catch (e) {
+    throw new Error(`${path} exists but is not valid JSON (${e.message}) — fix it by hand on GitHub before editing it here, or this save would overwrite it.`);
+  }
+}
+
 export async function loadMeta() {
   const file = await getFile(META_PATH);
-  if (!file) return {};
-  try { return JSON.parse(file.content); } catch { return {}; }
+  return parseJsonFile(file, META_PATH, {});
 }
 
 /** entry === null deletes that id's metadata entirely. Always re-reads
@@ -23,8 +36,7 @@ export async function loadMeta() {
  * race on a stale sha. */
 export async function saveMetaEntry(id, entry) {
   const file = await getFile(META_PATH);
-  let meta = {};
-  try { meta = file ? JSON.parse(file.content) : {}; } catch { meta = {}; }
+  const meta = parseJsonFile(file, META_PATH, {});
   if (entry === null) delete meta[id];
   else meta[id] = entry;
   const body = JSON.stringify(meta, null, 2) + '\n';
@@ -33,8 +45,7 @@ export async function saveMetaEntry(id, entry) {
 
 export async function loadBandOverrides() {
   const file = await getFile(BAND_OVERRIDES_PATH);
-  if (!file) return {};
-  try { return JSON.parse(file.content); } catch { return {}; }
+  return parseJsonFile(file, BAND_OVERRIDES_PATH, {});
 }
 
 /** hidden === null (or empty) removes that id's override entirely — the
@@ -42,8 +53,7 @@ export async function loadBandOverrides() {
  * before this file had an entry for it. */
 export async function saveBandOverrideEntry(id, hidden) {
   const file = await getFile(BAND_OVERRIDES_PATH);
-  let overrides = {};
-  try { overrides = file ? JSON.parse(file.content) : {}; } catch { overrides = {}; }
+  const overrides = parseJsonFile(file, BAND_OVERRIDES_PATH, {});
   if (!hidden || hidden.length === 0) delete overrides[id];
   else overrides[id] = { hidden: [...hidden].sort((a, b) => a - b) };
   const body = JSON.stringify(overrides, null, 2) + '\n';
@@ -52,8 +62,7 @@ export async function saveBandOverrideEntry(id, hidden) {
 
 export async function loadSiteContent() {
   const file = await getFile(SITE_PATH);
-  if (!file) return null;
-  try { return JSON.parse(file.content); } catch { return null; }
+  return parseJsonFile(file, SITE_PATH, null);
 }
 
 export async function saveSiteContent(content) {
@@ -93,6 +102,10 @@ export async function fetchTheaterMeta(id) {
 // gets batched into a single `ids` dispatch instead of firing one per id.
 let pendingRemovalIds = [];
 let removalFlush = null;
+// Ids whose dispatch call actually succeeded. Lets each removePainting()
+// caller report its OWN id's outcome even when it shared a flush (and
+// therefore a thrown error) with other ids.
+const dispatchedRemovalIds = new Set();
 
 const REMOVAL_POLL_MS = 5000;
 // Generous — the workflow's own `timeout-minutes: 30` is the real ceiling.
@@ -121,6 +134,7 @@ function flushRemovalQueue() {
           const batch = pendingRemovalIds;
           pendingRemovalIds = [];
           await dispatchWorkflow('remove_painting.yml', { ids: batch.join(',') });
+          for (const id of batch) dispatchedRemovalIds.add(id);
           // Give GitHub a moment to actually register the new run as
           // queued/in_progress before re-checking — without this, the next
           // check could still see "nothing active" (the dispatch hasn't
@@ -154,7 +168,12 @@ export async function removePainting(id) {
   const errors = [];
 
   try {
-    const theaterMeta = await fetchTheaterMeta(id).catch(() => null);
+    // Only a 404 means "no baked record, so no known source photo" — skip
+    // quietly. Any other failure (network, 5xx, bad JSON) is a real error
+    // and must be reported, not misread as "nothing to delete".
+    const res = await fetch(`/data/theater/${encodeURIComponent(id)}.theater.json`, { cache: 'no-store' });
+    if (!res.ok && res.status !== 404) throw new Error(`could not read ${id}.theater.json (HTTP ${res.status})`);
+    const theaterMeta = res.ok ? await res.json() : null;
     const srcImage = theaterMeta?.src?.image;
     if (srcImage) {
       const path = `public/assets/${srcImage}`;
@@ -180,13 +199,22 @@ export async function removePainting(id) {
     errors.push(`band overrides: ${e.message}`);
   }
 
-  pendingRemovalIds.push(id);
+  dispatchedRemovalIds.delete(id);
+  if (!pendingRemovalIds.includes(id)) pendingRemovalIds.push(id);
   let dispatched = false;
   try {
     await flushRemovalQueue();
-    dispatched = true;
   } catch (e) {
-    errors.push(`removal workflow dispatch: ${e.message}`);
+    // The flush is shared: its error may come from a later batch or the
+    // post-dispatch wait, after THIS id already went out. Only report a
+    // dispatch failure for ids that really weren't dispatched.
+    if (!dispatchedRemovalIds.has(id)) errors.push(`removal workflow dispatch: ${e.message}`);
+  }
+  dispatched = dispatchedRemovalIds.has(id);
+  if (!dispatched) {
+    // Reported as failed to the user, so it must not ALSO go out silently
+    // with some later flush — drop it; a retry re-queues it.
+    pendingRemovalIds = pendingRemovalIds.filter(x => x !== id);
   }
 
   if (errors.length) {

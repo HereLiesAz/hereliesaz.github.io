@@ -2,7 +2,7 @@
 
 The project is a Vite + React + react-three-fiber gallery with **multiple intentional offline art-processing pipelines**. The shipped visual renderer currently uses the Paper Theater representation, but stroke-cloud, unified-shard, semantic-shard, semantic-layer, and flat-image representations remain first-class capabilities. A canonical integration layer indexes whatever representations exist for each painting without replacing their native files.
 
-For the creative brief see [`../AGENTS.md`](../AGENTS.md). For pipeline details see [`PIPELINE.md`](./PIPELINE.md); for the cross-pipeline contract see [`INTEGRATION.md`](./INTEGRATION.md).
+For the creative brief see [`AESTHETIC.md`](./AESTHETIC.md). For pipeline details see [`PIPELINE.md`](./PIPELINE.md); for the cross-pipeline contract see [`INTEGRATION.md`](./INTEGRATION.md).
 
 ## System map
 
@@ -22,8 +22,7 @@ graph TD
     SL --> AD
 
     AD --> INTEGRATE[integrate_painting_bakes.py]
-    INTEGRATE --> SIDE[public/data/integrated sidecars]
-    SIDE --> LOADER[src/utils/paintingBake.js]
+    INTEGRATE --> SIDE[public/data/integrated sidecars, deploy-time only]
 
     AD --> BUILD[Vite build]
     BUILD --> GALLERY[Current Paper Theater gallery]
@@ -61,11 +60,11 @@ The current browser renderer is Paper Theater. `scripts/theater_baker.py` produc
 
 ### Flat Image Fallback
 
-`public/graph.json` plus `public/assets/` remains a valid low-complexity representation/fallback. `scripts/verify-assets.cjs` repairs that graph in the ephemeral deploy checkout.
+`public/graph.json` plus `public/assets/` remains a valid low-complexity representation/fallback. `scripts/verify-assets.cjs` (run by `npm run verify`) fails if any node's image is missing from `public/assets/`; `node scripts/verify-assets.cjs --fix` regenerates the graph from files on disk. At runtime `Scene.jsx` also skips any fallback node whose image fails to load.
 
 ## Canonical integration boundary
 
-`scripts/integrate_painting_bakes.py` runs after `art-data` is checked out during deployment. It writes:
+`scripts/integrate_painting_bakes.py` runs after `art-data` is checked out during deployment. `deploy.yml` first deletes any existing `public/data/integrated/`, then regenerates it from scratch (`--strict`) and validates it with `scripts/validate_integrated_records.py`. The output is never committed; it ships with the site as static JSON:
 
 ```text
 public/data/integrated/_manifest.json
@@ -84,7 +83,7 @@ The schema is [`../schemas/painting-bake.schema.json`](../schemas/painting-bake.
 
 When several native artifacts from one family map to the same painting, integration stores them as `variants`; it never silently chooses a winner. Transition graphs are also kept distinct (`theater` vs `legacyOrUnified`) so different algorithms are not collapsed into a fake common score.
 
-`src/utils/paintingBake.js` is the runtime discovery API. It loads the integrated manifest and records, expands variants, reports available representations, and exposes transition edges. Existing theater rendering remains unchanged until a renderer explicitly chooses to consume another representation.
+No runtime code consumes the integrated records today: the shipped renderer reads `public/data/theater/` directly. The former `src/utils/paintingBake.js` loader was never imported and has been removed; a renderer that wants another representation should fetch `/data/integrated/_manifest.json` and its records itself.
 
 ## CI/CD topology
 
@@ -94,8 +93,7 @@ The art workflows publish native data to the orphan `art-data` branch using `kee
 - `process_art.yml` — Turbo stroke-cloud producer.
 - `bootstrap.yml` — manual five-image stroke/bootstrap producer.
 - `remove_painting.yml` — removal path for published art.
-- `deploy.yml` — checks out `art-data`, tests the integration builder, regenerates integrated sidecars, verifies legacy assets, builds Vite, and deploys GitHub Pages.
-- `deploy-sftp.yml` — self-hosted mirror deploy.
+- `deploy.yml` — checks out `art-data`, regenerates and validates integrated sidecars, runs `npm run verify` (Python syntax check, integration unit tests, legacy asset check, Vite build), and deploys GitHub Pages.
 
 Central workflow proxies dispatch through `HereLiesAz/workflows`; local proxy files should not be treated as the implementation body of those workflows.
 
@@ -107,7 +105,7 @@ The current renderer keeps important constraints documented in the component/sou
 - depth-band boundaries use hard discard rather than alpha blending;
 - `useStore.jsx` updates segment index/progress atomically per frame;
 - viewport-dependent placement is recomputed after resize/rotation;
-- reduced-motion changes camera/reveal behavior without changing data contracts;
+- reduced-motion (cached in `src/utils/reducedMotion.js`) switches the camera to each segment's `calmPath`, skips the hinge gaze detour, and zeroes the shard-scatter shader term (`uChaos`) without changing data contracts;
 - `bgSweep` aggregates light-background paintings by mounted instance, not painting id.
 
 These production constraints should be preserved when adding alternate representation consumers.

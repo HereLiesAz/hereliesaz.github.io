@@ -32,7 +32,10 @@ function warm(id) {
   ]) {
     const img = new Image();
     inFlight.add(img);
-    img.onload = img.onerror = () => inFlight.delete(img);
+    img.onload = () => inFlight.delete(img);
+    // A failed warm (network blip, 5xx) must not mark the id warmed for the
+    // rest of the session — forget it so the next window slide retries.
+    img.onerror = () => { inFlight.delete(img); warmed.delete(id); };
     img.src = url;
   }
 }

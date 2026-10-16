@@ -1,0 +1,19 @@
+# actions/labeler v5+ config, read by the shared HereLiesAz/workflows pr-labeler.
+docs:
+  - changed-files:
+      - any-glob-to-any-file: ['docs/**', '**/*.md']
+admin:
+  - changed-files:
+      - any-glob-to-any-file: ['src/admin/**']
+gallery:
+  - changed-files:
+      - any-glob-to-any-file: ['src/components/**', 'src/store/**', 'src/utils/**']
+android:
+  - changed-files:
+      - any-glob-to-any-file: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties']
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ['.github/**']
+scripts:
+  - changed-files:
+      - any-glob-to-any-file: ['scripts/**', 'tools/**']

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { loadBandOverrides, saveBandOverrideEntry } from './data.js';
 
 function loadImage(src) {
@@ -10,38 +10,53 @@ function loadImage(src) {
   });
 }
 
+// Previews are thumbnails — no need to run the per-pixel mask at the
+// painting's full resolution (often 2-4k px a side, ~18 bands each).
+const PREVIEW_MAX_PX = 360;
+
+/** Decodes the painting and depth map ONCE, at preview size, and returns
+ * their raw RGBA pixel arrays. Every band mask is then a cheap pass over
+ * these arrays instead of re-drawing and re-reading both images per band.
+ * depth.png is 16-bit but canvas only exposes 8-bit-per-channel pixel data
+ * (browsers downsample on decode) — that's the same precision loss the
+ * actual WebGL texture upload incurs too, so the preview matches what
+ * actually renders. */
+function decodeSources(paintingImg, depthImg) {
+  const srcW = paintingImg.naturalWidth || paintingImg.width;
+  const srcH = paintingImg.naturalHeight || paintingImg.height;
+  const k = Math.min(1, PREVIEW_MAX_PX / Math.max(srcW, srcH));
+  const w = Math.max(1, Math.round(srcW * k));
+  const h = Math.max(1, Math.round(srcH * k));
+  const read = (img) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    return ctx.getImageData(0, 0, w, h).data;
+  };
+  return { w, h, painting: read(paintingImg), depth: read(depthImg) };
+}
+
 /** Renders just the pixels whose depth falls in [bandMin, bandMax) —
  * everything else transparent — the same hard-discard test
  * TheaterPainting.jsx's shader does per band, done here in a 2D canvas so
  * the admin can SEE a band before deciding whether it's a redundant
- * duplicate of its neighbor. depth.png is 16-bit but canvas only exposes
- * 8-bit-per-channel pixel data (browsers downsample on decode) — that's
- * the same precision loss the actual WebGL texture upload incurs too, so
- * this preview matches what actually renders, not just an approximation
- * of it. */
-function renderBandMask(paintingImg, depthImg, bandMin, bandMax) {
-  const w = paintingImg.naturalWidth || paintingImg.width;
-  const h = paintingImg.naturalHeight || paintingImg.height;
-
-  const depthCanvas = document.createElement('canvas');
-  depthCanvas.width = w; depthCanvas.height = h;
-  const dctx = depthCanvas.getContext('2d');
-  dctx.drawImage(depthImg, 0, 0, w, h);
-  const depthPixels = dctx.getImageData(0, 0, w, h).data;
-
+ * duplicate of its neighbor. Resolves to an object URL (caller revokes). */
+function renderBandMask(decoded, bandMin, bandMax) {
+  const { w, h, painting, depth } = decoded;
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(paintingImg, 0, 0, w, h);
-  const painting = ctx.getImageData(0, 0, w, h);
-  const px = painting.data;
-
+  const out = new ImageData(new Uint8ClampedArray(painting), w, h);
+  const px = out.data;
   for (let i = 0, n = w * h; i < n; i++) {
-    const d = depthPixels[i * 4] / 255;
+    const d = depth[i * 4] / 255;
     if (d < bandMin || d >= bandMax) px[i * 4 + 3] = 0;
   }
-  ctx.putImageData(painting, 0, 0);
-  return canvas.toDataURL('image/png');
+  ctx.putImageData(out, 0, 0);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(b => (b ? resolve(URL.createObjectURL(b)) : reject(new Error('could not encode layer preview'))), 'image/png');
+  });
 }
 
 /** Depth-band curation for one painting: a thumbnail per band (rendered
@@ -63,6 +78,7 @@ export default function BandEditor({ id }) {
 
   useEffect(() => {
     let cancelled = false;
+    const objectUrls = [];
     setStatus('loading');
     setBands([]);
     setHidden(new Set());
@@ -88,19 +104,27 @@ export default function BandEditor({ id }) {
       if (cancelled) return;
       setSources({ painting: paintingImg.src, depth: depthImg.src });
 
-      const built = centers.map((_, i) => ({
-        index: i,
-        min: edges[i],
-        max: edges[i + 1],
-        preview: renderBandMask(paintingImg, depthImg, edges[i], edges[i + 1]),
-      }));
-      if (cancelled) return;
-      setBands(built);
+      const decoded = decodeSources(paintingImg, depthImg);
+      // Show the grid immediately with placeholder tiles, then fill each
+      // preview in one at a time, yielding between bands so the page stays
+      // responsive instead of blocking on all ~18 masks at once.
+      setBands(centers.map((_, i) => ({ index: i, min: edges[i], max: edges[i + 1], preview: null })));
       setHidden(new Set(overrides?.[id]?.hidden || []));
       setStatus('ready');
+      for (let i = 0; i < centers.length; i++) {
+        await new Promise(r => setTimeout(r, 0));
+        if (cancelled) return;
+        const url = await renderBandMask(decoded, edges[i], edges[i + 1]);
+        if (cancelled) { URL.revokeObjectURL(url); return; }
+        objectUrls.push(url);
+        setBands(prev => prev.map(b => (b.index === i ? { ...b, preview: url } : b)));
+      }
     })().catch(e => { if (!cancelled) setStatus({ error: e.message }); });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      for (const url of objectUrls) URL.revokeObjectURL(url);
+    };
   }, [id]);
 
   const toggle = (index) => {
@@ -157,7 +181,9 @@ export default function BandEditor({ id }) {
             aria-pressed={hidden.has(b.index)}
             style={{ opacity: hidden.has(b.index) ? 0.35 : 1, cursor: 'pointer', border: 'none' }}
           >
-            <img src={b.preview} alt={`layer ${b.index}`} loading="lazy" />
+            {b.preview
+              ? <img src={b.preview} alt={`layer ${b.index}`} loading="lazy" />
+              : <div style={{ aspectRatio: '1', background: '#111' }} aria-hidden="true" />}
             <span>layer {b.index}{hidden.has(b.index) ? ' — hidden' : ''}</span>
           </button>
         ))}

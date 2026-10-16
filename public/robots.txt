@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+# The admin console is a client-only tool with nothing to index.
+Disallow: /admin
+
+Sitemap: https://hereliesaz.github.io/sitemap.xml

@@ -8,7 +8,7 @@ This project intentionally keeps multiple art-processing representations of the 
 2. [**Frontend**](./FRONTEND.md) — the React + Zustand + react-three-fiber application.
 3. [**Shaders**](./SHADERS.md) — the current paper-theater shaders and rendering constraints.
 4. [**Pipeline**](./PIPELINE.md) — every intentional art-processing pipeline, its inputs/outputs, and current status.
-5. [**Integration**](./INTEGRATION.md) — the canonical `PaintingBake` sidecar schema, variants, transition graphs, deploy generation, and runtime loader.
+5. [**Integration**](./INTEGRATION.md) — the canonical `PaintingBake` sidecar schema, variants, transition graphs, and deploy-time generation (no runtime consumer yet).
 6. [**Workflow**](./WORKFLOW.md) — how CI and manual pipeline execution are wired.
 7. [**Setup**](./SETUP.md) — Python and Node environment setup.
 8. [**Aesthetic**](./AESTHETIC.md) — creative brief.
