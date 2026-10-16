@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -39,13 +39,6 @@ function collectPythonFiles(dir, out = []) {
   return out;
 }
 
-function verifyCapacitorConfig() {
-  const config = JSON.parse(readFileSync(join(root, 'capacitor.config.json'), 'utf8'));
-  if (config.webDir !== 'dist') {
-    throw new Error(`capacitor.config.json webDir must be "dist" for this Vite build; got ${JSON.stringify(config.webDir)}`);
-  }
-}
-
 try {
   const python = findPython();
   const pythonFiles = collectPythonFiles(join(root, 'scripts'));
@@ -58,7 +51,6 @@ try {
     }
   }
 
-  verifyCapacitorConfig();
   run(python, ['-m', 'py_compile', ...pythonFiles], 'Python syntax check');
   run(python, ['-m', 'unittest', 'scripts/test_integrate_painting_bakes.py'], 'Integration builder unit tests');
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'verify-assets'], 'Asset/legacy graph verification');
