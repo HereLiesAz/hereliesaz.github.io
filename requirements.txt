@@ -1,9 +1,4 @@
-numpy
-opencv-python-headless
-Pillow
-pillow-heif
-
-# Off-device ML — theater_baker.py uses gradio_client to call the
-# Depth-Anything-V2 HF Space. No torch/transformers required locally.
-gradio_client
-huggingface_hub
+# Pointer only. The real pipeline dependency list lives in
+# scripts/requirements.txt (see docs/SETUP.md); this file exists for tools
+# that expect a requirements file at the repository root.
+-r scripts/requirements.txt
