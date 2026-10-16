@@ -61,7 +61,7 @@ export default defineConfig({
     excludeSourceMaterial(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'pwa-icon-512.png'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'pwa-icon-192.png', 'pwa-icon-512.png', 'pwa-icon-maskable-512.png'],
       // index.html already links a real, hand-authored manifest — either
       // /manifest.json (gallery) or /admin-manifest.json (/admin), swapped
       // at runtime by App.jsx's useRouteManifest() so each installs with
