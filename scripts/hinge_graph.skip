@@ -1,0 +1,3 @@
+Presence of this file makes `python3 scripts/pareidolia_index.py` (as run by the
+Theater Bake workflow) skip the hinge graph, so paintings can be baked in groups.
+Build the graph once over the whole corpus with `--full`, then delete this file.

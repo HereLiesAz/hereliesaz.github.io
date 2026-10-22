@@ -31,6 +31,7 @@ def fake_hinge(a, b):
 
 
 pi.load_painting, pi.best_hinge = fake_load, fake_hinge
+pi.SKIP_FLAG = Path(tempfile.gettempdir(), "no-such-hinge-skip-flag")  # the repo's real flag must not leak in
 
 
 def run(data: Path, ids: list[str], *extra: str) -> dict:
@@ -62,3 +63,22 @@ with tempfile.TemporaryDirectory() as tmp:
     assert all("a" in p for p in calls), calls     # only pairs touching a rerun
 
 print("incremental hinge graph matches full graph")
+
+# --- group bakes skip the graph while the flag file exists -----------------
+with tempfile.TemporaryDirectory() as tmp:
+    flag = Path(tmp, "hinge_graph.skip")
+    pi.SKIP_FLAG = flag
+    data = Path(tmp, "data")
+    data.mkdir()
+    (data / "_manifest.json").write_text(json.dumps(["a", "b"]))
+    flag.write_text("skip")
+    calls.clear()
+    assert pi.main(["--data", str(data)]) == 0
+    assert not (data / "graph.theater.json").exists() and not calls
+    assert pi.main(["--data", str(data), "--full"]) == 0       # --full overrides
+    assert (data / "graph.theater.json").exists()
+    flag.unlink()
+    (data / "graph.theater.json").unlink()
+    assert pi.main(["--data", str(data)]) == 0                  # no flag => runs
+    assert (data / "graph.theater.json").exists()
+print("hinge_graph.skip behaves")

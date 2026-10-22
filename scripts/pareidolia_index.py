@@ -53,6 +53,10 @@ constants or re-baking a painting without changing its dimensions).
 Usage:
   python3 scripts/pareidolia_index.py --data public/data/theater/
   python3 scripts/pareidolia_index.py --data public/data/theater/ --full
+
+While scripts/hinge_graph.skip exists a plain run does nothing, so the
+Theater Bake workflow can bake paintings in groups without paying for the
+graph; run it with --full (or delete the file) for the combining pass.
 """
 
 from __future__ import annotations
@@ -66,6 +70,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+SKIP_FLAG      = Path(__file__).with_name("hinge_graph.skip")  # present => group bakes skip the graph
 WORK_LONG_EDGE = 256                  # matching resolution
 PATCH_SCALES   = (0.20, 0.30, 0.42)   # patch edge / min(painting dims)
 GRID_STEPS     = 9                    # candidate grid per axis
@@ -341,6 +346,14 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--full", action="store_true",
                     help="recompute every pair, ignoring any existing graph")
     args = ap.parse_args(argv)
+
+    # Group bakes leave the hinge graph out and build it once, over the whole
+    # corpus, at the end (the all-pairs match is by far the slowest step).
+    # While SKIP_FLAG exists a plain run is a no-op; --full always runs.
+    if SKIP_FLAG.exists() and not args.full:
+        print(f"[i] {SKIP_FLAG.name} present: skipping the hinge graph "
+              "(run with --full, or delete the file, to build it)")
+        return 0
 
     manifest_path = args.data / "_manifest.json"
     if not manifest_path.exists():
