@@ -27,7 +27,7 @@ public/assets/{image}
 
 `theater_baker.py` crops the artwork, optionally generates a photoreal reference for better monocular depth estimation, produces a 16-bit depth map, and clusters that depth into bands. Its native metadata schema is currently schema 2.
 
-`pareidolia_index.py` builds schema-5 transition edges using mutual saliency, LAB colour, gradient structure, and depth. An edge records `source`, `target`, `weight`, `s_uv`, `t_uv`, and `scale`.
+`pareidolia_index.py` builds schema-5 transition edges using mutual saliency, LAB colour, gradient structure, and depth. It only matches pairs involving new or changed paintings when a graph already exists (`--full` recomputes everything), so grouped bakes combine into the same graph as one full bake. An edge records `source`, `target`, `weight`, `s_uv`, `t_uv`, and `scale`.
 
 `validate_output.py` is the hard CI gate for theater artifacts. It validates manifest membership, companion files, depth-band structure, depth provenance, graph references, UVs, weights, scales, and rejects a complete graph as a regression signal.
 
