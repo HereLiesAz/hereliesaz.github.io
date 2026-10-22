@@ -41,8 +41,22 @@ painting's min dimension. The frontend places painting B so its t_uv
 point coincides in world space with A's s_uv point, and routes the
 camera through it.
 
+Incremental by default: each edge depends only on its own (A, B) pair, so
+when a graph.theater.json already exists only pairs that involve a painting
+it has not seen (or whose dimensions changed) are computed; every other edge
+is carried over unchanged. Baking paintings in groups therefore costs
+O(new x all) per group instead of O(all^2), and the groups combine into the
+same graph a single full run would produce. `--full` recomputes every pair
+(use it for the final combining pass, or after changing the matcher's
+constants or re-baking a painting without changing its dimensions).
+
 Usage:
   python3 scripts/pareidolia_index.py --data public/data/theater/
+  python3 scripts/pareidolia_index.py --data public/data/theater/ --full
+
+While scripts/hinge_graph.skip exists a plain run does nothing, so the
+Theater Bake workflow can bake paintings in groups without paying for the
+graph; run it with --full (or delete the file) for the combining pass.
 """
 
 from __future__ import annotations
@@ -56,6 +70,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+SKIP_FLAG      = Path(__file__).with_name("hinge_graph.skip")  # present => group bakes skip the graph
 WORK_LONG_EDGE = 256                  # matching resolution
 PATCH_SCALES   = (0.20, 0.30, 0.42)   # patch edge / min(painting dims)
 GRID_STEPS     = 9                    # candidate grid per axis
@@ -328,7 +343,17 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", type=Path, default=Path("public/data/theater"))
+    ap.add_argument("--full", action="store_true",
+                    help="recompute every pair, ignoring any existing graph")
     args = ap.parse_args(argv)
+
+    # Group bakes leave the hinge graph out and build it once, over the whole
+    # corpus, at the end (the all-pairs match is by far the slowest step).
+    # While SKIP_FLAG exists a plain run is a no-op; --full always runs.
+    if SKIP_FLAG.exists() and not args.full:
+        print(f"[i] {SKIP_FLAG.name} present: skipping the hinge graph "
+              "(run with --full, or delete the file, to build it)")
+        return 0
 
     manifest_path = args.data / "_manifest.json"
     if not manifest_path.exists():
@@ -343,10 +368,30 @@ def main(argv: list[str]) -> int:
 
     nodes = [{"id": p["id"], "width": p["w"], "height": p["h"]}
              for p in paintings.values()]
-    edges = []
+    out = args.data / "graph.theater.json"
+
+    # Carry over edges from a previous graph for every painting it already
+    # knew at the same dimensions; only the rest ("fresh") need matching.
+    known: dict[str, tuple] = {}
+    prior_edges: list[dict] = []
+    if not args.full and out.exists():
+        try:
+            prior = json.loads(out.read_text())
+        except (OSError, ValueError):
+            prior = None
+        if isinstance(prior, dict) and prior.get("schemaVersion") == 5:
+            known = {n["id"]: (n["width"], n["height"]) for n in prior.get("nodes", [])}
+            prior_edges = prior.get("edges", [])
+    fresh = {pid for pid, p in paintings.items() if known.get(pid) != (p["w"], p["h"])}
+    edges = [e for e in prior_edges
+             if e["source"] in paintings and e["target"] in paintings
+             and e["source"] not in fresh and e["target"] not in fresh]
+    print(f"[i] {len(ids)} paintings, {len(fresh)} new/changed, "
+          f"{len(edges)} edges carried over")
+
     for sid in ids:
         for tid in ids:
-            if sid == tid:
+            if sid == tid or (sid not in fresh and tid not in fresh):
                 continue
             hinge = best_hinge(paintings[sid], paintings[tid])
             if hinge is None:
@@ -355,7 +400,6 @@ def main(argv: list[str]) -> int:
             print(f"[+] {sid[:24]} -> {tid[:24]}  w={hinge['weight']:.3f} "
                   f"s={hinge['s_uv']} t={hinge['t_uv']} scale={hinge['scale']}")
 
-    out = args.data / "graph.theater.json"
     out.write_text(json.dumps(
         {"schemaVersion": 5, "nodes": nodes, "edges": edges},
         separators=(",", ":")))

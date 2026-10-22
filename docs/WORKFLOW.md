@@ -59,8 +59,22 @@ python3 scripts/pareidolia_index.py --data public/data/theater/
 ```
 
 Reads every baked `{id}.painting.webp` / `{id}.depth.png` pair already in
-`--data` (no re-bake needed) and writes `graph.theater.json`: for each
-ordered pair of paintings, the best shared "hinge" patch, if any candidate
+`--data` (no re-bake needed) and writes `graph.theater.json`. It is
+**incremental**: each edge depends only on its own (A, B) pair, so when a
+graph already exists only pairs involving a new painting (or one whose
+dimensions changed) are matched and every other edge is carried over. That
+makes baking in groups cost O(new x all) per group instead of O(all^2); a
+final `--full` run recomputes every pair and yields the same graph a single
+bake would. Use `--full` after changing the matcher's constants or re-baking
+a painting without changing its dimensions.
+
+**Group bakes skip this step.** While `scripts/hinge_graph.skip` exists, a plain
+`pareidolia_index.py` run (what `theater_bake.yml` executes) does nothing, so
+paintings can be baked in groups without paying for the graph; the existing
+`graph.theater.json` stays valid but does not yet cover the new paintings.
+Build the graph once over the whole corpus with `--full` (locally or in a
+Colab), commit the result to `art-data`, then delete the flag file. Each
+ordered pair of paintings gets the best shared "hinge" patch, if any candidate
 clears the acceptance bar (see `pareidolia_index.py`'s `MIN_SIM` / scale-
 bias-correction comments — most pairs get NO edge; this is intentional, a
 curated match set, not a complete graph).
