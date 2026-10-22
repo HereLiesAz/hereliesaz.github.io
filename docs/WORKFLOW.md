@@ -66,8 +66,8 @@ dimensions changed) are matched and every other edge is carried over. That
 makes baking in groups cost O(new x all) per group instead of O(all^2); a
 final `--full` run recomputes every pair and yields the same graph a single
 bake would. Use `--full` after changing the matcher's constants or re-baking
-a painting without changing its dimensions. For each
-ordered pair of paintings, the best shared "hinge" patch, if any candidate
+a painting without changing its dimensions. Each
+ordered pair of paintings gets the best shared "hinge" patch, if any candidate
 clears the acceptance bar (see `pareidolia_index.py`'s `MIN_SIM` / scale-
 bias-correction comments — most pairs get NO edge; this is intentional, a
 curated match set, not a complete graph).
