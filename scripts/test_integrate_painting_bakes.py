@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -178,6 +180,68 @@ class PaintingBakeIntegrationTests(unittest.TestCase):
             self.assertEqual(build(public), 0)
             semantic = json.loads((public / "data" / "integrated" / "semantic.painting-bake.json").read_text())
             self.assertIn("semanticLayers", semantic["representations"])
+
+
+class StrictModeTests(unittest.TestCase):
+    """deploy.yml runs `integrate_painting_bakes.py --strict`; the exit code is the gate."""
+
+    def public_with_manifest(self, tmp, manifest_text):
+        public = Path(tmp) / "public"
+        theater = public / "data" / "theater"
+        theater.mkdir(parents=True)
+        (theater / "_manifest.json").write_text(manifest_text, encoding="utf-8")
+        return public
+
+    def test_clean_input_passes_strict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            public = self.public_with_manifest(tmp, '["a"]')
+            self.assertEqual(build(public, strict=True), 0)
+
+    def test_a_warning_fails_strict_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            public = self.public_with_manifest(tmp, '["a", ""]')        # an invalid id is a warning
+            self.assertEqual(build(public, strict=False), 0)
+            self.assertEqual(build(public, strict=True), 1)
+
+    def test_unparseable_json_is_a_warning_not_a_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            public = self.public_with_manifest(tmp, '["a"]')
+            (public / "data" / "theater" / "a.theater.json").write_text("{not json", encoding="utf-8")
+            self.assertEqual(build(public, strict=False), 0)
+            self.assertEqual(build(public, strict=True), 1)
+
+    def test_an_invalid_record_fails_the_build_and_is_not_written(self):
+        import integrate_painting_bakes as module
+        with tempfile.TemporaryDirectory() as tmp:
+            public = self.public_with_manifest(tmp, '["a"]')
+            real = module.validate
+            module.validate = lambda rec: ["provenance must be a non-empty array"]
+            try:
+                self.assertEqual(module.build(public), 1)
+                self.assertEqual(module.build(public, strict=True), 1)
+            finally:
+                module.validate = real
+            self.assertFalse((public / "data" / "integrated" / "a.painting-bake.json").exists())
+
+    def test_cli_exit_codes(self):
+        from integrate_painting_bakes import main
+        with tempfile.TemporaryDirectory() as tmp:
+            public = self.public_with_manifest(tmp, '["a", ""]')
+            self.assertEqual(main(["--public-root", str(public)]), 0)
+            self.assertEqual(main(["--public-root", str(public), "--strict"]), 1)
+            self.assertNotEqual(main(["--public-root", str(Path(tmp) / "missing")]), 0)
+
+    @unittest.skipUnless(importlib.util.find_spec("jsonschema"), "jsonschema is installed by verification-requirements.txt")
+    def test_built_records_validate_against_the_published_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            public = self.public_with_manifest(tmp, '["a"]')
+            self.assertEqual(build(public, strict=True), 0)
+            checked = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parent / "validate_integrated_records.py"),
+                 "--public-root", str(public)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
 
 if __name__ == "__main__":

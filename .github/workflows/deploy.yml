@@ -3,6 +3,9 @@ name: Deploy Site (The Gallery)
 on:
   push:
     branches: ["main"]
+  # Pull requests run the build and every check below but never publish: the
+  # artifact upload and the deploy job are skipped for them.
+  pull_request:
   workflow_dispatch:
   # Bakes and removals publish to the art-data branch, which this workflow does
   # not watch (it listens to main). Rebuilding on a schedule picks them up even
@@ -16,7 +19,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  # One group per pull request, so a PR run never cancels a production deploy.
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || 'pages' }}
   cancel-in-progress: true
 
 jobs:
@@ -90,6 +94,7 @@ jobs:
           fi
 
       - name: Upload Artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: ./dist
@@ -100,6 +105,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
+    if: github.event_name != 'pull_request'
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
