@@ -5,6 +5,6 @@
 # import numpy, OpenCV and Pillow but never run a model or touch the network).
 # Pinned: this runs in a job that builds what gets published.
 jsonschema==4.25.1
-Pillow==12.3.0
+Pillow==13.0.0
 numpy==2.5.3
 opencv-python-headless==5.0.0.93
