@@ -43,26 +43,51 @@ camera through it.
 
 Incremental by default: each edge depends only on its own (A, B) pair, so
 when a graph.theater.json already exists only pairs that involve a painting
-it has not seen (or whose dimensions changed) are computed; every other edge
-is carried over unchanged. Baking paintings in groups therefore costs
-O(new x all) per group instead of O(all^2), and the groups combine into the
-same graph a single full run would produce. `--full` recomputes every pair
-(use it for the final combining pass, or after changing the matcher's
-constants or re-baking a painting without changing its dimensions).
+it has not seen (or whose content changed) are computed; every other edge
+is carried over unchanged. A painting counts as unchanged when its
+dimensions match AND, if the old graph recorded one, its content hash
+(painting.webp + depth.png) matches; nodes written by older versions have no
+hash and are trusted at equal dimensions. Baking paintings in groups
+therefore costs O(new x all) per group instead of O(all^2). The edge SET is
+the same as a full run's up to the matcher's numeric noise (two full runs
+on unchanged inputs have been seen to differ in a couple of edges, probably
+from library versions); edges are written in manifest order either way.
+`--full` recomputes every pair. Bump MATCHER_VERSION whenever best_hinge or
+its constants change: graphs from another version are never carried over.
 
 Usage:
   python3 scripts/pareidolia_index.py --data public/data/theater/
-  python3 scripts/pareidolia_index.py --data public/data/theater/ --full
+  python3 scripts/pareidolia_index.py --data public/data/theater/ --full --jobs 4
 
 While scripts/hinge_graph.skip exists a plain run does nothing, so the
 Theater Bake workflow can bake paintings in groups without paying for the
-graph; run it with --full (or delete the file) for the combining pass.
+graph. --full, --shard and --merge always run.
+
+The all-pairs pass is the slow part (about 0.6 s per ordered pair on a CI
+runner, so ~28 h for 400 paintings in one process). Three tools make it fit:
+
+  --jobs N          fork N worker processes, one source painting per task.
+  --shard K/N       compute only every N-th source painting, starting at K, and
+                    write graph.theater.shard-K-of-N.json. The shard file is
+                    checkpointed after every source painting; re-running the
+                    same command resumes where it stopped, so a dropped Colab
+                    session loses at most one painting's work.
+  --merge           once every shard 0..N-1 is complete, combine them with the
+                    carried-over edges into graph.theater.json and delete the
+                    shard files. Shards from a different manifest, painting
+                    content or MATCHER_VERSION are refused.
+
+Every shard must run against the same --data (same manifest, same prior
+graph). Then delete scripts/hinge_graph.skip.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import multiprocessing
+import os
 import sys
 from pathlib import Path
 
@@ -71,6 +96,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 SKIP_FLAG      = Path(__file__).with_name("hinge_graph.skip")  # present => group bakes skip the graph
+MATCHER_VERSION = 1                   # bump when best_hinge or its constants change
 WORK_LONG_EDGE = 256                  # matching resolution
 PATCH_SCALES   = (0.20, 0.30, 0.42)   # patch edge / min(painting dims)
 GRID_STEPS     = 9                    # candidate grid per axis
@@ -102,11 +128,13 @@ MIN_SALIENCY   = 0.18                 # skip A-patches below this mean saliency
 #
 #  1. SCALE_BIAS_CORRECTION discounts the raw similarity by
 #     sqrt(scale / max(PATCH_SCALES)) before it is ranked against other
-#     scales or checked against MIN_SIM. This is the TM_CCOEFF_NORMED
-#     analogue of a Fisher/Pearson correlation coefficient's standard
-#     error, which scales ~1/sqrt(n) in the number of pixels n — i.e.
-#     ~1/window-side for a square patch — so this correction puts every
-#     scale's peak back on a comparable footing instead of letting the
+#     scales or checked against MIN_SIM. The motivation is the
+#     TM_CCOEFF_NORMED analogue of a Pearson correlation's standard error,
+#     which scales ~1/sqrt(n) in the number of pixels n, i.e. ~1/window-side
+#     for a square patch. A full 1/side correction would be LINEAR in
+#     scale; the code applies the square root of that ratio, which is a
+#     deliberately weaker discount. It puts the scales on a more comparable
+#     footing instead of letting the
 #     smallest window's inflated variance win by default. Re-running the
 #     instrumented replica WITH this correction on the same real data
 #     produced a roughly EVEN scale split (21/18/20 across the three
@@ -128,9 +156,10 @@ MIN_SALIENCY   = 0.18                 # skip A-patches below this mean saliency
 #     than as one flat number.
 #
 # Net effect: most (sid, tid) pairs now get NO edge at all (best_hinge()
-# returns None) instead of the previous complete graph. See the module
-# docstring / PR notes for the before/after edge-count and scale-histogram
-# numbers from re-running this script against the real baked corpus.
+# returns None) instead of the previous complete graph. The percentages and
+# counts quoted above were measured on the corpus as it was at the time;
+# they are not reproducible from this repository, so treat them as history,
+# not as a specification.
 SCALE_BIAS_REF = max(PATCH_SCALES)    # largest scale is the "unbiased" reference
 MIN_SIM        = 0.45                 # floor on the scale-corrected similarity
 
@@ -219,6 +248,16 @@ def window_mean(img: np.ndarray, ps: int) -> np.ndarray:
     return s / float(ps * ps)
 
 
+def fingerprint(data_dir: Path, pid: str) -> str:
+    """Content hash of a baked painting: changes whenever its pixels or depth do,
+    even when the dimensions stay the same (the baker normalises every painting
+    to a 768 long edge, so same-aspect photos share dimensions)."""
+    digest = hashlib.sha1()
+    for suffix in (".painting.webp", ".depth.png"):
+        digest.update((data_dir / f"{pid}{suffix}").read_bytes())
+    return digest.hexdigest()[:16]
+
+
 def load_painting(data_dir: Path, pid: str) -> dict:
     # This only ever reads OUR OWN baked outputs (theater_baker.py's
     # {id}.painting.webp / {id}.depth.png), never a raw camera source
@@ -249,6 +288,7 @@ def load_painting(data_dir: Path, pid: str) -> dict:
     sal = saliency_map(rgb_s, lab)
     return {
         "id": pid, "w": w, "h": h,
+        "hash": fingerprint(data_dir, pid),
         "lab": lab,
         "grad": grad.astype(np.float32),
         "depth": (depth_s * 255.0).astype(np.float32),
@@ -339,20 +379,129 @@ def best_hinge(a: dict, b: dict) -> dict | None:
     return best
 
 
+_PAINTINGS: dict[str, dict] = {}   # shared with forked workers
+
+
+def read_prior(out: Path) -> tuple[dict[str, tuple], list[dict]]:
+    """({id: (width, height, hash|None)}, edges) from a usable previous graph,
+    else ({}, []). Anything unreadable, malformed or from another matcher
+    version is ignored, which makes the caller recompute every pair."""
+    if not out.exists():
+        return {}, []
+    try:
+        prior = json.loads(out.read_text())
+    except (OSError, ValueError):
+        print(f"[!] {out.name} is unreadable; computing every pair", file=sys.stderr)
+        return {}, []
+    if not isinstance(prior, dict) or prior.get("schemaVersion") != 5:
+        return {}, []
+    if prior.get("matcherVersion", 1) != MATCHER_VERSION:
+        print(f"[i] {out.name} was built by matcher v{prior.get('matcherVersion')}, "
+              f"this is v{MATCHER_VERSION}; computing every pair")
+        return {}, []
+    try:
+        known = {n["id"]: (n["width"], n["height"], n.get("hash")) for n in prior["nodes"]}
+        edges = list(prior["edges"])
+        for e in edges:
+            e["source"], e["target"]  # noqa: B018 - KeyError/TypeError if malformed
+    except (KeyError, TypeError, AttributeError):
+        print(f"[!] {out.name} is malformed; computing every pair", file=sys.stderr)
+        return {}, []
+    return known, edges
+
+
+def unchanged(known: dict[str, tuple], painting: dict) -> bool:
+    prev = known.get(painting["id"])
+    return (prev is not None and prev[:2] == (painting["w"], painting["h"])
+            and (prev[2] is None or prev[2] == painting.get("hash")))
+
+
+def plan_units(ids: list[str], fresh: set[str]) -> list[tuple[str, list[str]]]:
+    """One unit per source painting: the targets whose pair still needs matching."""
+    units = []
+    for sid in ids:
+        tids = [t for t in ids if t != sid and (sid in fresh or t in fresh)]
+        if tids:
+            units.append((sid, tids))
+    return units
+
+
+def _run_unit(unit: tuple[str, list[str]]) -> tuple[str, list[dict]]:
+    sid, tids = unit
+    found = []
+    for tid in tids:
+        hinge = best_hinge(_PAINTINGS[sid], _PAINTINGS[tid])
+        if hinge is not None:
+            found.append({"source": sid, "target": tid, **hinge})
+    return sid, found
+
+
+def run_units(units: list[tuple[str, list[str]]], jobs: int):
+    """Yield (source id, edges) as each unit finishes."""
+    if jobs > 1 and "fork" in multiprocessing.get_all_start_methods():
+        with multiprocessing.get_context("fork").Pool(jobs) as pool:
+            yield from pool.imap_unordered(_run_unit, units)
+    else:
+        for unit in units:
+            yield _run_unit(unit)
+
+
+def plan_digest(ids: list[str], paintings: dict[str, dict], fresh: set[str]) -> str:
+    """Identifies one combining job; shard files only merge with their own."""
+    return hashlib.sha1(json.dumps(
+        [MATCHER_VERSION, [(pid, paintings[pid].get("hash")) for pid in ids], sorted(fresh)],
+        separators=(",", ":")).encode()).hexdigest()[:16]
+
+
+def shard_path(data: Path, k: int, n: int) -> Path:
+    return data / f"graph.theater.shard-{k}-of-{n}.json"
+
+
+def write_atomic(path: Path, payload: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, separators=(",", ":")))
+    os.replace(tmp, path)
+
+
+def log_edge(e: dict) -> None:
+    print(f"[+] {e['source'][:24]} -> {e['target'][:24]}  w={e['weight']:.3f} "
+          f"s={e['s_uv']} t={e['t_uv']} scale={e['scale']}")
+
+
+def parse_shard(text: str) -> tuple[int, int]:
+    try:
+        k, n = (int(x) for x in text.split("/"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected K/N, for example 0/12")
+    if not 0 <= k < n:
+        raise argparse.ArgumentTypeError("K must satisfy 0 <= K < N")
+    return k, n
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", type=Path, default=Path("public/data/theater"))
     ap.add_argument("--full", action="store_true",
                     help="recompute every pair, ignoring any existing graph")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="worker processes for the pair matching (default 1)")
+    ap.add_argument("--shard", type=parse_shard, default=None, metavar="K/N",
+                    help="compute only every N-th source painting starting at K and "
+                         "write a resumable shard file instead of the graph")
+    ap.add_argument("--merge", action="store_true",
+                    help="combine completed shard files into graph.theater.json")
     args = ap.parse_args(argv)
+    if args.shard and args.merge:
+        ap.error("--shard and --merge are separate steps")
 
     # Group bakes leave the hinge graph out and build it once, over the whole
     # corpus, at the end (the all-pairs match is by far the slowest step).
-    # While SKIP_FLAG exists a plain run is a no-op; --full always runs.
-    if SKIP_FLAG.exists() and not args.full:
+    # While SKIP_FLAG exists a plain run is a no-op; the explicit combining
+    # modes (--full, --shard, --merge) always run.
+    if SKIP_FLAG.exists() and not (args.full or args.shard or args.merge):
         print(f"[i] {SKIP_FLAG.name} present: skipping the hinge graph "
-              "(run with --full, or delete the file, to build it)")
+              "(run with --full, or --shard/--merge, or delete the file, to build it)")
         return 0
 
     manifest_path = args.data / "_manifest.json"
@@ -365,46 +514,112 @@ def main(argv: list[str]) -> int:
         return 1
 
     paintings = {pid: load_painting(args.data, pid) for pid in ids}
+    _PAINTINGS.clear()
+    _PAINTINGS.update(paintings)
 
-    nodes = [{"id": p["id"], "width": p["w"], "height": p["h"]}
-             for p in paintings.values()]
+    nodes = []
+    for p in paintings.values():
+        node = {"id": p["id"], "width": p["w"], "height": p["h"]}
+        if p.get("hash"):
+            node["hash"] = p["hash"]
+        nodes.append(node)
     out = args.data / "graph.theater.json"
 
     # Carry over edges from a previous graph for every painting it already
-    # knew at the same dimensions; only the rest ("fresh") need matching.
-    known: dict[str, tuple] = {}
-    prior_edges: list[dict] = []
-    if not args.full and out.exists():
-        try:
-            prior = json.loads(out.read_text())
-        except (OSError, ValueError):
-            prior = None
-        if isinstance(prior, dict) and prior.get("schemaVersion") == 5:
-            known = {n["id"]: (n["width"], n["height"]) for n in prior.get("nodes", [])}
-            prior_edges = prior.get("edges", [])
-    fresh = {pid for pid, p in paintings.items() if known.get(pid) != (p["w"], p["h"])}
-    edges = [e for e in prior_edges
-             if e["source"] in paintings and e["target"] in paintings
-             and e["source"] not in fresh and e["target"] not in fresh]
+    # knew with the same content; only the rest ("fresh") need matching.
+    known, prior_edges = ({}, []) if args.full else read_prior(out)
+    fresh = {pid for pid, p in paintings.items() if not unchanged(known, p)}
+    carried = [e for e in prior_edges
+               if e["source"] in paintings and e["target"] in paintings
+               and e["source"] not in fresh and e["target"] not in fresh]
+    units = plan_units(ids, fresh)
+    digest = plan_digest(ids, paintings, fresh)
     print(f"[i] {len(ids)} paintings, {len(fresh)} new/changed, "
-          f"{len(edges)} edges carried over")
+          f"{len(carried)} edges carried over, {sum(len(t) for _, t in units)} pairs to match")
 
-    for sid in ids:
-        for tid in ids:
-            if sid == tid or (sid not in fresh and tid not in fresh):
-                continue
-            hinge = best_hinge(paintings[sid], paintings[tid])
-            if hinge is None:
-                continue
-            edges.append({"source": sid, "target": tid, **hinge})
-            print(f"[+] {sid[:24]} -> {tid[:24]}  w={hinge['weight']:.3f} "
-                  f"s={hinge['s_uv']} t={hinge['t_uv']} scale={hinge['scale']}")
+    def finish(computed: list[dict]) -> int:
+        order = {pid: i for i, pid in enumerate(ids)}
+        edges = sorted(carried + computed, key=lambda e: (order[e["source"]], order[e["target"]]))
+        out.write_text(json.dumps(
+            {"schemaVersion": 5, "matcherVersion": MATCHER_VERSION, "nodes": nodes, "edges": edges},
+            separators=(",", ":")))
+        print(f"[m] {len(edges)} edges -> {out}")
+        return 0
 
-    out.write_text(json.dumps(
-        {"schemaVersion": 5, "nodes": nodes, "edges": edges},
-        separators=(",", ":")))
-    print(f"[m] {len(edges)} edges -> {out}")
-    return 0
+    if args.merge:
+        shards = sorted(args.data.glob("graph.theater.shard-*-of-*.json"))
+        if not shards:
+            print("[!] no shard files to merge", file=sys.stderr)
+            return 1
+        counts = {int(p.stem.rsplit("-of-", 1)[1]) for p in shards}
+        if len(counts) != 1:
+            print(f"[!] shard files disagree on the shard count: {sorted(counts)}", file=sys.stderr)
+            return 1
+        total = counts.pop()
+        problems, computed = [], []
+        for k in range(total):
+            path = shard_path(args.data, k, total)
+            if not path.exists():
+                problems.append(f"shard {k}/{total} is missing")
+                continue
+            try:
+                shard = json.loads(path.read_text())
+                if shard["plan"] != digest:
+                    raise ValueError("was computed for a different manifest, content or matcher")
+                wanted = {sid for sid, _ in units[k::total]}
+                finished = set(shard["done"]) & wanted
+                if finished != wanted or set(shard["done"]) - wanted:
+                    raise ValueError(f"is incomplete or mismatched ({len(finished)}/{len(wanted)} paintings)")
+                computed.extend(shard["edges"])
+            except (OSError, KeyError, TypeError) as exc:
+                problems.append(f"{path.name} is unreadable ({type(exc).__name__})")
+            except ValueError as exc:
+                problems.append(f"{path.name} {exc}")
+        if problems:
+            for line in problems:
+                print(f"[!] {line}", file=sys.stderr)
+            return 1
+        rc = finish(computed)
+        for path in shards:
+            path.unlink()
+        print(f"[i] merged {total} shard(s); now delete {SKIP_FLAG.name} and commit {out.name}")
+        return rc
+
+    if args.shard:
+        k, total = args.shard
+        mine = units[k::total]
+        path = shard_path(args.data, k, total)
+        done: set[str] = set()
+        edges: list[dict] = []
+        if path.exists():
+            try:
+                saved = json.loads(path.read_text())
+                if saved["plan"] == digest:
+                    done, edges = set(saved["done"]), list(saved["edges"])
+                    print(f"[i] resuming shard {k}/{total}: {len(done)}/{len(mine)} paintings done")
+                else:
+                    print(f"[!] {path.name} is for a different plan; starting it over", file=sys.stderr)
+            except (OSError, ValueError, KeyError, TypeError):
+                print(f"[!] {path.name} is unreadable; starting it over", file=sys.stderr)
+        todo = [u for u in mine if u[0] not in done]
+        for sid, found in run_units(todo, args.jobs):
+            for e in found:
+                log_edge(e)
+            done.add(sid)
+            edges.extend(found)
+            write_atomic(path, {"matcherVersion": MATCHER_VERSION, "plan": digest,
+                                "shard": [k, total], "done": sorted(done), "edges": edges})
+        write_atomic(path, {"matcherVersion": MATCHER_VERSION, "plan": digest,
+                            "shard": [k, total], "done": sorted(done), "edges": edges})
+        print(f"[m] shard {k}/{total}: {len(done)}/{len(mine)} paintings, {len(edges)} edges -> {path.name}")
+        return 0
+
+    computed = []
+    for _sid, found in run_units(units, args.jobs):
+        for e in found:
+            log_edge(e)
+        computed.extend(found)
+    return finish(computed)
 
 
 if __name__ == "__main__":

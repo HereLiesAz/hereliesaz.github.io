@@ -52,7 +52,14 @@ Checks performed, against everything in --dir:
      len(edges) < len(nodes) * (len(nodes) - 1) as a sanity check that
      pareidolia_index.py's best_hinge() acceptance bar is actually
      rejecting weak/spurious matches rather than accepting everything
-     (see that script's MIN_SIM / scale-bias-correction comments).
+     (see that script's MIN_SIM / scale-bias-correction comments). The
+     check only applies from COMPLETE_GRAPH_MIN_NODES nodes up; a tiny
+     corpus can legitimately match every pair.
+  4. The graph covers exactly the manifest's paintings (no missing, no
+     ghost nodes) and each node's width/height equals its theater.json
+     src. While scripts/hinge_graph.skip exists the graph is allowed to
+     trail the manifest; the gap is printed instead of failing.
+  5. Every manifest-listed .depth.png decodes and is a 16-bit image.
 """
 from __future__ import annotations
 
@@ -62,6 +69,15 @@ import sys
 from pathlib import Path
 
 from PIL import Image
+
+# While this file exists the hinge graph is intentionally not rebuilt by group
+# bakes (see pareidolia_index.py), so a graph that trails the manifest is
+# reported but not fatal. Without it the graph must cover the manifest exactly.
+SKIP_FLAG = Path(__file__).with_name("hinge_graph.skip")
+
+# The "graph is not complete" sanity check below only means something once a
+# corpus is big enough that accepting every ordered pair would be implausible.
+COMPLETE_GRAPH_MIN_NODES = 10
 
 errors: list[str] = []
 
@@ -185,14 +201,36 @@ def validate_manifest(dir_: Path, ids: list[str]) -> None:
             fp = dir_ / f"{pid}{suffix}"
             check(fp.exists(), f"_manifest.json lists '{pid}' but {fp.name} is missing "
                                 f"(torn write?)")
+        depth_path = dir_ / f"{pid}.depth.png"
+        if depth_path.exists():
+            # Existence is not enough: a truncated or 8-bit depth map still
+            # loads in the browser, just wrongly. The baker writes 16-bit PNGs.
+            try:
+                with Image.open(depth_path) as im:
+                    im.load()
+                    check(im.mode in ("I;16", "I"),
+                          f"{depth_path.name}: mode {im.mode!r}, expected a 16-bit depth map")
+                    check(im.size[0] > 0 and im.size[1] > 0,
+                          f"{depth_path.name}: empty image")
+            except Exception as e:
+                check(False, f"{depth_path.name}: could not be read as an image "
+                              f"({type(e).__name__}: {e})")
 
 
-def validate_graph(dir_: Path) -> None:
+def validate_graph(dir_: Path, manifest_ids: list[str] | None = None) -> None:
     graph_path = dir_ / "graph.theater.json"
+    skipping = SKIP_FLAG.exists()
     if not graph_path.exists():
-        # Not every --dir necessarily has a hinge graph (e.g. a directory
-        # with < 2 baked paintings never gets one, by pareidolia_index.py's
-        # own design) — that's not itself a validation failure.
+        # A directory with < 2 baked paintings never gets a hinge graph, by
+        # pareidolia_index.py's own design — that is not a validation failure.
+        # With 2 or more paintings and no skip flag, a missing graph is.
+        if manifest_ids and len(manifest_ids) >= 2:
+            if skipping:
+                print(f"[!] no graph.theater.json; {SKIP_FLAG.name} present, so the "
+                      f"{len(manifest_ids)} paintings have no hinge edges yet")
+            else:
+                check(False, "graph.theater.json is missing although the manifest lists "
+                             f"{len(manifest_ids)} paintings")
         return
     try:
         graph = json.loads(graph_path.read_text())
@@ -252,12 +290,43 @@ def validate_graph(dir_: Path) -> None:
                   f"graph.theater.json: edges[{i}].scale {scale!r} is not a positive "
                   f"float in (0, 1] (a fraction of the painting's min dimension)")
 
+    # The graph must describe exactly the paintings that ship. A node with no
+    # manifest entry is dead weight; a manifest id with no node is a painting
+    # the camera can only reach by luck, with a fallback aspect ratio. While
+    # group bakes are skipping the graph this is expected, so only report it.
+    if manifest_ids is not None:
+        manifest_set = set(manifest_ids)
+        ghost = sorted(node_ids - manifest_set)
+        uncovered = sorted(manifest_set - node_ids)
+        if skipping:
+            if uncovered or ghost:
+                print(f"[!] graph covers {len(manifest_set & node_ids)}/{len(manifest_set)} "
+                      f"manifest paintings ({len(ghost)} not in manifest); {SKIP_FLAG.name} "
+                      "is present — run pareidolia_index.py --full, then delete it")
+        else:
+            check(not ghost, f"graph.theater.json has {len(ghost)} node(s) not in "
+                             f"_manifest.json: {ghost[:5]}")
+            check(not uncovered, f"graph.theater.json is missing {len(uncovered)} manifest "
+                                 f"painting(s): {uncovered[:5]}")
+        # Node dimensions must match what actually renders (theater.json src).
+        for node in nodes:
+            nid = node.get("id") if isinstance(node, dict) else None
+            tj = dir_ / f"{nid}.theater.json"
+            if nid in manifest_set and tj.exists():
+                try:
+                    src = json.loads(tj.read_text()).get("src") or {}
+                except Exception:
+                    continue
+                check((node.get("width"), node.get("height")) == (src.get("width"), src.get("height")),
+                      f"graph.theater.json: node {nid!r} is {node.get('width')}x{node.get('height')} "
+                      f"but {tj.name} says {src.get('width')}x{src.get('height')}")
+
     # Sanity check that pareidolia_index.py's acceptance bar (MIN_SIM /
     # scale-bias correction) is actually rejecting weak matches, not
     # producing a complete graph like the pre-fix version did (CONFIRMED
     # live: 1560 edges = 40*39 on the shipped 40-node graph before the fix).
     n = len(nodes)
-    if n >= 2:
+    if n >= COMPLETE_GRAPH_MIN_NODES:
         check(len(edges) < n * (n - 1),
               f"graph.theater.json: graph is COMPLETE ({len(edges)} edges == "
               f"{n}*{n-1} possible) — best_hinge()'s acceptance bar is not "
@@ -301,7 +370,7 @@ def main(argv: list[str]) -> int:
                   f"{' ...' if len(orphaned) > 10 else ''}")
 
     validate_manifest(dir_, ids or [])
-    validate_graph(dir_)
+    validate_graph(dir_, ids)
 
     if errors:
         print(f"\n❌ {len(errors)} validation error(s):")
