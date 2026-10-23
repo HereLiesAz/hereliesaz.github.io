@@ -122,12 +122,23 @@ export default function AnamorphicCam() {
       const total = el.scrollHeight - el.clientHeight;
       if (total <= 0) return;
       e.preventDefault();
+      // Steps are in viewport "pages", the unit PAGES_PER_SEGMENT is defined in,
+      // not a fraction of the whole scroll: at 400 paintings the scroll is 12000
+      // pages long, so a 2% step jumped 24 paintings. An arrow key moves one
+      // page (a tenth of a painting-to-painting move); PageUp/PageDown move one
+      // whole segment.
+      const page = el.clientHeight;
       if (e.key === 'Home') {
         el.scrollTop = 0;
       } else if (e.key === 'End') {
-        el.scrollTop = total;
+        // The walk has no real end. Go to the last painting already built;
+        // jumping to the far end of the scroll made the camera chase a frontier
+        // it had to build one segment per frame.
+        const segs = useStore.getState().segments.length;
+        const frontier = Math.max(0, segs - 1) * PAGES_PER_SEGMENT * page;
+        el.scrollTop = Math.min(total, frontier);
       } else {
-        const step = (e.key === 'PageDown' || e.key === 'PageUp' ? 0.1 : 0.02) * total;
+        const step = (e.key === 'PageDown' || e.key === 'PageUp' ? PAGES_PER_SEGMENT : 1) * page;
         const dir = (e.key === 'ArrowDown' || e.key === 'PageDown') ? 1 : -1;
         el.scrollTop = Math.max(0, Math.min(total, el.scrollTop + dir * step));
       }
@@ -165,7 +176,21 @@ export default function AnamorphicCam() {
     // already-built range so the user can scroll back into segments they
     // have already visited (bidirectional navigation) while forward
     // scroll builds more.
-    const totalProgress = (offset * totalPages) / PAGES_PER_SEGMENT;
+    let totalProgress = (offset * totalPages) / PAGES_PER_SEGMENT;
+    // A scrollbar drag, a touch fling or a held key can put the scroll far past
+    // the segments built so far. The camera is pinned to the frontier then
+    // (clampedTotal below), but the catch-up rule at the bottom builds one
+    // segment per frame, and every build slides the three-painting window onto
+    // a painting that mounts, fetches and unmounts a frame later. Pull the
+    // scroll back to the end of the built range instead, so the walk extends
+    // only as fast as the viewer actually reaches the frontier.
+    const frontierProgress = segments.length - 0.001;
+    if (totalProgress > frontierProgress + 0.05 && scroll.el && totalPages > 0) {
+      const el = scroll.el;
+      offset = Math.min(0.999, (frontierProgress * PAGES_PER_SEGMENT) / totalPages);
+      el.scrollTop = offset * (el.scrollHeight - el.clientHeight);
+      totalProgress = (offset * totalPages) / PAGES_PER_SEGMENT;
+    }
     const clampedTotal = Math.max(0, Math.min(totalProgress, segments.length - 0.001));
     const segmentIndex = Math.min(Math.floor(clampedTotal), segments.length - 1);
     const rLin = clampedTotal - segmentIndex;

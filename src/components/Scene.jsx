@@ -1,9 +1,12 @@
-import React, { Suspense, useEffect, useMemo } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { ScrollControls, PerspectiveCamera } from '@react-three/drei';
 import { useStore } from '../store/useStore';
 import AnamorphicCam, { PAGES_PER_SEGMENT } from './AnamorphicCam';
+
+// Upper bound on the scroll element's height; see `pages` in the Scene component.
+const MAX_SCROLL_PX = 8_000_000;
 import TheaterPainting, { bgSweepLevel } from './TheaterPainting';
 import TexturePreloader from './TexturePreloader';
 import { CAMERA_FOV_DEG } from '../sceneConstants';
@@ -111,9 +114,19 @@ export default function Scene() {
   // every single event would be wasted work.
   useEffect(() => {
     let t = null;
+    // Only rebuild for a change that alters the fit: a different width, or a
+    // height change big enough to be a rotation or window resize. Mobile
+    // browsers fire 'resize' for every address-bar collapse (a few percent of
+    // the height), and rebuilding then rewrites the camera path mid-scroll.
+    let last = { w: window.innerWidth, h: window.innerHeight };
     const onResize = () => {
       clearTimeout(t);
-      t = setTimeout(() => useStore.getState().recomputePlacements(), 200);
+      t = setTimeout(() => {
+        const w = window.innerWidth, h = window.innerHeight;
+        if (w === last.w && Math.abs(h - last.h) < last.h * 0.15) return;
+        last = { w, h };
+        useStore.getState().recomputePlacements();
+      }, 200);
     };
     window.addEventListener('resize', onResize);
     return () => {
@@ -233,8 +246,17 @@ export default function Scene() {
   // in one scroll. Falls back to the old constant until nodeCount is
   // known (0 before the graph loads); once it is, drei's ScrollControls
   // is remounted (via `key`) so it picks up the new `pages` prop.
+  // The scroll height is pages x viewport height. Browsers silently clamp an
+  // element's height (about 17.9 M px in Firefox, 33 M px in Chrome), after
+  // which the segments past that point are unreachable and the page-to-segment
+  // mapping drifts. Cap at MAX_SCROLL_PX, measured once from the viewport at
+  // mount so a mobile address bar changing the height cannot remount the scroll.
+  const viewportHeight = useRef(
+    typeof window === 'undefined' ? 800 : Math.max(320, window.innerHeight || 800),
+  ).current;
+  const maxPages = Math.floor(MAX_SCROLL_PX / viewportHeight);
   const pages = nodeCount > 0
-    ? Math.max(250, nodeCount * PAGES_PER_SEGMENT * 3)
+    ? Math.min(maxPages, Math.max(250, nodeCount * PAGES_PER_SEGMENT * 3))
     : 250;
 
   return (
