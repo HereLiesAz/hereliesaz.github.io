@@ -4,9 +4,10 @@ theater_baker.py — painting + depth-map baker (schema 2).
 
 CI note: the central Theater Bake workflow (HereLiesAz/workflows, triggered
 through .github/workflows/theater_bake.yml) invokes this with an explicit
---ids list. Every id that is not already baked costs one paid photorealize
-call, so a run is capped at MAX_IDS ids and a run without --ids refuses to
-start unless --all is given.
+--ids list, or with --pending when none was given. Every id that is not
+already baked costs one paid photorealize call, so a run is capped at MAX_IDS
+ids and a run with neither --ids nor --pending refuses to start unless --all is
+given.
 
 The paper-theater data model is exactly two textures per painting plus a
 small metadata file. The renderer builds the diorama at runtime from the
@@ -53,7 +54,7 @@ Usage:
   python3 scripts/theater_baker.py \\
       --input  public/assets/ \\
       --output public/data/theater/ \\
-      (--ids id1,id2,... | --all) [--force] [--max-side 768] [--limit N] [--max-ids 100]
+      (--ids id1,id2,... | --pending [N] | --all) [--force] [--max-side 768] [--limit N] [--max-ids 100]
 """
 
 from __future__ import annotations
@@ -774,6 +775,22 @@ def id_problem(stem: str) -> str | None:
     return None
 
 
+def is_pending(image: Path, out_dir: Path) -> bool:
+    """True if `image` has no complete schema-2 bake, or was baked with a
+    different crop directive than crops.json now says (so a crop edit re-bakes
+    just the paintings it touches)."""
+    stem = image.stem
+    try:
+        meta = json.loads((out_dir / f"{stem}.theater.json").read_text())
+    except (OSError, ValueError):
+        return True
+    if not isinstance(meta, dict) or meta.get("schema") != 2:
+        return True
+    if not (out_dir / f"{stem}.painting.webp").exists() or not (out_dir / f"{stem}.depth.png").exists():
+        return True
+    return meta.get("crop", "MISSING") != crop_directive(stem)
+
+
 def iter_images(root: Path):
     seen: dict[str, str] = {}
     for p in sorted(root.iterdir()):
@@ -831,6 +848,10 @@ def main(argv: list[str]) -> int:
                          "stale outputs for these ids are refreshed")
     ap.add_argument("--force",  action="store_true",
                     help="regenerate every stage, including cached photo/depth")
+    ap.add_argument("--pending", type=int, nargs="?", const=MAX_IDS, default=None, metavar="N",
+                    help="bake up to N images (default %(const)s) that are unbaked or whose "
+                         "crops.json entry changed since they were baked; a bounded, self-healing "
+                         "alternative to listing ids")
     ap.add_argument("--all", action="store_true",
                     help="bake every image in --input that is not already baked "
                          "(required when --ids is omitted; each new one costs a "
@@ -853,10 +874,17 @@ def main(argv: list[str]) -> int:
         print(f"[~] crops.json has {len(stale_crops)} key(s) with no image in "
               f"{args.input}: {stale_crops[:5]}{' ...' if len(stale_crops) > 5 else ''}",
               file=sys.stderr)
-    if not args.ids and not args.all:
-        print("[!] no --ids given. Pass --ids id1,id2,... or --all to bake every "
-              "unbaked image (each costs a paid photorealize call).", file=sys.stderr)
+    if not args.ids and not args.all and args.pending is None:
+        print("[!] no --ids given. Pass --ids id1,id2,..., --pending [N], or --all to bake "
+              "every unbaked image (each costs a paid photorealize call).", file=sys.stderr)
         return 2
+    if args.pending is not None:
+        if args.ids or args.all:
+            print("[!] --pending cannot be combined with --ids or --all.", file=sys.stderr)
+            return 2
+        pending = [p for p in images if is_pending(p, args.output)]
+        print(f"[i] {len(pending)} pending image(s); baking {min(len(pending), args.pending)}")
+        images = pending[: args.pending]
     if args.ids:
         wanted = {s.strip() for s in args.ids.split(",") if s.strip()}
         if len(wanted) > args.max_ids:
@@ -882,7 +910,7 @@ def main(argv: list[str]) -> int:
                 is_v2 = json.loads(out_json.read_text()).get("schema") == 2
             except Exception:
                 is_v2 = False
-        if is_v2 and not args.force and args.ids is None:
+        if is_v2 and not args.force and args.ids is None and args.pending is None:
             skipped += 1
             continue
         try:

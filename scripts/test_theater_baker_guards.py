@@ -4,6 +4,7 @@
 Run from the repo root:  python3 -m unittest scripts/test_theater_baker_guards.py
 Needs the baker's own dependencies (numpy, opencv, Pillow); see scripts/requirements.txt.
 """
+import json
 import sys
 import tempfile
 import unittest
@@ -56,6 +57,56 @@ class MainGuards(unittest.TestCase):
 
     def test_max_ids_is_adjustable(self):
         self.assertEqual(tb.main(self.argv + ["--ids", "a,b", "--max-ids", "1"]), 2)
+
+
+class Pending(unittest.TestCase):
+    """--pending N bakes only unbaked images or ones whose crop entry changed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.inp, self.out = root / "in", root / "out"
+        self.inp.mkdir(), self.out.mkdir()
+        for stem in ("done", "unbaked", "recrop", "partial", "z-extra"):
+            (self.inp / f"{stem}.jpg").write_bytes(b"x")
+        for stem, crop in (("done", "heuristic"), ("recrop", [0, 0, 1, 1]), ("partial", "heuristic")):
+            (self.out / f"{stem}.theater.json").write_text(json.dumps({"schema": 2, "crop": crop}))
+            (self.out / f"{stem}.painting.webp").write_bytes(b"x")
+            (self.out / f"{stem}.depth.png").write_bytes(b"x")
+        (self.out / "partial.depth.png").unlink()           # torn bake
+        self._crops = dict(tb.MANUAL_CROPS)
+        tb.MANUAL_CROPS.clear()
+        tb.MANUAL_CROPS["recrop"] = [0.1, 0.1, 0.9, 0.9]     # moved since it was baked
+        self.baked = []
+        self._bake = tb.bake_image
+
+        def fake(path, out, max_side, force=False):
+            self.baked.append(path.stem)
+            return {"id": path.stem, "depth": {"source": "stub", "bands": {"count": 1}}}
+
+        tb.bake_image = fake
+
+    def tearDown(self):
+        tb.bake_image = self._bake
+        tb.MANUAL_CROPS.clear()
+        tb.MANUAL_CROPS.update(self._crops)
+        self.tmp.cleanup()
+
+    def run_main(self, *extra):
+        return tb.main(["--input", str(self.inp), "--output", str(self.out), *extra])
+
+    def test_selects_unbaked_torn_and_recropped_only(self):
+        self.run_main("--pending")
+        self.assertEqual(sorted(self.baked), ["partial", "recrop", "unbaked", "z-extra"])
+
+    def test_pending_is_capped(self):
+        self.run_main("--pending", "2")
+        self.assertEqual(len(self.baked), 2)
+
+    def test_pending_cannot_be_combined_with_ids_or_all(self):
+        self.assertEqual(self.run_main("--pending", "--ids", "done"), 2)
+        self.assertEqual(self.run_main("--pending", "--all"), 2)
+        self.assertEqual(self.baked, [])
 
 
 class LocalDepth(unittest.TestCase):
