@@ -224,7 +224,7 @@ artwork — never a generated mark.
 
 ### 8.4 The real per-painting metadata (`{id}.theater.json`)
 
-```jsonc
+~~~jsonc
 {
   "schema": 2,
   "id": "...",
@@ -245,7 +245,7 @@ artwork — never a generated mark.
   },
   "accents": { "swatches": ["#a31818", "#e8b400"] }   // optional
 }
-```
+~~~
 
 No `layers[]`, no `blotches[]`, no `strokes[]`, no `fulcrum` block in this
 file — the flat stack is *built* at runtime from `depth.bands` (see

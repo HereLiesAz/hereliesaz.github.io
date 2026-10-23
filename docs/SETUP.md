@@ -37,7 +37,7 @@ There are two Python requirement files, for two different jobs:
 | File | What it is for | Contents |
 | --- | --- | --- |
 | `scripts/requirements.txt` | Running the art pipelines (`theater_baker.py`, `grinder.py`, `curator.py`, …) | The full ML stack: numpy, OpenCV, Pillow/pillow-heif, scipy, `torch`/`torchvision`, `transformers`, `timm`, Segment Anything (pinned git commit), `gradio_client`/`huggingface_hub`, `imagehash` |
-| `scripts/verification-requirements.txt` | Deploy-time validation only (`validate_integrated_records.py` in `deploy.yml`) | `jsonschema` |
+| `scripts/verification-requirements.txt` | What `npm run verify` and `deploy.yml` need: the unit tests, `validate_output.py` and `validate_integrated_records.py` | `jsonschema`, `Pillow`, `numpy`, `opencv-python-headless` (pinned) |
 
 The root `requirements.txt` is only a pointer (`-r scripts/requirements.txt`) for tools that look for a requirements file at the repo root.
 
@@ -53,6 +53,11 @@ Which scripts actually need what:
 - `grinder.py`, `bootstrap.py`, `curator.py`, `3d_deconstructor.py` need `torch` and Segment Anything. SAM is installed from a pinned git commit, so **Git must be on your PATH**. `grinder.py` and `bootstrap.py` download the `sam_vit_b_01ec64.pth` checkpoint (~375 MB) into the working directory on first run; it is git-ignored.
 - `curator.py` and `shard_prep/graph_builder.py` additionally use `transformers` (DINOv2 embeddings); `shard_prep/depth.py` uses `torch`.
 - `deduplicate.py` needs `imagehash`.
+
+### Step 1.2b: Tokens
+
+- **`HF_TOKEN`** (Hugging Face) is required for the photorealize stage of `theater_baker.py` (it calls hosted FLUX.1-Kontext and, as a fallback, depth Spaces; the token also buys ZeroGPU quota). Put it in `.env.local` at the repo root, or in the central workflow's secrets. Without it the baker warns and the photorealize stage fails. **Use a dedicated fine-grained token with the least access that works (inference calls only, no write access to any repository).** gradio_client sends the token as a bearer header to the Space it calls, and those Spaces are owned by other people, so treat the token as one you may have to rotate.
+- **GitHub token for the admin apps**: a fine-grained personal access token limited to `HereLiesAz/hereliesaz.github.io` with Contents and Actions read/write. The admin warns when a token can reach more than that repository.
 
 ### Step 1.3: Verify Installation
 

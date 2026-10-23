@@ -10,6 +10,8 @@
 - [`docs/PIPELINE.md`](docs/PIPELINE.md) — all intentional art-processing pipelines and their native outputs.
 - [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — canonical multi-pipeline sidecar contract and runtime discovery.
 - [`docs/WORKFLOW.md`](docs/WORKFLOW.md) — workflow execution details.
+- [`docs/HINGE_GRAPH.md`](docs/HINGE_GRAPH.md) — building the hinge graph for the whole corpus.
+- [`docs/ANDROID_ADMIN.md`](docs/ANDROID_ADMIN.md) — the native admin app.
 - [`docs/SETUP.md`](docs/SETUP.md) — environment setup.
 - [`docs/AESTHETIC.md`](docs/AESTHETIC.md) — creative brief.
 - [`docs/archive/`](docs/archive/) — earlier design/spec snapshots. Archive placement means historical/superseded documentation, not that the capabilities described there are automatically unwanted.
@@ -28,9 +30,17 @@ npm run build
 
 ~~~bash
 pip install -r scripts/requirements.txt
-python3 scripts/theater_baker.py --input public/assets/ --output public/data/theater/ --ids id1,id2,...
-python3 scripts/pareidolia_index.py --data public/data/theater/
+python3 scripts/theater_baker.py --input public/assets/ --output public/data/theater/ --ids id1,id2,...   # or --pending [N] / --all
+python3 scripts/pareidolia_index.py --data public/data/theater/   # no-op while scripts/hinge_graph.skip exists
 python3 scripts/validate_output.py --dir public/data/theater
+~~~
+
+Every baked painting costs a paid model call, so the baker needs `--ids`, `--pending` or `--all`; see [`docs/WORKFLOW.md`](docs/WORKFLOW.md). Building the hinge graph over a large corpus is split into shards: [`docs/HINGE_GRAPH.md`](docs/HINGE_GRAPH.md).
+
+### Verify
+
+~~~bash
+npm run verify
 ~~~
 
 ### Canonical integration
@@ -69,7 +79,7 @@ They are two different things, not a sync gap:
 
 - `assets/raw/`, and every `assets/<name>` that is a symlink into `raw/` — except the few images named in `public/graph.json`, which the flat-image fallback in `Scene.jsx` loads;
 - any `*.HEIC` / `*.HEIF`;
-- loose images directly in `public/data/` (strays; the runtime only fetches JSON and bakes from there).
+- everything in `public/data/` except manifest-listed `theater/` files and `integrated/` (`scripts/ship-filter.mjs`). The `art-data` branch is about 2 GB, mostly legacy stroke JSON the runtime never fetches, and GitHub Pages rejects sites over 1 GB; the deployed build is about 60 MB and `deploy.yml` fails if it passes 900 MB.
 
 Nothing is deleted from `public/`; the originals stay on disk for the scripts.
 

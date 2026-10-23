@@ -35,24 +35,24 @@ The real `art-data` branch contains multiple native artifacts from the same fami
 
 A family with one native artifact is stored directly:
 
-```json
+~~~json
 "strokeCloud": {
   "data": "/data/example.jpg.json",
   "count": 123,
   "nativeField": "s"
 }
-```
+~~~
 
 A family with multiple artifacts becomes:
 
-```json
+~~~json
 "strokeCloud": {
   "variants": [
     { "data": "/data/example.jpg.json", "count": 123, "nativeField": "s" },
     { "data": "/data/example.json", "count": 15000, "nativeField": "strokes" }
   ]
 }
-```
+~~~
 
 No preferred variant is baked into the data contract.
 
@@ -67,7 +67,7 @@ This keeps both provenance and semantics intact for future combination logic.
 
 ## Canonical record
 
-```json
+~~~json
 {
   "schemaVersion": 1,
   "id": "painting-id",
@@ -76,7 +76,7 @@ This keeps both provenance and semantics intact for future combination logic.
   "transitions": {},
   "provenance": []
 }
-```
+~~~
 
 `source` contains shared facts such as source image, resolution, or title when a native artifact provides them. `provenance` identifies the pipeline and artifact that contributed each capability.
 

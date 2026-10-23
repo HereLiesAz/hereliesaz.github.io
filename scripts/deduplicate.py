@@ -8,7 +8,7 @@ different) and removes duplicates, keeping only the highest-quality
 version.
 
 NOTE on directory layout: this repo has no raw/processed split. There is
-one flat source directory, `public/assets/` (1186+ files at last count),
+one flat source directory, `public/assets/` (a few hundred files; count them),
 which scripts/theater_baker.py reads directly via `--input public/assets/`.
 An earlier version of this script assumed a separate `assets/raw/` staging
 folder that does not exist here — INPUT_DIR below points at the real,
