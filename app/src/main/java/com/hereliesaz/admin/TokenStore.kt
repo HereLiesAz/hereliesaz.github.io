@@ -2,9 +2,12 @@ package com.hereliesaz.admin
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -32,8 +35,19 @@ class TokenStore(context: Context) {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
             String(cipher.doFinal(Base64.decode(payload, Base64.NO_WRAP)), Charsets.UTF_8)
-        } catch (_: Exception) {
-            clear(); ""
+        } catch (e: Exception) {
+            // Wipe the stored token only when it can never be read again: the key was
+            // invalidated (for example the screen lock changed) or the ciphertext no
+            // longer authenticates. Any other failure (a transient keystore error, a
+            // busy secure element) just reports "no token" this time and keeps it.
+            if (
+                e is AEADBadTagException ||
+                e is KeyPermanentlyInvalidatedException ||
+                e is UnrecoverableKeyException
+            ) {
+                clear()
+            }
+            ""
         }
     }
     fun clear() {

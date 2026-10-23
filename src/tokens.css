@@ -1,0 +1,27 @@
+/* Design tokens: the single source for colour, type, motion and hit size on the
+ * web. Everything is bone ink on a black field (docs/AESTHETIC.md §2). The
+ * Android admin mirrors these values by hand in AdminUi.kt and themes.xml;
+ * scripts/verify-tokens.mjs, run by `npm run verify`, fails if they drift. */
+:root {
+  --field: #000000;
+  --ink: #f4f0e6;
+  /* One ink at four strengths. Used for secondary text and rules instead of
+     greys or hues. */
+  --ink-dim: rgba(244, 240, 230, 0.7);
+  --ink-faint: rgba(244, 240, 230, 0.5);
+  --ink-line: rgba(244, 240, 230, 0.3);
+  --ink-hairline: rgba(244, 240, 230, 0.15);
+
+  /* Two voices. Display is the gallery's (captions, menu, projects, errors);
+     utility is the admin's. Both are system stacks: no font file ships. */
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  --font-utility: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --ease-ink: cubic-bezier(0.22, 0.7, 0.2, 1);
+  --dur-fast: 160ms;
+  --dur-med: 240ms;
+  --dur-slow: 720ms;
+
+  /* Minimum pointer/touch target. */
+  --hit: 44px;
+}

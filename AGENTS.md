@@ -18,8 +18,10 @@ npm run verify-assets  # just the fallback-graph image check
 node scripts/verify-assets.cjs --fix   # regenerate public/graph.json from files on disk
 
 pip install -r scripts/requirements.txt              # full ML stack for the pipelines
-pip install -r scripts/verification-requirements.txt # jsonschema only (deploy validation)
-python3 -m unittest scripts/test_integrate_painting_bakes.py
+pip install -r scripts/verification-requirements.txt # what the verify gate needs: jsonschema, Pillow, numpy, OpenCV
+python3 -m unittest scripts/test_integrate_painting_bakes.py scripts/test_check_no_shrink.py scripts/test_validate_output.py
+python3 -m unittest scripts/test_pareidolia_incremental.py scripts/test_theater_baker_guards.py   # need numpy + OpenCV
+node --test scripts/test-ship-filter.mjs
 ~~~
 
 ## Verify gate
@@ -29,19 +31,27 @@ runs, in order:
 
 1. `py_compile` over every Python file in `scripts/` (and any root-level
    pipeline entrypoints present);
-2. the integration builder unit tests;
-3. `scripts/verify-assets.cjs` — every `public/graph.json` node image must
+2. the Python unit tests: integration builder, manifest guard, output
+   validator, and (when numpy/OpenCV are installed; CI requires them) the
+   hinge-graph and baker tests;
+3. the ship filter's unit tests (`node --test`);
+4. `scripts/verify-tokens.mjs` — the design tokens in `src/tokens.css`,
+   `AdminUi.kt`, `themes.xml` and both manifests agree;
+5. `scripts/verify-assets.cjs` — every `public/graph.json` node image must
    exist in `public/assets/`;
-4. `npm run build`.
+6. `npm run build`.
 
 It needs no art data, so it works in a plain source checkout. CI
-(`.github/workflows/deploy.yml`) runs the same gate after staging
-`art-data`, plus deploy-only steps: it fails if
+(`.github/workflows/deploy.yml`) runs the same gate, on pull requests too
+(verify and build only, never publish), after staging `art-data`, plus
+deploy-only steps: it fails if
 `public/data/theater/_manifest.json` is missing, regenerates
 `public/data/integrated/` from scratch (`--strict`) and validates it
 against `schemas/painting-bake.schema.json`.
 
-There is no JS linter or JS unit-test suite; don't invent one in passing.
+There is no JS linter and no browser test suite; don't invent one in passing.
+The only JS tests are `node --test` files for build tooling
+(`scripts/test-ship-filter.mjs`).
 
 ## Branches and art data
 
@@ -78,7 +88,9 @@ There is no JS linter or JS unit-test suite; don't invent one in passing.
 originals. The Vite plugin `excludeSourceMaterial` in `vite.config.js`
 prunes `raw/`, the symlinked originals (except images named in
 `public/graph.json`), HEICs and loose images in `public/data/` from
-`dist/`. If you add a runtime dependency on an original, add it to the
+`dist/`, and `scripts/ship-filter.mjs` drops everything in `public/data/`
+except manifest-listed `theater/` files and `integrated/` (the `art-data`
+branch is about 2 GB; Pages rejects sites over 1 GB). If you add a runtime dependency on an original, add it to the
 fallback graph or adjust that plugin.
 
 ## Pipelines (scripts/)
@@ -88,15 +100,17 @@ See [`docs/PIPELINE.md`](docs/PIPELINE.md) and
 
 | Pipeline | Entry point | CI | Output |
 | --- | --- | --- | --- |
-| Paper theater (production) | `theater_baker.py` → `pareidolia_index.py` → `validate_output.py` | `theater_bake.yml` (proxy; runs in `HereLiesAz/workflows`) | `art-data:theater/` |
-| Stroke grinder | `grinder.py` (SAM + depth, 56-way sharded) | `process_art.yml` (central) | `art-data` stroke JSON |
-| Bootstrap sample | `bootstrap.py` | `bootstrap.yml` (central, manual) | `art-data` |
+| Paper theater (production) | `theater_baker.py` → `pareidolia_index.py` → `validate_output.py` → `check_no_shrink.py` | `theater_bake.yml` (proxy; runs in `HereLiesAz/workflows`) | `art-data:theater/` |
+| Stroke grinder | `grinder.py` (SAM + depth, 56-way sharded) | none on `main` today (`process_art.yml` is retired in the registry) | `art-data` stroke JSON |
+| Bootstrap sample | `bootstrap.py` | none on `main` today (`bootstrap.yml` is retired) | `art-data` |
 | Unified shard field | `prepare.py` + `shard_prep/` | manual | `public/data/baked/`, `public/graph.json` |
 | Perspective shard bake | `bake-shards.js` | manual | `public/data/baked/` |
 | Curator semantic shards | `curator.py` | manual | `public/data/` + `.bin` buffers |
 | Semantic layers | `3d_deconstructor.py` | manual | layered slices |
 | Integration | `integrate_painting_bakes.py`, `validate_integrated_records.py` | `deploy.yml` | `public/data/integrated/` (deploy-time only) |
-| Admin removal | — | `remove_painting.yml` (central) | prunes `art-data` |
+| Admin removal | — | `remove_painting.yml` (proxy; central) | prunes `art-data` |
+| Android publish | — | `publish_admin_staging.yml` (proxy; central) | bakes, removes, merges `admin-staging` into `main` |
+| Duplicate scan | `dedup_scan.py` (read-only) | `dedup_scan.yml` (proxy; central) | report for the Android Dedup tab |
 
 Every listed pipeline is intentional, even when nothing currently consumes
 its output. Do not delete a script because grep finds no caller — removal
@@ -124,5 +138,10 @@ without the `ANDROID_KEY*` signing env vars.
   `updateFrame`, stationary shards with all motion from the camera,
   reduced-motion support) are listed in `docs/ARCHITECTURE.md`; preserve
   them.
-- `index.html` has a CSP that allows the inline gtag script by hash — if
-  you touch that script, update the hash (see the comment there).
+- `index.html` has a CSP with no inline script: the Google tag loads from
+  `src/analytics.js` on public routes only, and opening `/admin` adds a
+  stricter policy (`src/admin/lockdown.js`) because the admin keeps a
+  write-scoped GitHub token in the origin's localStorage. Don't add
+  third-party scripts to `/admin`.
+- Colours, type, motion and hit size come from `src/tokens.css`; see
+  `docs/AESTHETIC.md` section 9.

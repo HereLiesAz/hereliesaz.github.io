@@ -96,9 +96,9 @@ Per flat, in order:
    rasterize as an opaque black rectangle and occlude whatever is behind
    it (the background sweep, other flats). `op < 0.004` discards instead.
 
-```glsl
+~~~glsl
 gl_FragColor = vec4(painting * op, 1.0);
-```
+~~~
 
 ### Why the band boundary is a hard discard, not an antialiased ramp
 
@@ -153,10 +153,10 @@ piece's "ground" has to be the entire void, not a rectangle.
 
 ### Vertex shader (`bgWipeVS`)
 
-```glsl
+~~~glsl
 varying vec2 vUv;
 void main() { vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }
-```
+~~~
 
 Writes clip-space position directly (`* 2.0` to cover the full `[-1,1]`
 NDC range from a unit plane), bypassing the model/view/projection chain
@@ -165,9 +165,9 @@ state.
 
 ### Fragment shader (`bgWipeFS`)
 
-```glsl
+~~~glsl
 uniform float uLevel;
-```
+~~~
 
 `uLevel` (0 = all black, 1 = all white) is written every frame from
 `bgSweepLevel()` — the max sweep contribution across every currently-

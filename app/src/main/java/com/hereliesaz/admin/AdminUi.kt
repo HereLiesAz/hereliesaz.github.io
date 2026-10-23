@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -32,12 +34,15 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 
+// Mirrors src/tokens.css (--ink, --field); scripts/verify-tokens.mjs fails the
+// build if they drift. Bone ink on black, no hues: failure and success are
+// marked with a glyph and a rule style (see StatusText, DangerButton), not colour.
 private val Ink = Color(0xFFF4F0E6)
-private val Void = Color(0xFF0A0A0A)
-private val Panel = Color(0xFF141414)
-private val Danger = Color(0xFF3A1414)
-private val DangerInk = Color(0xFFF4B0B0)
-private val Good = Color(0xFFB0E0B0)
+private val Void = Color(0xFF000000)
+private val Panel = Void
+private val Danger = Void
+private val DangerInk = Ink
+private val Good = Ink
 
 @Composable fun HereLiesAzAdminTheme(content: @Composable () -> Unit) {
     MaterialTheme(
@@ -49,8 +54,24 @@ private val Good = Color(0xFFB0E0B0)
             titleLarge = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace),
             titleMedium = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
         ),
+        // Square corners, like the web admin; Material3's pills and 28 dp dialogs
+        // are not part of this design (AESTHETIC.md §3).
+        shapes = Shapes(
+            extraSmall = RectangleShape,
+            small = RectangleShape,
+            medium = RectangleShape,
+            large = RectangleShape,
+            extraLarge = RectangleShape,
+        ),
         content = content,
     )
+}
+
+/** The same names the web admin's tabs use. */
+private fun tabLabel(tab: AdminTab): String = when (tab) {
+    AdminTab.Art -> "paintings"
+    AdminTab.Add -> "add"
+    else -> tab.name.lowercase()
 }
 
 @Composable fun AdminApp(vm: AdminViewModel = viewModel()) {
@@ -115,11 +136,11 @@ private val Good = Color(0xFFB0E0B0)
                     AdminTab.entries.forEach { item ->
                         if (vm.tab == item) {
                             Button({ vm.tab = item; if (item == AdminTab.Site) vm.loadSite() }) {
-                                Text(if (item == AdminTab.Add) "add art" else item.name.lowercase())
+                                Text(tabLabel(item))
                             }
                         } else {
                             OutlinedButton({ vm.tab = item; if (item == AdminTab.Site) vm.loadSite() }) {
-                                Text(if (item == AdminTab.Add) "add art" else item.name.lowercase())
+                                Text(tabLabel(item))
                             }
                         }
                     }
@@ -974,13 +995,21 @@ private fun formatBytes(bytes: Long): String =
 }
 
 @Composable private fun NetworkImage(url: String, vm: AdminViewModel, modifier: Modifier = Modifier) {
-    val bitmap by produceState<android.graphics.Bitmap?>(null, url) {
-        value = runCatching { vm.bitmap(url) }.getOrNull()
+    // A failed load must not look like a slow one: "…" forever hid broken images.
+    val state by produceState<Pair<android.graphics.Bitmap?, Boolean>>(Pair(null, false), url) {
+        val result = runCatching { vm.bitmap(url) }
+        value = Pair(result.getOrNull(), result.isFailure)
     }
+    val (bitmap, failed) = state
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
-        bitmap?.let {
-            Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-        } ?: Text("…", color = Ink.copy(alpha = 0.4f))
+        if (bitmap != null) {
+            Image(bitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        } else {
+            Text(
+                if (failed) "unavailable" else "…",
+                color = if (failed) DangerInk else Ink.copy(alpha = 0.4f),
+            )
+        }
     }
 }
 
@@ -989,6 +1018,8 @@ private fun formatBytes(bytes: Long): String =
         onClick,
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(containerColor = Danger, contentColor = DangerInk),
+        // Destructive actions are an outlined button with a heavy rule, not a red one.
+        border = BorderStroke(3.dp, Ink),
         content = { content() },
     )
 }
@@ -1002,7 +1033,17 @@ private fun formatBytes(bytes: Long): String =
         message.startsWith("Submitted") ||
         message.startsWith("Discarded") ||
         loadedCleanly
-    Text(message, modifier = modifier, color = if (good) Good else Ink.copy(alpha = 0.78f))
+    // Failures read as failures, not as neutral status.
+    val failed = message.contains("Could not", ignoreCase = true) || message.contains("failed", ignoreCase = true)
+    Text(
+        (if (failed) "\u2715 " else if (good) "\u2713 " else "") + message,
+        modifier = modifier,
+        color = when {
+            failed -> DangerInk
+            good -> Good
+            else -> Ink.copy(alpha = 0.78f)
+        },
+    )
 }
 
 @Composable private fun OpenLinkButton(label: String, url: String) {

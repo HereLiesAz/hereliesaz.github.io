@@ -14,22 +14,23 @@ This project intentionally keeps multiple art-processing representations of the 
 8. [**Aesthetic**](./AESTHETIC.md) — creative brief.
 9. [**Handoff**](./HANDOFF.md) — current state and working rules.
 10. [**Android Admin**](./ANDROID_ADMIN.md) — native app, batch bake selection, baked-status inventory filters, and release/update behavior.
+11. [**Hinge graph**](./HINGE_GRAPH.md) — building the transition graph for the whole corpus: what it costs, sharding it across sessions, merging.
 
 [`archive/`](./archive/) contains earlier planning/spec snapshots. A document being archived means it is not the current implementation reference; it does **not** mean every capability described in it has been rejected or should be removed.
 
 ## Quick start
 
-```bash
+~~~bash
 npm install
 npm run dev
 
 pip install -r scripts/requirements.txt
-python3 scripts/theater_baker.py --input public/assets/ --output public/data/theater/ --ids id1,id2
-python3 scripts/pareidolia_index.py --data public/data/theater/
+python3 scripts/theater_baker.py --input public/assets/ --output public/data/theater/ --ids id1,id2   # or --pending [N] / --all
+python3 scripts/pareidolia_index.py --data public/data/theater/   # no-op while scripts/hinge_graph.skip exists
 python3 scripts/validate_output.py --dir public/data/theater
 
-python3 -m unittest scripts/test_integrate_painting_bakes.py
+npm run verify   # the gate: unit tests, token sync, asset check, build
 python3 scripts/integrate_painting_bakes.py --public-root public
-```
+~~~
 
 See [`PIPELINE.md`](./PIPELINE.md), [`INTEGRATION.md`](./INTEGRATION.md), [`WORKFLOW.md`](./WORKFLOW.md), and [`SETUP.md`](./SETUP.md) for the complete picture.

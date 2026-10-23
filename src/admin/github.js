@@ -33,7 +33,7 @@ class GitHubApiError extends Error {
 async function api(path, options = {}) {
   // `options.token` lets verifyToken() test a candidate token WITHOUT
   // persisting it first (see TokenSetup.jsx).
-  const { token: tokenOverride, ...fetchOptions } = options;
+  const { token: tokenOverride, raw, ...fetchOptions } = options;
   options = fetchOptions;
   const token = tokenOverride || getToken();
   if (!token) throw new GitHubApiError('No GitHub token set — open Settings first.', 401);
@@ -64,8 +64,8 @@ async function api(path, options = {}) {
       res.status,
     );
   }
-  if (res.status === 204) return null;
-  return res.json();
+  if (res.status === 204) return raw ? { data: null, headers: res.headers } : null;
+  return raw ? { data: await res.json(), headers: res.headers } : res.json();
 }
 
 function toBase64(bytes) {
@@ -176,7 +176,29 @@ export async function verifyToken(token) {
     if (e.status === 403 || e.status === 404) actionsOk = false;
     else throw e;
   }
-  return { login: data.owner?.login, permissions: data.permissions, actionsOk };
+  // The token is stored in this origin's localStorage, so anything that runs on
+  // hereliesaz.github.io can read it. Report how far it reaches so the setup
+  // screen can tell the owner when it is wider than this one repository: a
+  // classic token (GitHub sends X-OAuth-Scopes only for those) or a fine-grained
+  // token that can see other repositories.
+  let classic = false;
+  let otherRepos = 0;
+  try {
+    const { data: repos, headers } = await api(
+      '/user/repos?per_page=100&affiliation=owner,collaborator,organization_member',
+      { token, raw: true },
+    );
+    classic = headers.get('x-oauth-scopes') !== null;
+    otherRepos = (Array.isArray(repos) ? repos : []).filter(r => r.full_name !== `${OWNER}/${REPO}`).length;
+  } catch { /* the breadth check is advisory; never fail verification over it */ }
+  return {
+    login: data.owner?.login,
+    permissions: data.permissions,
+    actionsOk,
+    broad: classic || otherRepos > 0,
+    classic,
+    otherRepos,
+  };
 }
 
 export { OWNER, REPO, BRANCH, GitHubApiError };

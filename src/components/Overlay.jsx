@@ -25,9 +25,9 @@ import { DEFAULT_SITE_CONTENT, safeHref, isInternalPath } from '../siteContent';
 const STYLES = `
 .ink-overlay, .ink-overlay * {
   box-sizing: border-box;
-  font-family: 'Iowan Old Style', 'Palatino Linotype', 'Georgia', serif;
+  font-family: var(--font-display);
   letter-spacing: 0.04em;
-  color: #f4f0e6;
+  color: var(--ink);
 }
 .ink-overlay {
   position: absolute;
@@ -37,7 +37,7 @@ const STYLES = `
   /* Driven per-frame from JS (see the apply() subscription below) with
      how far the site background has swept from black toward white
      (TheaterPainting's bgSweepLevel()). The signature/caption text colour
-     (#f4f0e6, near-white) reads fine on black but drops to ~1.1:1
+     (var(--ink), near-white) reads fine on black but drops to ~1.1:1
      contrast against a fully white background with nothing else to help
      it — text-shadow alone can't fix that since it's a glow, not a solid
      backing. --ink-scrim drives a dark backing panel behind that text
@@ -60,34 +60,34 @@ const STYLES = `
   display: block;
   filter: drop-shadow(0 0 12px rgba(0, 0, 0, 0.85));
 }
+/* Behind the text on a light (swept) background: a soft dark vignette, not a
+   box. The overlay's text is bone-coloured and unreadable on white without it,
+   but a rectangle would break the "no panels" rule (AESTHETIC.md §3). */
 .ink-signature::before,
 .ink-caption::before {
   content: '';
   position: absolute;
-  inset: -0.5em -0.7em;
-  background: #000;
+  inset: -1.4em -2.4em;
+  background: radial-gradient(ellipse at center, #000 0%, rgba(0, 0, 0, 0.75) 40%, transparent 72%);
   opacity: var(--ink-scrim);
-  border-radius: 3px;
   pointer-events: none;
 }
-.ink-signature svg {
+.ink-signature img {
   display: block;
-  overflow: visible;
+  height: 2.8rem;
+  width: auto;
+  animation: ink-signature-reveal var(--dur-slow) var(--ease-ink) 180ms backwards;
+  opacity: 0.92;
+  transition: opacity var(--dur-fast) ease;
 }
-.ink-signature .ink-signature__stroke {
-  fill: none;
-  stroke: #f4f0e6;
-  stroke-width: 0.7;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-  letter-spacing: 0.06em;
-  font-size: 22px;
-  font-style: italic;
-  font-weight: 400;
-  font-family: 'Iowan Old Style', 'Palatino Linotype', 'Georgia', serif;
-  animation: ink-signature-reveal 720ms cubic-bezier(0.22, 0.7, 0.2, 1) 180ms backwards;
+.ink-signature:hover img { opacity: 1; }
+.ink-signature:focus-visible,
+.ink-modal__close:focus-visible,
+.ink-modal a:focus-visible,
+.ink-load-error button:focus-visible {
+  outline: 1px solid var(--ink);
+  outline-offset: 4px;
 }
-.ink-signature:hover .ink-signature__stroke { stroke-width: 1.0; }
 @keyframes ink-signature-reveal {
   from { clip-path: inset(0 102% 0 -2%); }
   to   { clip-path: inset(0 -2%  0 -2%); }
@@ -132,7 +132,7 @@ const STYLES = `
   align-items: center;
   justify-content: center;
   pointer-events: auto;
-  animation: ink-modal-backdrop-in 240ms ease-out;
+  animation: ink-modal-backdrop-in var(--dur-med) ease-out;
 }
 @keyframes ink-modal-backdrop-in {
   from { opacity: 0; } to { opacity: 1; }
@@ -150,7 +150,7 @@ const STYLES = `
   height: 100%;
   pointer-events: none;
   overflow: visible;
-  animation: ink-modal-frame-in 600ms cubic-bezier(0.22, 0.7, 0.2, 1) backwards;
+  animation: ink-modal-frame-in 600ms var(--ease-ink) backwards;
 }
 @keyframes ink-modal-frame-in {
   from { stroke-dashoffset: 1200; opacity: 0; }
@@ -158,7 +158,7 @@ const STYLES = `
 }
 .ink-modal__frame path {
   fill: none;
-  stroke: #f4f0e6;
+  stroke: var(--ink);
   stroke-width: 0.8;
   stroke-linejoin: round;
   stroke-linecap: round;
@@ -173,7 +173,7 @@ const STYLES = `
   padding: 0.2rem 0.5rem;
   font-size: 1.1rem;
   cursor: pointer;
-  color: #f4f0e6;
+  color: var(--ink);
   font-style: italic;
 }
 .ink-modal__signature {
@@ -206,7 +206,7 @@ const STYLES = `
   letter-spacing: 0.16em;
 }
 .ink-modal a {
-  color: #f4f0e6;
+  color: var(--ink);
   text-decoration: none;
   border-bottom: 0.5px solid rgba(244, 240, 230, 0.35);
   padding-bottom: 1px;
@@ -219,6 +219,56 @@ const STYLES = `
    black forever with no indication anything is wrong. Styled like the
    caption: same ink colour/serif, centred instead of corner-anchored so
    it reads as a message rather than a painting title. */
+/* Hit areas. The drawn controls stay small; an invisible ::after grows each
+   pointer/touch target to at least 44 x 44 px without changing how it looks. */
+.ink-modal__close,
+.ink-modal a { position: relative; }
+.ink-modal__close::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%);
+}
+.ink-modal a::after {
+  content: ''; position: absolute; left: -8px; right: -8px; top: 50%;
+  height: 44px; transform: translateY(-50%);
+}
+
+/* --- Scroll hint -------------------------------------------------------
+   One word, same ink as everything else, shown until the viewer first moves
+   through the gallery (or 12 s pass). Without it the only instruction is
+   visually hidden, and a sighted first-time visitor sees one painting and
+   has to guess that scrolling travels. */
+.ink-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 2.4rem;
+  transform: translateX(-50%);
+  font-size: 0.8rem;
+  letter-spacing: 0.32em;
+  text-shadow: 0 0 16px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+  opacity: 0.85;
+  transition: opacity 0.9s ease;
+  animation: ink-hint-breathe 3.2s ease-in-out infinite;
+}
+.ink-hint--gone { opacity: 0; animation: none; }
+@keyframes ink-hint-breathe { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.9; } }
+@media (prefers-reduced-motion: reduce) {
+  .ink-hint { animation: none; }
+}
+
+.ink-load-error button {
+  pointer-events: auto;
+  margin-top: 0.9rem;
+  background: none;
+  border: none;
+  border-bottom: 0.5px solid rgba(244, 240, 230, 0.55);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  padding: 0.5rem 0.2rem;
+  min-height: 44px;
+}
 .ink-load-error {
   position: absolute;
   top: 50%;
@@ -252,6 +302,31 @@ function VellumFrame() {
       <path d="M0.7 99.3 C 0.5 86, 1.3 70, 0.6 56 S 0.9 28, 1.2 14 S 0.4 2, 0.6 0.6" />
     </svg>
   );
+}
+
+// Camera and app file names (IMG_0232, PXL_2023…, UUIDs, dates) are not titles.
+// Showing them as the caption reads as a broken page; say "untitled" instead.
+const CAMERA_STEM = /^(?:IMG|PXL|DSC|MVIMG|PANO|VID|original)[_-]?|^\d{6,}|^\d{4}-\d{2}-\d{2}|^[0-9a-f]{8}-[0-9a-f]{4}-/i;
+export function captionTitle(id, info) {
+  const title = (info?.title || '').trim();
+  if (title) return title;
+  return !id || CAMERA_STEM.test(id) ? 'untitled' : id;
+}
+
+/** One quiet word that tells a first-time visitor the page travels when scrolled. */
+function ScrollHint() {
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    const hide = () => setGone(true);
+    const timer = setTimeout(hide, 12000);
+    const events = ['wheel', 'touchmove', 'keydown', 'pointerdown'];
+    events.forEach(e => window.addEventListener(e, hide, { passive: true, once: true }));
+    return () => {
+      clearTimeout(timer);
+      events.forEach(e => window.removeEventListener(e, hide));
+    };
+  }, []);
+  return <div className={`ink-hint${gone ? ' ink-hint--gone' : ''}`} aria-hidden="true">scroll</div>;
 }
 
 const Overlay = () => {
@@ -293,6 +368,8 @@ const Overlay = () => {
   const titleRef   = useRef(null);
   const priceRef   = useRef(null);
   const lastIdRef  = useRef(null);
+  const liveRef    = useRef(null);
+  const liveTimerRef = useRef(null);
   const lastScrimRef      = useRef(null);
   const lastOpacityRef    = useRef(null);
   const lastVisibilityRef = useRef(null);
@@ -316,7 +393,20 @@ const Overlay = () => {
       }
       if (id !== lastIdRef.current) {
         const info = id ? state.meta?.[id] : null;
-        if (titleRef.current) titleRef.current.textContent = info?.title || id || '';
+        const title = captionTitle(id, info);
+        if (titleRef.current) titleRef.current.textContent = id ? title : '';
+        // Announce to screen readers only once the caption has settled. The
+        // visible caption changes at every segment boundary, and scrolling
+        // quickly through 400 paintings would otherwise queue an announcement
+        // per painting.
+        clearTimeout(liveTimerRef.current);
+        if (id) {
+          liveTimerRef.current = setTimeout(() => {
+            if (liveRef.current) {
+              liveRef.current.textContent = info?.description ? `${title}. ${info.description}` : title;
+            }
+          }, 700);
+        }
         if (priceRef.current) {
           const price = info?.price;
           // Case-insensitive on purpose: PaintingEditor.jsx normalizes to
@@ -347,7 +437,8 @@ const Overlay = () => {
       }
     };
     apply(useStore.getState());
-    return useStore.subscribe(apply);
+    const unsubscribe = useStore.subscribe(apply);
+    return () => { unsubscribe(); clearTimeout(liveTimerRef.current); };
   }, []);
 
   // Focus management for the menu modal: move focus into it on open and
@@ -373,7 +464,21 @@ const Overlay = () => {
   useEffect(() => {
     if (!showMenu) return;
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') toggleMenu();
+      if (e.key === 'Escape') { toggleMenu(); return; }
+      if (e.key !== 'Tab') return;
+      // aria-modal does not stop Tab leaving the dialog; keep focus inside it.
+      const dialog = document.querySelector('.ink-modal');
+      const items = dialog ? [...dialog.querySelectorAll('a[href], button:not([disabled])')] : [];
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -386,7 +491,7 @@ const Overlay = () => {
         className="ink-signature"
         onClick={toggleMenu}
         id="ink-signature"
-        aria-label="open menu"
+        aria-label="HereLiesAz — open menu"
         ref={signatureRef}
         // Excluded from the tab order while the modal is open, rather than
         // left reachable underneath it — the modal has no separate focus
@@ -395,18 +500,21 @@ const Overlay = () => {
         tabIndex={showMenu ? -1 : 0}
         aria-hidden={showMenu}
       >
-        <svg width="160" height="40" viewBox="0 0 160 40">
-          <text x="0" y="28" className="ink-signature__stroke">HereLiesAz</text>
-        </svg>
+        <img src="/az-signature.svg" alt="" aria-hidden="true" />
       </button>
 
-      <div ref={captionRef} className="ink-caption" aria-live="polite">
+      <div ref={captionRef} className="ink-caption" aria-hidden="true">
         <div ref={titleRef} className="ink-caption__title" />
         <div ref={priceRef} className="ink-caption__price" />
       </div>
+      <div ref={liveRef} className="visually-hidden" role="status" aria-live="polite" aria-atomic="true" />
+      <ScrollHint />
 
       {loadError && (
-        <div className="ink-load-error">{loadError}</div>
+        <div className="ink-load-error" role="alert">
+          {loadError}
+          <div><button type="button" onClick={() => window.location.reload()}>reload</button></div>
+        </div>
       )}
 
       {showMenu && (

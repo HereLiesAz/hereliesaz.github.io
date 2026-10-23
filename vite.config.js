@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pruneShippedData } from './scripts/ship-filter.mjs';
 
 // Vite copies public/ into dist/ wholesale, with no filter. Some of what
 // lives under public/ is source material that must stay on disk (scripts
@@ -18,8 +19,13 @@ import { join, resolve } from 'node:path';
 //                          flat-image fallback in Scene.jsx), so those are
 //                          kept.
 //   - *.HEIC anywhere      browsers can't display it; only the bake reads it
-//   - loose images directly in public/data/ (not in a subfolder) — strays;
-//                          the runtime only fetches JSON/bakes from there
+//   - everything in public/data/ except theater/ and integrated/ — the
+//                          art-data branch also carries ~1.9 GB of legacy
+//                          stroke-cloud JSON, bakes of paintings that left the
+//                          manifest, and masks/photo intermediates; the runtime
+//                          fetches only manifest-listed theater files (see
+//                          scripts/ship-filter.mjs). GitHub Pages rejects sites
+//                          over 1 GB.
 // This prunes them from dist/ after the copy. It deletes from the BUILD
 // OUTPUT only, never from public/.
 const SHIP_EXCLUDE_DIRS = ['assets/raw'];
@@ -86,7 +92,9 @@ function excludeSourceMaterial() {
       for (const e of dataEntries) {
         if (e.isFile() && LOOSE_DATA_IMAGE_RE.test(e.name)) { rmSync(join(dataDir, e.name), { force: true }); removed++; }
       }
-      this.info?.(`pruned ${SHIP_EXCLUDE_DIRS.join(', ')} and ${removed} source image(s) from ${outDir}`);
+      const data = pruneShippedData(dataDir);
+      this.info?.(`pruned ${SHIP_EXCLUDE_DIRS.join(', ')}, ${removed} source image(s) and `
+        + `${data.removed} unserved data entries (${(data.bytes / 1048576).toFixed(0)} MB) from ${outDir}`);
     },
   };
 }

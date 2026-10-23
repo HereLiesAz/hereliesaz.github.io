@@ -1,6 +1,30 @@
 import { useState } from 'react';
 import { dispatchWorkflow, fileToBase64, getFile, putFile } from './github.js';
-import { listBakedPaintings } from './data.js';
+import { deploySite, listBakedPaintings } from './data.js';
+
+/** Starts deploy.yml and reports the outcome. Bakes land on the art-data branch,
+ * which does not trigger a deploy on its own. */
+function DeployNow() {
+  const [state, setState] = useState(null); // null | 'working' | 'queued' | { error }
+  const go = async () => {
+    setState('working');
+    try {
+      await deploySite();
+      setState('queued');
+    } catch (e) {
+      setState({ error: e.message });
+    }
+  };
+  if (state === 'queued') return <>deploy queued — live in a few minutes</>;
+  return (
+    <>
+      <button type="button" className="admin-btn-plain" onClick={go} disabled={state === 'working'}>
+        {state === 'working' ? 'queueing…' : 'deploy now'}
+      </button>
+      {state?.error && <span className="admin-error" role="alert"> {state.error}</span>}
+    </>
+  );
+}
 
 /** Derives both the painting id and the filename actually uploaded from a
  * picked file's name. The id gets spliced into a comma-joined batch
@@ -133,9 +157,12 @@ export default function AddPainting() {
         <p className="admin-ok" role="status" aria-live="polite">
           Uploaded and dispatched: {dispatchedIds.join(', ')}.{' '}
           {status.renamed.length > 0 && <>Renamed to avoid an id collision: {status.renamed.join('; ')}.{' '}</>}
-          <a href={`https://github.com/HereLiesAz/hereliesaz.github.io/actions/workflows/theater_bake.yml`} target="_blank" rel="noreferrer noopener">
-            watch the bake run
-          </a>.
+          The bake runs in{' '}
+          <a href="https://github.com/HereLiesAz/workflows/actions" target="_blank" rel="noreferrer noopener">
+            HereLiesAz/workflows
+          </a>{' '}
+          (the run in this repository only hands off). When it finishes, publish it:{' '}
+          <DeployNow />.
         </p>
       )}
       {status?.error && <p className="admin-error" role="alert">{status.error}</p>}

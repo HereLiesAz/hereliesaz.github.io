@@ -64,6 +64,9 @@ let bgSweepInstanceSeq = 0;
 // ---- module-level fetch caches ----------------------------------------------
 
 const theaterMetaCache = new Map();
+// Delays before retrying a failed painting/depth texture load (three tries).
+const TEXTURE_RETRY_DELAYS_MS = [1000, 3000, 8000];
+
 export function fetchTheaterMeta(id) {
   if (!id) return Promise.resolve(null);
   const hit = theaterMetaCache.get(id);
@@ -466,7 +469,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   // declaration would leave it in the temporal dead zone when the memo runs.
   const [bgInfo, setBgInfo] = useState(null);
   const currentSegmentIndex = useStore(s => s.currentSegmentIndex);
-  const setCurrentResolution = useStore(s => s.setCurrentResolution);
   const bandOverrides = useStore(s => s.bandOverrides);
   const tmpVec = useRef(new THREE.Vector3());
   // Unique key for this mount's bgSweep entry — see the comment on bgSweep
@@ -597,9 +599,14 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   // Load painting + depth textures once meta is known. Pass them into
   // every flat's material.
   const [textures, setTextures] = useState(null);
+  // Bumped to retry a failed texture load. Without it a single network blip left
+  // the painting mounted, invisible (unbound samplers read black, which the
+  // chroma key discards) and never retried until it was unmounted and remounted.
+  const [textureAttempt, setTextureAttempt] = useState(0);
   useEffect(() => {
     if (!id || !meta) return;
     let cancelled = false;
+    let retryTimer = null;
     const loader = new THREE.TextureLoader();
     const paintingUrl = `/data/theater/${encodeURIComponent(id)}.painting.webp`;
     const depthUrl    = `/data/theater/${encodeURIComponent(meta.depth.file || `${id}.depth.png`)}`;
@@ -620,6 +627,9 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
       if (cancelled || !painting || !depth) {
         painting?.dispose();
         depth?.dispose();
+        if (!cancelled && textureAttempt < TEXTURE_RETRY_DELAYS_MS.length) {
+          retryTimer = setTimeout(() => setTextureAttempt(a => a + 1), TEXTURE_RETRY_DELAYS_MS[textureAttempt]);
+        }
         return;
       }
       painting.colorSpace = THREE.SRGBColorSpace;
@@ -645,8 +655,8 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
         setBgInfo({ light: lum > 0.62, color: [r / 255, g / 255, b / 255] });
       } catch { setBgInfo({ light: false, color: [1, 1, 1] }); }
     }).catch(() => { });
-    return () => { cancelled = true; };
-  }, [id, meta]);
+    return () => { cancelled = true; clearTimeout(retryTimer); };
+  }, [id, meta, textureAttempt]);
 
   useEffect(() => {
     if (!textures) return;
@@ -672,18 +682,6 @@ export default function TheaterPainting({ id, image, position, rotation, mySegme
   // scrolled-away paper piece can't hold the void white. Deletes only this
   // instance's own entry (see mountKeyRef above), never a same-id sibling's.
   useEffect(() => () => { bgSweep.delete(mountKeyRef.current); }, []);
-
-  useEffect(() => {
-    const isActiveSegment =
-      mySegmentIndex === currentSegmentIndex ||
-      mySegmentIndex === currentSegmentIndex + 1;
-    if (!isActiveSegment) return;
-    if (meta) {
-      setCurrentResolution([meta.src?.width || 1000, meta.src?.height || 1000]);
-    } else if (flatTex) {
-      setCurrentResolution([flatTex.width, flatTex.height]);
-    }
-  }, [mySegmentIndex, currentSegmentIndex, meta, flatTex, setCurrentResolution]);
 
   useEffect(() => () => {
     if (textures) {

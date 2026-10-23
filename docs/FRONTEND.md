@@ -18,7 +18,7 @@ overall system and [`SHADERS.md`](./SHADERS.md) for the GLSL.
 
 ## `src/` layout
 
-```
+~~~
 src/
 ├── main.jsx                       entry point, wraps <App/> in JulesBoundary
 ├── App.jsx                        boot screen, WebGL context-loss handling, Loader styling
@@ -41,7 +41,7 @@ src/
 ├── admin/                          /admin — content-management PWA (see below)
 └── projects/
     └── ProjectsPage.jsx             /projects — cross-links other GitHub Pages repos
-```
+~~~
 
 There is no `src/canvas/`, `src/shaders/`, or `src/ui/` — despite what
 older planning docs describe (see `docs/archive/`), every 3D component
@@ -223,9 +223,11 @@ see its own comments and `data.js`'s `flushRemovalQueue()` for why one
 dispatch per id isn't safe). Band-override and metadata edits need no
 dispatch at all — they're pure `main`-branch commits, live on the very
 next deploy. None of the workflow dispatches are waited on synchronously
-— the admin UI reports "dispatched," and the actual bake/removal +
-redeploy runs in the background over the next few minutes (see
-`.github/workflows/`).
+— the admin UI reports "dispatched" and links to where the run happens
+(`HereLiesAz/workflows`; the run in this repository is only the hand-off).
+A bake or removal publishes to `art-data`, which does not start a deploy, so
+the admin offers a "deploy now" button (`deploy.yml` dispatch) and
+`deploy.yml` also runs every three hours. See `WORKFLOW.md`.
 
 `public/band-overrides.json` (keyed by painting id: `{ hidden:
 [bandIndex, ...] }`) lets specific depth bands be folded into a

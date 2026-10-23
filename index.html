@@ -2,23 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <!-- Content-Security-Policy. The inline gtag bootstrap below is allowed
-         by its sha256 hash: if you edit that inline script AT ALL (even
-         whitespace), recompute the base64 SHA-256 of the exact text between
-         its opening and closing tags (the browser console's CSP error also
-         prints the expected hash) and update 'sha256-…' here. style-src needs 'unsafe-inline' for
-         React style props and the overlay's injected <style>. api.github.com
-         is for /admin and /projects. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-w/nDD/Abt7E7vshcsSTGpuh+pVtR9K9uMC7BskS5jrI=' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://www.googletagmanager.com https://*.google-analytics.com; font-src 'self' data:; connect-src 'self' https://api.github.com https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-QEVWXVQY66"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-
-      gtag('config', 'G-QEVWXVQY66');
-    </script>
+    <!-- Content-Security-Policy. There is no inline script: the Google tag is
+         loaded from src/analytics.js on public routes only, never on /admin
+         (src/admin/lockdown.js also tightens this policy there). style-src
+         needs 'unsafe-inline' for React style props and the overlay's injected
+         <style>. api.github.com is for /admin and /projects. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://www.googletagmanager.com https://*.google-analytics.com; font-src 'self' data:; connect-src 'self' https://api.github.com https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="manifest" href="/manifest.json" />

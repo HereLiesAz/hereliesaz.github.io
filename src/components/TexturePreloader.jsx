@@ -4,13 +4,14 @@ import { fetchTheaterMeta } from './TheaterPainting';
 
 // Only three paintings are ever mounted (the one we're on, the one we
 // just left, the one we're headed toward). To keep the handoff seamless
-// we warm the ones JUST outside that window — their theater.json, their
-// painting.webp, and their depth.png — so when the window slides onto
-// them the decode/upload is already done and there's no cold-fetch pop.
+// we warm the ones JUST outside that window: their theater.json, their
+// painting.webp and their depth png, so the window sliding onto them finds the
+// files already downloaded instead of making a cold request.
 //
-// The browser's HTTP + image caches do the holding: kicking off an
-// Image() for a URL means THREE.TextureLoader (same URL) hits cache when
-// the painting actually mounts. Purely side-effectful — renders nothing.
+// This only primes the browser's HTTP cache. THREE.TextureLoader (same URL)
+// still decodes the image again and the GPU upload still happens on the first
+// visible frame; what is saved is the network round trip. Purely side-effectful:
+// renders nothing.
 const AHEAD  = 3;   // warm this many segments forward (we move forward most)
 const BEHIND = 2;   // and this many back, for scroll-up handoffs
 
@@ -23,21 +24,27 @@ const inFlight = new Set();
 function warm(id) {
   if (!id || warmed.has(id)) return;
   warmed.add(id);
-  // theater.json first — buildFlats needs it the instant the painting mounts.
-  fetchTheaterMeta(id);
-  const enc = encodeURIComponent(id);
-  for (const url of [
-    `/data/theater/${enc}.painting.webp`,
-    `/data/theater/${enc}.depth.png`,
-  ]) {
-    const img = new Image();
-    inFlight.add(img);
-    img.onload = () => inFlight.delete(img);
-    // A failed warm (network blip, 5xx) must not mark the id warmed for the
-    // rest of the session — forget it so the next window slide retries.
-    img.onerror = () => { inFlight.delete(img); warmed.delete(id); };
-    img.src = url;
-  }
+  // theater.json first — buildFlats needs it the instant the painting mounts, and
+  // it names the depth file (meta.depth.file), which is not always {id}.depth.png.
+  fetchTheaterMeta(id).then(meta => {
+    // A failed theater.json fetch is evicted from the meta cache; let the next
+    // window slide retry the whole warm instead of remembering the failure.
+    if (!meta) warmed.delete(id);
+    const enc = encodeURIComponent(id);
+    const depthFile = meta?.depth?.file || `${id}.depth.png`;
+    for (const url of [
+      `/data/theater/${enc}.painting.webp`,
+      `/data/theater/${encodeURIComponent(depthFile)}`,
+    ]) {
+      const img = new Image();
+      inFlight.add(img);
+      img.onload = () => inFlight.delete(img);
+      // A failed warm (network blip, 5xx) must not mark the id warmed for the
+      // rest of the session — forget it so the next window slide retries.
+      img.onerror = () => { inFlight.delete(img); warmed.delete(id); };
+      img.src = url;
+    }
+  }).catch(() => { warmed.delete(id); });
 }
 
 export default function TexturePreloader() {

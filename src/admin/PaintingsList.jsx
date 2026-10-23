@@ -8,10 +8,28 @@ export default function PaintingsList() {
   const [selected, setSelected] = useState(null);
   const [filter, setFilter] = useState('');
 
+  const [error, setError] = useState(null);
+  const [metaError, setMetaError] = useState(null);
+
   const reload = () => {
     setIds(null);
-    Promise.all([listBakedPaintings(), loadMeta().catch(() => ({}))])
-      .then(([list, m]) => { setIds(list); setMeta(m); });
+    setError(null);
+    setMetaError(null);
+    // The list and the titles fail independently: no list is an error with a
+    // retry; no titles still shows the paintings, by id, with a note.
+    Promise.all([
+      listBakedPaintings().then(list => ({ list }), err => ({ err })),
+      loadMeta().then(m => ({ m }), err => ({ err })),
+    ]).then(([listResult, metaResult]) => {
+      if (listResult.err) {
+        setIds([]);
+        setError(listResult.err.message);
+      } else {
+        setIds(listResult.list);
+      }
+      if (metaResult.err) setMetaError(metaResult.err.message);
+      else setMeta(metaResult.m);
+    });
   };
   useEffect(reload, []);
 
@@ -49,6 +67,17 @@ export default function PaintingsList() {
         onChange={e => setFilter(e.target.value)}
       />
       {ids === null && <p>loading…</p>}
+      {error && (
+        <p className="admin-error" role="alert">
+          {error} <button type="button" className="admin-btn-plain" onClick={reload}>try again</button>
+        </p>
+      )}
+      {metaError && !error && (
+        <p className="admin-error" role="alert">
+          Titles and prices could not be loaded ({metaError}); paintings are listed by id.
+        </p>
+      )}
+      {ids !== null && !error && ids.length === 0 && <p>No paintings are baked yet.</p>}
       <div className="admin-grid">
         {visible.map(id => (
           <button type="button" key={id} className="admin-grid-item" onClick={() => setSelected(id)}>

@@ -6,7 +6,7 @@ For the creative brief see [`AESTHETIC.md`](./AESTHETIC.md). For pipeline detail
 
 ## System map
 
-```mermaid
+~~~mermaid
 graph TD
     A[public/assets source artwork]
     A --> TB[Paper Theater]
@@ -26,7 +26,7 @@ graph TD
 
     AD --> BUILD[Vite build]
     BUILD --> GALLERY[Current Paper Theater gallery]
-```
+~~~
 
 The diagram describes capability ownership, not a requirement that every producer run on every deploy. Native pipeline outputs remain authoritative; integration only discovers and indexes them.
 
@@ -40,7 +40,7 @@ The current browser renderer is Paper Theater. `scripts/theater_baker.py` produc
 
 ### Turbo Stroke Cloud
 
-`process_art.yml` runs `scripts/grinder.py` in parallel and publishes compact SAM/color/depth stroke records to `art-data`. `bootstrap.yml` provides a five-image manual path through `scripts/bootstrap.py`. Both compact `s` and older `strokes` forms are retained and can coexist for the same painting.
+`scripts/grinder.py` produces compact SAM/color/depth stroke records. It used to run in parallel from `process_art.yml`, and `bootstrap.yml` provided a five-image manual path through `scripts/bootstrap.py`; neither workflow is on `main` today (the controller registry marks them retired), so run the scripts by hand. Both compact `s` and older `strokes` forms are retained and can coexist for the same painting.
 
 ### Unified Shard Field
 
@@ -66,10 +66,10 @@ The current browser renderer is Paper Theater. `scripts/theater_baker.py` produc
 
 `scripts/integrate_painting_bakes.py` runs after `art-data` is checked out during deployment. `deploy.yml` first deletes any existing `public/data/integrated/`, then regenerates it from scratch (`--strict`) and validates it with `scripts/validate_integrated_records.py`. The output is never committed; it ships with the site as static JSON:
 
-```text
+~~~text
 public/data/integrated/_manifest.json
 public/data/integrated/{id}.painting-bake.json
-```
+~~~
 
 The schema is [`../schemas/painting-bake.schema.json`](../schemas/painting-bake.schema.json). Recognized representation families are:
 
@@ -89,11 +89,13 @@ No runtime code consumes the integrated records today: the shipped renderer read
 
 The art workflows publish native data to the orphan `art-data` branch using `keep_files: true` so one representation does not erase the others. The main relevant paths are:
 
-- `theater_bake.yml` — Paper Theater bake + hinge graph + validation.
-- `process_art.yml` — Turbo stroke-cloud producer.
-- `bootstrap.yml` — manual five-image stroke/bootstrap producer.
-- `remove_painting.yml` — removal path for published art.
-- `deploy.yml` — checks out `art-data`, regenerates and validates integrated sidecars, runs `npm run verify` (Python syntax check, integration unit tests, legacy asset check, Vite build), and deploys GitHub Pages.
+- `theater_bake.yml` — Paper Theater bake + hinge graph + validation (a hand-off tracker; the job runs in `HereLiesAz/workflows`).
+- `remove_painting.yml` — removal path for published art (tracker; central).
+- `publish_admin_staging.yml` — the Android app's Publish Site (tracker; central).
+- `dedup_scan.yml` — read-only duplicate report for the Android Dedup tab (tracker; central).
+- `deploy.yml` — checks out `art-data`, regenerates and validates integrated sidecars, runs `npm run verify` (Python syntax check, unit tests, token sync, legacy asset check, Vite build), prunes the build to what the runtime fetches (`scripts/ship-filter.mjs`), and deploys GitHub Pages. It also runs on pull requests (without publishing) and every three hours, because a push to `art-data` does not start it.
+
+See `WORKFLOW.md`, "Where things run", for how a bake travels from a dispatch to the live site.
 
 Central workflow proxies dispatch through `HereLiesAz/workflows`; local proxy files should not be treated as the implementation body of those workflows.
 

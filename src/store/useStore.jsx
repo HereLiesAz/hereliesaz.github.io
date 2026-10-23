@@ -95,6 +95,15 @@ const HISTORY_LEN = 5;
 // is relaxed (self-loops stay rejected) so a pick is always produced
 // when any non-self target exists. Returns {edge, tid} or null only
 // when the graph truly has no other node to go to (<=1 node).
+// Edge weight for the weighted walk. A baked weight is the matcher's positive
+// similarity score; a graph without weights (the legacy graph.json) means "equal".
+// `e.weight || 1` treated a 0 as 1, so a zero-weight edge was as likely as the
+// strongest one.
+const edgeWeight = (e) => {
+  if (e.weight == null) return 1;
+  return Number.isFinite(e.weight) && e.weight > 0 ? e.weight : 1e-4;
+};
+
 function pickEdge(edges, nodes, srcId, avoidIds) {
   const avoid = new Set(Array.isArray(avoidIds) ? avoidIds
     : (avoidIds != null ? [avoidIds] : []));
@@ -102,10 +111,10 @@ function pickEdge(edges, nodes, srcId, avoidIds) {
   let candidates = edges.filter(e => notSelf(e) && !avoid.has(e.target));
   if (candidates.length === 0) candidates = edges.filter(notSelf);
   if (candidates.length > 0) {
-    const totalW = candidates.reduce((s, e) => s + (e.weight || 1), 0);
+    const totalW = candidates.reduce((s, e) => s + edgeWeight(e), 0);
     let r = Math.random() * totalW;
     for (const e of candidates) {
-      r -= (e.weight || 1);
+      r -= edgeWeight(e);
       if (r <= 0) return { edge: e, tid: e.target };
     }
     return { edge: candidates[candidates.length - 1],
@@ -131,10 +140,10 @@ function pickPrevEdge(edges, nodes, tgtId, avoidIds) {
   let candidates = edges.filter(e => notSelf(e) && !avoid.has(e.source));
   if (candidates.length === 0) candidates = edges.filter(notSelf);
   if (candidates.length > 0) {
-    const totalW = candidates.reduce((s, e) => s + (e.weight || 1), 0);
+    const totalW = candidates.reduce((s, e) => s + edgeWeight(e), 0);
     let r = Math.random() * totalW;
     for (const e of candidates) {
-      r -= (e.weight || 1);
+      r -= edgeWeight(e);
       if (r <= 0) return { sid: e.source };
     }
     return { sid: candidates[candidates.length - 1].source };
@@ -365,11 +374,7 @@ const useStore = create((set, get) => ({
 
   activeClusters: [],   // [{ id, position, rotation, quat, image }]
   segments: [],         // [{ path, calmPath, startId, endId, focus, startLook, endLook, ... }]
-  history: [],
 
-  currentNodeId: null,
-  currentShardCount: 0,
-  currentResolution: [1000, 1000],
 
   currentSegmentIndex: 0,
   // Which segment the viewer opens on. The backward buffer means the
@@ -377,7 +382,6 @@ const useStore = create((set, get) => ({
   // scroll up into — so the camera positions the initial scroll here.
   startSegmentIndex: 0,
   transitionProgress: 0,
-  isTransitioning: false,
 
   showMenu: false,
 
@@ -422,7 +426,6 @@ const useStore = create((set, get) => ({
   // Doing it this way means when buildNextSegment runs immediately, A is
   // already correctly placed for that segment — no snap.
   setStartNode: (id) => {
-    console.log("[Store] Starting at:", id);
     const { nodes, edges } = get();
 
     // Build a BACKWARD BUFFER: a chain of paintings that flow INTO the
@@ -463,7 +466,6 @@ const useStore = create((set, get) => ({
     };
     set({
       activeClusters: [firstCluster],
-      currentNodeId: rootId,
       segments: [],
       currentSegmentIndex: 0,
       startSegmentIndex: 0,
@@ -475,7 +477,7 @@ const useStore = create((set, get) => ({
     // The chosen start is now segment index chain.length-1. Begin there,
     // and build a couple ahead so forward scrolling has content.
     const startIdx = chain.length - 1;
-    set({ currentNodeId: id, currentSegmentIndex: startIdx, startSegmentIndex: startIdx });
+    set({ currentSegmentIndex: startIdx, startSegmentIndex: startIdx });
     // Build the full forward warm-window (TexturePreloader.AHEAD = 3) so the
     // preloader can warm textures three segments out from the very first frame,
     // not just one.
@@ -484,8 +486,6 @@ const useStore = create((set, get) => ({
     }
   },
 
-  setCurrentResolution: (res) => set({ currentResolution: res }),
-  setCurrentShardCount: (count) => set({ currentShardCount: count }),
 
   // Build the next segment. The shared hinge marches down the chain:
   // painting B is placed so its incoming patch (t_uv) lands on the world
@@ -635,7 +635,6 @@ const useStore = create((set, get) => ({
   updateFrame: (segmentIndex, r) => set({
     currentSegmentIndex: segmentIndex,
     transitionProgress: r,
-    isTransitioning: r > 0.01 && r < 0.99,
   }),
 
   toggleMenu: () => set(state => ({ showMenu: !state.showMenu })),

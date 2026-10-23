@@ -52,7 +52,29 @@ try {
   }
 
   run(python, ['-m', 'py_compile', ...pythonFiles], 'Python syntax check');
-  run(python, ['-m', 'unittest', 'scripts/test_integrate_painting_bakes.py'], 'Integration builder unit tests');
+  // Tests that need only the standard library, Pillow and jsonschema.
+  run(python, ['-m', 'unittest',
+    'scripts/test_integrate_painting_bakes.py',
+    'scripts/test_check_no_shrink.py',
+    'scripts/test_validate_output.py',
+  ], 'Integration builder, manifest guard and output validator unit tests');
+  // Tests that import numpy and OpenCV (the baker and the hinge-graph matcher, both
+  // stubbed: no model runs). deploy.yml installs scripts/verification-requirements.txt
+  // first. A contributor without them gets a loud skip locally; CI must not skip.
+  const heavy = spawnSync(python, ['-c', 'import cv2, numpy, PIL'], { stdio: 'ignore' });
+  if (heavy.status === 0) {
+    run(python, ['-m', 'unittest',
+      'scripts/test_pareidolia_incremental.py',
+      'scripts/test_theater_baker_guards.py',
+    ], 'Hinge graph and baker unit tests');
+  } else if (process.env.CI) {
+    throw new Error('numpy, opencv and Pillow are required for the baker and hinge-graph tests; install scripts/verification-requirements.txt.');
+  } else {
+    console.log('\n==> Hinge graph and baker unit tests: SKIPPED (numpy/opencv/Pillow not installed; '
+      + 'pip install -r scripts/verification-requirements.txt). CI does not skip them.');
+  }
+  run(process.execPath, ['scripts/verify-tokens.mjs'], 'Design token sync (web, Android, manifests)');
+  run(process.execPath, ['--test', 'scripts/test-ship-filter.mjs'], 'Ship filter unit tests');
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'verify-assets'], 'Asset/legacy graph verification');
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], 'Production Vite build');
   console.log('\nRepository verification passed.');

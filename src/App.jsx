@@ -1,8 +1,8 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Route, Switch, useLocation } from 'wouter';
+import { loadAnalytics } from './analytics.js';
 import Scene from './components/Scene';
 import Overlay from './components/Overlay';
-import { Loader } from '@react-three/drei';
 import { useStore } from './store/useStore';
 
 // Lazy: a normal gallery visitor never pulls either of these bundles in.
@@ -11,14 +11,10 @@ import { useStore } from './store/useStore';
 const AdminApp = lazy(() => import('./admin/AdminApp.jsx'));
 const ProjectsPage = lazy(() => import('./projects/ProjectsPage.jsx'));
 
+// Black, like everything else here; the status text is for screen readers only.
 const RouteFallback = () => (
-  <div style={{
-    position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
-    justifyContent: 'center', background: '#000', color: '#f4f0e6',
-    fontFamily: 'monospace', letterSpacing: '2px', fontSize: '0.8rem',
-    textTransform: 'uppercase',
-  }}>
-    loading…
+  <div role="status" style={{ position: 'fixed', inset: 0, background: 'var(--field)' }}>
+    <span className="visually-hidden">loading</span>
   </div>
 );
 
@@ -68,11 +64,24 @@ const Gallery = () => {
     return () => clearTimeout(hideTimer);
   }, [ready, loadError]);
 
+  // A slow-connection notice (above) must not outlive the load it describes.
+  useEffect(() => {
+    if (ready && useStore.getState().loadError?.startsWith('Still loading')) {
+      useStore.getState().setLoadError(null);
+    }
+  }, [ready]);
+
   useEffect(() => {
     let hideTimer = null;
     const maxTimer = setTimeout(() => {
       setBootFading(true);
       hideTimer = setTimeout(() => setBootVisible(false), BOOT_FADE_MS);
+      // Past this point the boot screen is gone. If the data still has not
+      // arrived, the viewer would be left with a bare black screen and no word
+      // why; say so. The effect below clears it if the gallery does load.
+      const st = useStore.getState();
+      const ready = st.nodes.length > 0 && st.activeClusters.length > 0;
+      if (!ready && !st.loadError) st.setLoadError('Still loading — the connection looks slow.');
     }, BOOT_MAX_MS);
     // Clear BOTH timers: the inner hide timer can still be pending if the
     // gallery unmounts (route change) inside the BOOT_FADE_MS window.
@@ -124,25 +133,13 @@ const Gallery = () => {
     <main
       id="gallery"
       tabIndex={-1}
-      style={{ width: '100%', height: '100%', background: '#000', outline: 'none' }}
+      style={{ width: '100%', height: '100%', background: 'var(--field)', outline: 'none' }}
     >
       {/* Skip link: the first Tab stop on the page. Jumps straight to the
           menu (signature) button — the only interactive control the
           gallery has — and announces how the canvas is driven. */}
       <a className="skip-link" href="#ink-signature">skip to menu</a>
       <h1 className="visually-hidden">HereLiesAz — paintings, in the dark</h1>
-      <style>{`
-        @keyframes jules-boot-pulse {
-          0%, 100% { opacity: 0.25; }
-          50% { opacity: 1; }
-        }
-        .jules-boot-dot {
-          animation: jules-boot-pulse 1.1s ease-in-out infinite;
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .jules-boot-dot { animation: none; opacity: 0.8; }
-        }
-      `}</style>
 
       {/* 3D Scene. The WebGL canvas has no inherent text alternative, so
           the container carries one (role="img" + label) and a visually
@@ -163,76 +160,25 @@ const Gallery = () => {
         links and projects.
       </p>
 
-      {/* Loading Screen: drei's texture-load progress bar, restyled from
-          its default full-screen opaque block into a small, non-blocking
-          corner readout. THREE.DefaultLoadingManager-tracked loads fire for
-          every painting's texture fetch, not just the first — the default
-          styling would otherwise blank the entire scene (camera dive,
-          overlay, everything) for as long as ANY subsequent painting's
-          texture takes over ~300ms to arrive, which is a normal occurrence
-          mid-scroll, not just at boot. */}
-      <Loader
-        containerStyles={{
-          position: 'fixed',
-          top: 'auto',
-          left: 'auto',
-          bottom: '1.6rem',
-          right: '1.8rem',
-          width: 'auto',
-          height: 'auto',
-          background: 'transparent',
-          pointerEvents: 'none',
-          zIndex: 6000,
-        }}
-        innerStyles={{
-          width: 80,
-          height: 2,
-          background: 'rgba(244, 240, 230, 0.15)',
-        }}
-        barStyles={{
-          background: '#f4f0e6',
-        }}
-        dataStyles={{
-          color: '#f4f0e6',
-          fontSize: '0.6rem',
-          letterSpacing: '0.1em',
-          textTransform: 'uppercase',
-          marginTop: '0.5rem',
-          fontFamily: 'monospace',
-        }}
-      />
-
-      {/* Boot indicator: covers the black window between first paint and
-          the scene reporting real data, which the Loader above can't see. */}
+      {/* Boot cover: the black window between first paint and the scene
+          reporting real data. Deliberately empty: AESTHETIC.md §7 forbids
+          spinners, progress bars and loading text ("the closet is the loading
+          state"). The status line is for screen readers; a load that is still
+          unfinished after BOOT_MAX_MS gets a visible notice from the Overlay. */}
       {bootVisible && (
         <div
           role="status"
-          aria-live="polite"
           style={{
             position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '10px',
-            background: '#000',
-            color: '#f4f0e6',
-            fontFamily: 'monospace',
-            letterSpacing: '2px',
-            fontSize: '0.8rem',
-            textTransform: 'uppercase',
+            inset: 0,
+            background: 'var(--field)',
             zIndex: 8000,
             pointerEvents: 'none',
             opacity: bootFading ? 0 : 1,
             transition: `opacity ${BOOT_FADE_MS}ms ease`,
           }}
         >
-          <span className="jules-boot-dot">●</span>
-          <span>loading the gallery…</span>
+          <span className="visually-hidden">loading the gallery</span>
         </div>
       )}
 
@@ -242,19 +188,15 @@ const Gallery = () => {
           role="alert"
           style={{
             position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
+            inset: 0,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             background: 'rgba(0,0,0,0.85)',
-            color: '#f4f0e6',
-            fontFamily: 'monospace',
-            letterSpacing: '1px',
+            color: 'var(--ink)',
+            fontFamily: 'var(--font-display)',
+            letterSpacing: '0.18em',
             fontSize: '0.9rem',
-            textTransform: 'uppercase',
             zIndex: 8500,
           }}
         >
@@ -294,6 +236,11 @@ function useRouteManifest(pathname) {
 const App = () => {
   const [location] = useLocation();
   useRouteManifest(location);
+  // The admin keeps a write-scoped GitHub token in localStorage; no third-party
+  // script runs on that route (see src/analytics.js).
+  useEffect(() => {
+    if (!location.startsWith('/admin')) loadAnalytics();
+  }, [location]);
 
   return (
     <Switch>

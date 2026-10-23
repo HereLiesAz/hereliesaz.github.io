@@ -8,7 +8,7 @@ For the integration contract and pipeline map, start with [`INTEGRATION.md`](./I
 
 The current production renderer is the paper-theater path:
 
-```text
+~~~text
 public/assets/
   -> scripts/theater_baker.py
   -> public/data/theater/{id}.painting.webp
@@ -17,7 +17,7 @@ public/assets/
   -> scripts/pareidolia_index.py
   -> public/data/theater/graph.theater.json
   -> Scene.jsx / TheaterPainting.jsx / AnamorphicCam.jsx
-```
+~~~
 
 `Scene.jsx` prefers the theater manifest/hinge graph and falls back to `public/graph.json` flat images if the theater data is unavailable.
 
@@ -27,17 +27,17 @@ public/assets/
 
 ### Turbo Stroke Cloud
 
-`process_art.yml` runs `scripts/grinder.py` across the source corpus in 56 shards and publishes the resulting stroke JSON to `art-data`.
+`scripts/grinder.py` processes the source corpus into stroke JSON. It used to run in 56 shards from `process_art.yml`, which is not on `main` today (retired in the controller registry); run it by hand.
 
 `grinder.py` combines SAM segmentation, color sub-sharding, and monocular depth. Companion tooling includes `indexer.py`, `pareidolia.py`, `repair_and_index.py`, and `bake-shards.js`.
 
-Status: **producer wired; current gallery consumer not yet wired**.
+Status: **script kept; no workflow wired on `main`; current gallery consumer not yet wired**.
 
 ### Bootstrap Art
 
-`bootstrap.yml` is a manually dispatched five-image bootstrap workflow using `scripts/bootstrap.py`.
+`scripts/bootstrap.py` is a five-image bootstrap; its workflow, `bootstrap.yml`, is not on `main` today (retired), so run the script by hand.
 
-Status: **workflow wired; implementation defaults to the real `public/assets` source corpus while retaining an explicit `--input` override**.
+Status: **script kept; no workflow wired on `main`; implementation defaults to the real `public/assets` source corpus while retaining an explicit `--input` override**.
 
 ### Unified Shard Field
 
@@ -45,10 +45,10 @@ Status: **workflow wired; implementation defaults to the real `public/assets` so
 
 Native output:
 
-```text
+~~~text
 public/data/baked/{id}.baked.json
 public/graph.json
-```
+~~~
 
 The preprocessor defaults to `public/assets`, accepts an alternate `--input`, and loads JPG/JPEG/PNG/WebP/HEIC/HEIF through the Pillow/HEIF stack.
 
