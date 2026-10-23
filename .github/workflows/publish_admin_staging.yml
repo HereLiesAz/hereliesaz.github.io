@@ -1,7 +1,9 @@
+# centralized-by: HereLiesAz/workflows
+# central-source-path: .github/workflows/publish_admin_staging.yml
+# central-source-sha256: 77f050ecc9e683b29e8da6841df77b82899dbd52debcdd1053cd1dd4ad486b58
+# This file intentionally contains no repository secrets.
+# central-run-tracker: HereLiesAz/workflows
 name: Publish Admin Staging
-
-run-name: Publish admin staging ${{ inputs.request_id }}
-
 on:
   workflow_dispatch:
     inputs:
@@ -10,131 +12,16 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
-  actions: write
-
-concurrency:
-  group: publish-admin-staging
-  cancel-in-progress: false
-
+permissions: {}
 jobs:
-  publish:
+  central:
+    name: Hand-off
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 2
     steps:
-      - name: Check out main
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ github.token }}
-
-      - name: Fetch admin staging
-        run: |
-          set -euo pipefail
-          git fetch origin admin-staging:refs/remotes/origin/admin-staging
-
-      - name: Find lineup changes
-        id: diff
+      - name: Point to central result
+        env:
+          STATUS_CONTEXT: .github/workflows/publish_admin_staging.yml
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import subprocess
-          from pathlib import Path
-
-          exts={".jpg",".jpeg",".png",".webp",".bmp",".tif",".tiff",".heic",".heif",".avif"}
-          raw=subprocess.check_output(
-              ["git","diff","--name-status","-z","origin/main","origin/admin-staging","--","public/assets/"]
-          )
-          parts=raw.decode("utf-8","surrogateescape").split("\0")
-          bake=[]; remove=[]
-          i=0
-          while i < len(parts)-1:
-              status=parts[i]; i+=1
-              if not status: continue
-              if status.startswith("R") or status.startswith("C"):
-                  old=parts[i]; new=parts[i+1]; i+=2
-                  items=[("D",old),("A",new)]
-              else:
-                  path=parts[i]; i+=1
-                  items=[(status[:1],path)]
-              for kind,path in items:
-                  rel=path.removeprefix("public/assets/")
-                  if "/" in rel or Path(rel).suffix.lower() not in exts:
-                      continue
-                  image_id=Path(rel).stem
-                  if kind=="D":
-                      remove.append(image_id)
-                  elif kind in {"A","M"}:
-                      bake.append(image_id)
-          bake=sorted(set(bake)-set(remove))
-          remove=sorted(set(remove)-set(bake))
-          print("bake_ids="+",".join(bake))
-          print("remove_ids="+",".join(remove))
-          PY
-
-      - name: Process new or changed photos
-        if: steps.diff.outputs.bake_ids != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IDS: ${{ steps.diff.outputs.bake_ids }}
-        run: |
-          set -euo pipefail
-          SHA="$(git rev-parse origin/admin-staging)"
-          BEFORE="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" --jq '[.[]|select(.context==".github/workflows/theater_bake.yml")|.id]|max//0')"
-          gh workflow run theater_bake.yml --ref admin-staging -f ids="$IDS"
-          deadline=$((SECONDS+19200))  # 320 min; the job allows 360 and the removal wait takes up to 15 more
-          state=""
-          while (( SECONDS < deadline )); do
-            row="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" --jq '[.[]|select(.context==".github/workflows/theater_bake.yml" and .id > '"$BEFORE"')]|max_by(.id)//{}')"
-            state="$(jq -r '.state//empty' <<<"$row")"
-            case "$state" in
-              success) break ;;
-              failure|error) echo "::error::Theater bake failed."; exit 1 ;;
-            esac
-            sleep 20
-          done
-          [[ "$state" == success ]] || { echo "::error::Theater bake timed out."; exit 1; }
-
-      - name: Process removals
-        if: steps.diff.outputs.remove_ids != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IDS: ${{ steps.diff.outputs.remove_ids }}
-        run: |
-          set -euo pipefail
-          SHA="$(git rev-parse origin/admin-staging)"
-          BEFORE="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" --jq '[.[]|select(.context==".github/workflows/remove_painting.yml")|.id]|max//0')"
-          gh workflow run remove_painting.yml --ref admin-staging -f ids="$IDS"
-          deadline=$((SECONDS+900))
-          state=""
-          while (( SECONDS < deadline )); do
-            row="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" --jq '[.[]|select(.context==".github/workflows/remove_painting.yml" and .id > '"$BEFORE"')]|max_by(.id)//{}')"
-            state="$(jq -r '.state//empty' <<<"$row")"
-            case "$state" in
-              success) break ;;
-              failure|error) echo "::error::Removal processing failed."; exit 1 ;;
-            esac
-            sleep 20
-          done
-          [[ "$state" == success ]] || { echo "::error::Removal processing timed out."; exit 1; }
-
-      - name: Merge staged changes into main
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api --method POST "repos/$GITHUB_REPOSITORY/merges" \
-            -f base=main \
-            -f head=admin-staging \
-            -f commit_message="Publish staged admin changes"
-
-      - name: Reset staging to published main
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          MAIN_SHA="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/admin-staging" \
-            -f sha="$MAIN_SHA" -F force=true
+        run: "set -euo pipefail\n# The build runs in HereLiesAz/workflows. Its result is reported on this commit as the\n# commit status named below: pending when the central run starts, then success or\n# failure. This job only points there and ends, so it never holds a runner while the\n# central run waits for one. (Trackers that followed the central run job-by-job held a\n# runner each for the whole build; under the account's concurrent-job limit they\n# starved the very runs they were waiting on: 2026-10-01, illumera waited 3h to start.)\n# No status at all means the gateway intentionally skipped this event.\n{\n  echo \"### Runs in HereLiesAz/workflows\"\n  echo\n  echo \"Result: commit status \\`$STATUS_CONTEXT\\` on \\`$TARGET_SHA\\`.\"\n  echo \"Central runs: $GITHUB_SERVER_URL/HereLiesAz/workflows/actions\"\n} >> \"$GITHUB_STEP_SUMMARY\"\necho \"Result is reported as commit status '$STATUS_CONTEXT' on $TARGET_SHA.\"\n"

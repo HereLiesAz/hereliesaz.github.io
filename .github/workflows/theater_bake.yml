@@ -1,6 +1,6 @@
 # centralized-by: HereLiesAz/workflows
 # central-source-path: .github/workflows/theater_bake.yml
-# central-source-sha256: 30ac28112905711d6aa0e747a83ef2c966a6d5899808325906a1597527717d26
+# central-source-sha256: e45843dd83ceec9c81cdeb67f774f9c0f4dc45b56fd366fcfbae6fcef6ab8b73
 # This file intentionally contains no repository secrets.
 # central-run-tracker: HereLiesAz/workflows
 name: Theater Bake
@@ -8,15 +8,18 @@ on:
   workflow_dispatch:
     inputs:
       ids:
-        description: "Comma-separated painting ids (filename stems in public/assets) to bake. Blank = the DEFAULT_IDS batch."
+        description: "Comma-separated painting ids (filename stems in public/assets) to bake. Blank = up to 20 paintings that are unbaked or whose crop box changed."
         required: false
         default: ""
   # Pushing a change to THIS file — or to the hand-authored crop boxes —
-  # kicks off a bake of DEFAULT_IDS. That is how the batch runs before the
-  # workflow reaches the default branch (workflow_dispatch only lists once
-  # it's on the default branch). A crop-box change is picked up per-id by the
-  # baker's crop-change detection, so only the moved crops re-photorealize.
+  # kicks off a bake of up to 20 pending paintings (unbaked, or whose crop box
+  # changed). A crop-box change is picked up per-id by the baker's crop-change
+  # detection, so only the moved crops re-photorealize.
   push:
+    # Default branch only. A push to any other branch would otherwise run that
+    # branch's own scripts with HF_TOKEN and the publish PAT.
+    branches:
+      - main
     paths:
       - '.github/workflows/theater_bake.yml'
       - 'scripts/crops.json'

@@ -1,7 +1,9 @@
+# centralized-by: HereLiesAz/workflows
+# central-source-path: .github/workflows/dedup_scan.yml
+# central-source-sha256: 64ee29958462a0b479fe133d5ca5f507e4700a988fc60d36a30382dd50e2b48d
+# This file intentionally contains no repository secrets.
+# central-run-tracker: HereLiesAz/workflows
 name: Dedup Scan
-
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('Dedup scan {0}', inputs.request_id) || 'Dedup scanner smoke test' }}
-
 on:
   workflow_dispatch:
     inputs:
@@ -14,101 +16,16 @@ on:
       - "scripts/dedup_scan.py"
       - ".github/workflows/dedup_scan.yml"
 
-permissions:
-  contents: read
-
-concurrency:
-  group: dedup-scan-${{ github.repository }}-${{ github.event_name }}
-  cancel-in-progress: true
-
+permissions: {}
 jobs:
-  smoke:
-    if: ${{ github.event_name == 'pull_request' }}
+  central:
+    name: Hand-off
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install image readers
-        run: python -m pip install --disable-pip-version-check Pillow pillow-heif
-
-      - name: Compile scanner
-        run: python -m py_compile scripts/dedup_scan.py
-
-      - name: Verify exact and compressed-copy detection
+      - name: Point to central result
+        env:
+          STATUS_CONTEXT: .github/workflows/dedup_scan.yml
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: bash
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          mkdir -p "$tmp/assets"
-          python - "$tmp/assets" <<'PY'
-          from pathlib import Path
-          import shutil
-          import sys
-          from PIL import Image, ImageDraw
-
-          root = Path(sys.argv[1])
-          image = Image.new("RGB", (640, 480), "white")
-          draw = ImageDraw.Draw(image)
-          draw.rectangle((40, 40, 600, 430), fill=(20, 40, 80))
-          draw.ellipse((160, 90, 500, 420), fill=(220, 80, 40))
-          draw.line((40, 430, 600, 40), fill=(250, 240, 80), width=18)
-          image.save(root / "original.jpg", quality=96)
-          shutil.copyfile(root / "original.jpg", root / "exact-copy.jpg")
-          image.save(root / "compressed.jpg", quality=38, optimize=True)
-          PY
-          printf '{}\n' > "$tmp/meta.json"
-          python scripts/dedup_scan.py \
-            --assets "$tmp/assets" \
-            --meta "$tmp/meta.json" \
-            --output "$tmp/report.json"
-          python - "$tmp/report.json" <<'PY'
-          import json
-          import sys
-
-          report = json.load(open(sys.argv[1], encoding="utf-8"))
-          assert report["exactCount"] >= 1, report
-          assert report["compressedCount"] >= 1, report
-          print(json.dumps({
-              "exact": report["exactCount"],
-              "compressed": report["compressedCount"],
-              "similar": report["similarCount"],
-          }))
-          PY
-
-  scan:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install image readers
-        run: python -m pip install --disable-pip-version-check Pillow pillow-heif
-
-      - name: Scan for duplicates and similar images
-        run: |
-          python scripts/dedup_scan.py \
-            --assets public/assets \
-            --meta public/meta.json \
-            --output dedup-report.json
-
-      - name: Upload dedup report
-        uses: actions/upload-artifact@v4
-        with:
-          name: dedup-report-${{ inputs.request_id }}
-          path: dedup-report.json
-          if-no-files-found: error
-          retention-days: 7
+        run: "set -euo pipefail\n# The build runs in HereLiesAz/workflows. Its result is reported on this commit as the\n# commit status named below: pending when the central run starts, then success or\n# failure. This job only points there and ends, so it never holds a runner while the\n# central run waits for one. (Trackers that followed the central run job-by-job held a\n# runner each for the whole build; under the account's concurrent-job limit they\n# starved the very runs they were waiting on: 2026-10-01, illumera waited 3h to start.)\n# No status at all means the gateway intentionally skipped this event.\n{\n  echo \"### Runs in HereLiesAz/workflows\"\n  echo\n  echo \"Result: commit status \\`$STATUS_CONTEXT\\` on \\`$TARGET_SHA\\`.\"\n  echo \"Central runs: $GITHUB_SERVER_URL/HereLiesAz/workflows/actions\"\n} >> \"$GITHUB_STEP_SUMMARY\"\necho \"Result is reported as commit status '$STATUS_CONTEXT' on $TARGET_SHA.\"\n"
