@@ -226,4 +226,13 @@ export async function removePainting(id) {
   }
 }
 
+/** Rebuild and publish the site from main plus the current art-data branch.
+ * A bake or removal only updates art-data, and a push to art-data does not
+ * start deploy.yml (it listens to main), so new or removed paintings reach the
+ * live site at the next deploy. deploy.yml also runs on a schedule; this makes
+ * it immediate. */
+export async function deploySite() {
+  await dispatchWorkflow('deploy.yml', {});
+}
+
 export { META_PATH, SITE_PATH, BAND_OVERRIDES_PATH };

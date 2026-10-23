@@ -4,6 +4,11 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
+  # Bakes and removals publish to the art-data branch, which this workflow does
+  # not watch (it listens to main). Rebuilding on a schedule picks them up even
+  # when nobody presses "deploy now" in the admin.
+  schedule:
+    - cron: "17 */3 * * *"
 
 permissions:
   contents: read

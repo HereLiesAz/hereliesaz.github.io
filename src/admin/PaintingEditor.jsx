@@ -1,6 +1,30 @@
 import { useEffect, useState } from 'react';
-import { loadMeta, removePainting, saveMetaEntry } from './data.js';
+import { deploySite, loadMeta, removePainting, saveMetaEntry } from './data.js';
 import BandEditor from './BandEditor.jsx';
+
+/** Starts deploy.yml; removals land on the art-data branch, which does not
+ * trigger a deploy on its own. */
+function DeployNow() {
+  const [state, setState] = useState(null); // null | 'working' | 'queued' | { error }
+  const go = async () => {
+    setState('working');
+    try {
+      await deploySite();
+      setState('queued');
+    } catch (e) {
+      setState({ error: e.message });
+    }
+  };
+  if (state === 'queued') return <>deploy queued — live in a few minutes</>;
+  return (
+    <>
+      <button type="button" className="admin-btn-plain" onClick={go} disabled={state === 'working'}>
+        {state === 'working' ? 'queueing…' : 'deploy now'}
+      </button>
+      {state?.error && <span className="admin-error" role="alert"> {state.error}</span>}
+    </>
+  );
+}
 
 const BLANK = { title: '', description: '', tags: '', forSale: false, price: '', currency: 'USD' };
 
@@ -70,7 +94,7 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
       // Deliberately NOT calling onRemoved() here — that would close this
       // panel and reload the list immediately, which still shows the
       // painting (the removal workflow takes a few minutes to actually
-      // run and redeploy), reading as "nothing happened". Show confirmation
+      // run, and the site only drops the painting at its next deploy), reading as "nothing happened". Show confirmation
       // + a link to watch it instead; the list catches up whenever the
       // user next hits refresh.
       setStatus('removed');
@@ -138,11 +162,13 @@ export default function PaintingEditor({ id, onClose, onRemoved }) {
       {status === 'saved' && <p className="admin-ok" role="status" aria-live="polite">Saved — live after the next deploy (usually under a minute).</p>}
       {(status === 'removed' || (status && status.removedWithWarning)) && (
         <p className="admin-ok" role="status" aria-live="polite">
-          Removal dispatched — this takes a few minutes to actually run (delete the baked files, rebuild the
-          hinge graph, redeploy).{' '}
-          <a href="https://github.com/HereLiesAz/hereliesaz.github.io/actions/workflows/remove_painting.yml" target="_blank" rel="noreferrer noopener">
-            watch the run
-          </a>, then <button type="button" className="admin-btn-plain" onClick={() => onRemoved?.(id)}>back to the list</button>.
+          Removal dispatched. It runs in{' '}
+          <a href="https://github.com/HereLiesAz/workflows/actions" target="_blank" rel="noreferrer noopener">
+            HereLiesAz/workflows
+          </a>{' '}
+          and takes a few minutes (delete the baked files, rebuild the manifest and graph). The live site drops
+          the painting at its next deploy: <DeployNow />. Then{' '}
+          <button type="button" className="admin-btn-plain" onClick={() => onRemoved?.(id)}>back to the list</button>.
         </p>
       )}
       {status?.removedWithWarning && <p className="admin-error" role="alert">{status.removedWithWarning}</p>}
