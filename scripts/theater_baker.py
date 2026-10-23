@@ -2,8 +2,11 @@
 """
 theater_baker.py — painting + depth-map baker (schema 2).
 
-CI note: .github/workflows/process_art.yml invokes this with an explicit
---ids allowlist; widening that list is a cost decision, not a code change.
+CI note: the central Theater Bake workflow (HereLiesAz/workflows, triggered
+through .github/workflows/theater_bake.yml) invokes this with an explicit
+--ids list. Every id that is not already baked costs one paid photorealize
+call, so a run is capped at MAX_IDS ids and a run without --ids refuses to
+start unless --all is given.
 
 The paper-theater data model is exactly two textures per painting plus a
 small metadata file. The renderer builds the diorama at runtime from the
@@ -50,7 +53,7 @@ Usage:
   python3 scripts/theater_baker.py \\
       --input  public/assets/ \\
       --output public/data/theater/ \\
-      [--ids id1,id2,...] [--force] [--max-side 768] [--limit N]
+      (--ids id1,id2,... | --all) [--force] [--max-side 768] [--limit N] [--max-ids 100]
 """
 
 from __future__ import annotations
@@ -131,6 +134,7 @@ def apply_crop(rgb: np.ndarray, pid: str) -> tuple[np.ndarray, bool]:
 
 # ---- tuning knobs -----------------------------------------------------------
 
+MAX_IDS = 100                              # per-run cap on --ids (cost guard)
 DEFAULT_MAX_SIDE = 768                     # depth Space caps at ~768 long edge
 N_BANDS          = 18                      # depth resolution — dense layer stack
 MIN_BAND_COVER   = 0.008                   # merge bands under 0.8% of pixels
@@ -380,13 +384,22 @@ def estimate_depth_local(rgb: np.ndarray) -> np.ndarray | None:
     global _depth_pipe, _depth_local_disabled
     if _depth_local_disabled:
         return None
-    try:
-        if _depth_pipe is None:
+    if _depth_pipe is None:
+        # Only a failure to load the model disables the local path for the rest of
+        # the process; a failure on one image (OOM, odd array) must not silently
+        # downgrade every later painting in the batch to the Space or synthetic.
+        try:
             from transformers import pipeline
             _depth_pipe = pipeline(
                 "depth-estimation",
                 model="depth-anything/Depth-Anything-V2-Small-hf",
                 device=-1)
+        except Exception as e:
+            print(f"[~] local depth model unavailable "
+                  f"({type(e).__name__}: {e}); falling back to Space", file=sys.stderr)
+            _depth_local_disabled = True
+            return None
+    try:
         out = _depth_pipe(Image.fromarray(rgb))
         # Depth-Anything predicts disparity (higher = closer), which is
         # exactly our convention. The "depth" PIL is that map, normalised.
@@ -400,9 +413,8 @@ def estimate_depth_local(rgb: np.ndarray) -> np.ndarray | None:
             return np.zeros_like(d)
         return (d - mn) / (mx - mn)
     except Exception as e:
-        print(f"[~] local depth model unavailable "
-              f"({type(e).__name__}: {e}); falling back to Space", file=sys.stderr)
-        _depth_local_disabled = True
+        print(f"[~] local depth failed for this image "
+              f"({type(e).__name__}: {e}); falling back to Space for it", file=sys.stderr)
         return None
 
 
@@ -742,10 +754,42 @@ def bake_image(path: Path, out_dir: Path, max_side: int, force: bool = False) ->
 
 # ---- driver -----------------------------------------------------------------
 
+# Output file names are `{id}.theater.json`, `{id}.painting.webp`, ... in one flat
+# directory next to `_manifest.json` and `graph.theater.json`, and every id is
+# fetched by URL. A stem that collides with those names or is not URL-safe would
+# overwrite shared files or never load, so it is refused rather than baked.
+RESERVED_IDS = {"graph"}
+_UNSAFE_ID_CHARS = set('#%?&+/\\')
+
+
+def id_problem(stem: str) -> str | None:
+    """Why `stem` cannot be a painting id, or None if it can."""
+    if stem in RESERVED_IDS:
+        return "collides with the shared graph.theater.json"
+    if stem.startswith("_"):
+        return "a leading underscore is reserved for shared files such as _manifest.json"
+    bad = sorted(_UNSAFE_ID_CHARS & set(stem))
+    if bad:
+        return f"contains characters that break fetch URLs: {''.join(bad)}"
+    return None
+
+
 def iter_images(root: Path):
+    seen: dict[str, str] = {}
     for p in sorted(root.iterdir()):
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
-            yield p
+        if not (p.is_file() and p.suffix.lower() in IMAGE_EXTS):
+            continue
+        problem = id_problem(p.stem)
+        if problem:
+            print(f"[!] skipping {p.name}: {problem}", file=sys.stderr)
+            continue
+        if p.stem in seen:
+            # a.jpg and a.png share every output name; baking both would
+            # overwrite each other and flip source_changed on every run.
+            print(f"[!] skipping {p.name}: same id as {seen[p.stem]}", file=sys.stderr)
+            continue
+        seen[p.stem] = p.name
+        yield p
 
 
 def write_manifest(out_dir: Path) -> None:
@@ -787,6 +831,12 @@ def main(argv: list[str]) -> int:
                          "stale outputs for these ids are refreshed")
     ap.add_argument("--force",  action="store_true",
                     help="regenerate every stage, including cached photo/depth")
+    ap.add_argument("--all", action="store_true",
+                    help="bake every image in --input that is not already baked "
+                         "(required when --ids is omitted; each new one costs a "
+                         "paid photorealize call)")
+    ap.add_argument("--max-ids", type=int, default=MAX_IDS,
+                    help=f"refuse --ids lists longer than this (default {MAX_IDS})")
     args = ap.parse_args(argv)
 
     args.input  = args.input.resolve()
@@ -798,8 +848,21 @@ def main(argv: list[str]) -> int:
         return 2
 
     images = list(iter_images(args.input))
+    stale_crops = sorted(set(MANUAL_CROPS) - {p.stem for p in images})
+    if stale_crops:
+        print(f"[~] crops.json has {len(stale_crops)} key(s) with no image in "
+              f"{args.input}: {stale_crops[:5]}{' ...' if len(stale_crops) > 5 else ''}",
+              file=sys.stderr)
+    if not args.ids and not args.all:
+        print("[!] no --ids given. Pass --ids id1,id2,... or --all to bake every "
+              "unbaked image (each costs a paid photorealize call).", file=sys.stderr)
+        return 2
     if args.ids:
         wanted = {s.strip() for s in args.ids.split(",") if s.strip()}
+        if len(wanted) > args.max_ids:
+            print(f"[!] {len(wanted)} ids exceeds --max-ids {args.max_ids}; "
+                  "split the run or raise the limit deliberately.", file=sys.stderr)
+            return 2
         images = [p for p in images if p.stem in wanted]
         missing = wanted - {p.stem for p in images}
         if missing:
