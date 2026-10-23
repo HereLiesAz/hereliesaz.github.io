@@ -301,6 +301,31 @@ them. See `BackgroundSweep` in [`SHADERS.md`](./SHADERS.md).
 
 ---
 
+## 9. Tokens, and where they apply
+
+`src/tokens.css` is the single source for the web: `--field` (#000000), `--ink`
+(#f4f0e6), four ink strengths (`--ink-dim`, `--ink-faint`, `--ink-line`,
+`--ink-hairline`), two type voices (`--font-display`, a serif, and
+`--font-utility`, a monospace), motion (`--ease-ink`, `--dur-fast/med/slow`)
+and the minimum hit size (`--hit`, 44 px). The Android admin mirrors the two
+colours by hand in `AdminUi.kt` and `themes.xml`, and both web manifests use
+`--field`; `scripts/verify-tokens.mjs` (run by `npm run verify`) fails if any of
+them drift.
+
+Where the rules bite:
+
+- **Gallery chrome** (signature, caption, menu, scroll hint, errors, the boot
+  and reconnect screens, the projects list): all of §2, §3 and §7. Bone ink on
+  the field, display voice, lowercase, no boxes, no spinner or progress bar.
+  The persistent mark is the hand-drawn `az-signature.svg`.
+- **Admin surfaces** (web `/admin`, the Android admin): the same field and ink,
+  the utility voice, square corners. Secondary text is the ink at a lower
+  strength (the §2 "no gray" rule is about fills and hues, not about dimming
+  the ink). Status is marked, not coloured: `✓` and `✕` prefixes, a dashed
+  rule for disabled, a double rule for destructive. There are no hues.
+- The loading state is the empty field. After 20 s with no data the overlay says
+  so in words, because a bare black screen past that point reads as broken.
+
 ## Appendix — the original creative brief (verbatim)
 
 This is Az's original brief, moved here from the root `AGENTS.md` (which is

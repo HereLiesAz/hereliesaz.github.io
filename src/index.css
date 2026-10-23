@@ -1,9 +1,12 @@
+@import './tokens.css';
+
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: var(--font-display);
   line-height: 1.5;
   font-weight: 400;
   color-scheme: dark;
-  background-color: #000;
+  background-color: var(--field);
+  color: var(--ink);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

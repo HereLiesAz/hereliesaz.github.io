@@ -157,11 +157,11 @@ export default function BandEditor({ id }) {
       {sources && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6em', margin: '0.6em 0' }}>
           <div style={{ flex: '1 1 200px', minWidth: 0 }}>
-            <img src={sources.painting} alt="painting" style={{ width: '100%', display: 'block', background: '#000' }} />
+            <img src={sources.painting} alt="painting" style={{ width: '100%', display: 'block', background: 'var(--field)' }} />
             <span style={{ fontSize: '0.65rem', opacity: 0.6 }}>painting</span>
           </div>
           <div style={{ flex: '1 1 200px', minWidth: 0 }}>
-            <img src={sources.depth} alt="depth map" style={{ width: '100%', display: 'block', background: '#000' }} />
+            <img src={sources.depth} alt="depth map" style={{ width: '100%', display: 'block', background: 'var(--field)' }} />
             <span style={{ fontSize: '0.65rem', opacity: 0.6 }}>depth map (brighter = closer to camera, darker = farther)</span>
           </div>
         </div>
@@ -183,7 +183,7 @@ export default function BandEditor({ id }) {
           >
             {b.preview
               ? <img src={b.preview} alt={`layer ${b.index}`} loading="lazy" />
-              : <div style={{ aspectRatio: '1', background: '#111' }} aria-hidden="true" />}
+              : <div style={{ aspectRatio: '1', background: 'var(--ink-hairline)' }} aria-hidden="true" />}
             <span>layer {b.index}{hidden.has(b.index) ? ' — hidden' : ''}</span>
           </button>
         ))}

@@ -18,45 +18,62 @@ const STYLES = `
      of what the body does. */
   height: 100vh; height: 100dvh; overflow-y: auto; -webkit-overflow-scrolling: touch;
   box-sizing: border-box;
-  background: #0a0a0a; color: #f4f0e6;
-  font-family: monospace; padding: 1rem 1rem 3rem;
+  background: var(--field); color: var(--ink);
+  font-family: var(--font-utility); padding: 1rem 1rem 3rem;
 }
-.admin-shell a { color: #f4f0e6; }
+.admin-shell a { color: var(--ink); }
 .admin-nav { display: flex; gap: 0.5rem; margin-bottom: 1.2rem; flex-wrap: wrap; }
 .admin-nav button {
-  background: transparent; border: 1px solid rgba(244,240,230,0.3); color: #f4f0e6;
+  background: transparent; border: 1px solid var(--ink-line); color: var(--ink);
   padding: 0.4em 0.9em; font-family: inherit; text-transform: lowercase; letter-spacing: 0.08em;
-  cursor: pointer; font-size: 0.8rem; min-height: 44px;
+  cursor: pointer; font-size: 0.8rem; min-height: var(--hit);
 }
-.admin-nav button[data-active="true"] { background: #f4f0e6; color: #0a0a0a; }
+.admin-nav button[data-active="true"] { background: var(--ink); color: var(--field); }
 .admin-panel { max-width: 42rem; }
 .admin-panel h2 { font-size: 1.1rem; letter-spacing: 0.08em; text-transform: lowercase; margin: 0 0 0.6em; }
 .admin-panel h3 { font-size: 0.9rem; letter-spacing: 0.08em; text-transform: lowercase; margin: 1em 0 0.4em; }
-.admin-panel p { font-size: 0.85rem; line-height: 1.5; opacity: 0.85; }
-.admin-label { display: block; font-size: 0.75rem; text-transform: lowercase; letter-spacing: 0.08em; opacity: 0.75; margin: 0.8em 0 0.3em; }
+.admin-panel p { font-size: 0.85rem; line-height: 1.5; color: var(--ink-dim); }
+.admin-label { display: block; font-size: 0.75rem; text-transform: lowercase; letter-spacing: 0.08em; color: var(--ink-dim); margin: 0.8em 0 0.3em; }
 .admin-input {
-  width: 100%; box-sizing: border-box; background: #141414; border: 1px solid rgba(244,240,230,0.25);
-  color: #f4f0e6; font-family: inherit; font-size: 0.85rem; padding: 0.5em 0.6em; margin-top: 0.2em;
+  width: 100%; box-sizing: border-box; background: transparent; border: 1px solid var(--ink-line);
+  color: var(--ink); font-family: inherit; font-size: 0.85rem; padding: 0.5em 0.6em; margin-top: 0.2em;
+  border-radius: 0;
 }
+.admin-input:focus { outline: none; border-color: var(--ink); }
 .admin-row { display: flex; gap: 0.8em; align-items: center; margin: 0.6em 0; flex-wrap: wrap; }
 .admin-row--between { justify-content: space-between; }
-button { background: #f4f0e6; color: #0a0a0a; border: none; padding: 0.5em 1em; font-family: inherit;
-  text-transform: lowercase; letter-spacing: 0.06em; cursor: pointer; font-size: 0.8rem; min-height: 44px; }
-button:disabled { opacity: 0.5; cursor: default; }
-.admin-btn-danger { background: #3a1414; color: #f4b0b0; }
-.admin-btn-plain { background: transparent; color: #f4f0e6; border: 1px solid rgba(244,240,230,0.3); }
-.admin-ok { color: #b0e0b0; font-size: 0.8rem; }
-.admin-error { color: #f4b0b0; font-size: 0.8rem; white-space: pre-wrap; }
-.admin-file-list { font-size: 0.8rem; opacity: 0.8; }
-.admin-thumb-large { width: 100%; max-width: 20rem; display: block; margin: 0.6em 0; background: #000; }
+
+/* One button shape, square. Primary is ink on field; plain is an outline;
+   danger is a double rule. Disabled is dashed, never a dimmed copy of the
+   primary (a half-opacity ink fill reads as a grey slab). State is carried by
+   outline and rule style, not by hue. */
+button {
+  background: var(--ink); color: var(--field); border: 1px solid var(--ink); border-radius: 0;
+  padding: 0.5em 1em; font-family: inherit; text-transform: lowercase; letter-spacing: 0.06em;
+  cursor: pointer; font-size: 0.8rem; min-height: var(--hit);
+  transition: outline-color var(--dur-fast) ease;
+}
+button:hover:not(:disabled) { outline: 1px solid var(--ink); outline-offset: 2px; }
+button:focus-visible, .admin-shell a:focus-visible { outline: 1px solid var(--ink); outline-offset: 3px; }
+button:disabled { background: transparent; color: var(--ink-faint); border: 1px dashed var(--ink-line); cursor: default; }
+.admin-btn-danger { background: transparent; color: var(--ink); border: 3px double var(--ink); }
+.admin-btn-plain { background: transparent; color: var(--ink); border: 1px solid var(--ink-line); }
+/* Status is marked, not coloured. */
+.admin-ok, .admin-error { font-size: 0.8rem; color: var(--ink); }
+.admin-ok::before { content: '\\2713\\00a0'; }
+.admin-error::before { content: '\\2715\\00a0'; }
+.admin-error { white-space: pre-wrap; }
+.admin-file-list { font-size: 0.8rem; color: var(--ink-dim); }
+.admin-thumb-large { width: 100%; max-width: 20rem; display: block; margin: 0.6em 0; background: var(--field); }
 .admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: 0.6em; margin-top: 0.8em; }
 .admin-grid-item {
-  background: #141414; border: 1px solid rgba(244,240,230,0.15); padding: 0.4em; text-align: left;
+  background: transparent; color: var(--ink); border: 1px solid var(--ink-hairline); padding: 0.4em; text-align: left;
   display: flex; flex-direction: column; gap: 0.3em; position: relative;
 }
-.admin-grid-item img { width: 100%; aspect-ratio: 1; object-fit: cover; background: #000; }
-.admin-grid-item span { font-size: 0.65rem; word-break: break-word; opacity: 0.85; }
-.admin-badge { position: absolute; top: 0.3em; right: 0.3em; background: #f4f0e6; color: #0a0a0a;
+.admin-grid-item:hover:not(:disabled) { border-color: var(--ink-line); outline: none; }
+.admin-grid-item img { width: 100%; aspect-ratio: 1; object-fit: cover; background: var(--field); }
+.admin-grid-item span { font-size: 0.65rem; word-break: break-word; color: var(--ink-dim); }
+.admin-badge { position: absolute; top: 0.3em; right: 0.3em; background: var(--ink); color: var(--field);
   font-size: 0.6rem; padding: 0.15em 0.4em; text-transform: lowercase; }
 `;
 
