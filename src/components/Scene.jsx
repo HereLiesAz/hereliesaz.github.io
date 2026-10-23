@@ -33,11 +33,14 @@ float noise(vec2 p){
              mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), u.x), u.y);
 }
 void main(){
-  // White where the wipe has passed (vUv.x < uLevel), black ahead; torn edge
+  // White where the wipe has passed (vUv.x < edge), black ahead; torn edge
   // so the boundary reads as ripped paper, not a razor line. uLevel 0 = all
-  // black, 1 = all white.
+  // black, 1 = all white. The edge travels from -0.08 to 1.08, not 0 to 1: with
+  // uLevel = 0 at x = 0 the smoothstep sits half-way through its band, which
+  // left a torn white strip down the left side of every dark painting.
   float torn = (noise(vUv * 7.0) - 0.5) * 0.05 + (noise(vUv * 23.0) - 0.5) * 0.02;
-  float g = 1.0 - smoothstep(uLevel - 0.02, uLevel + 0.02, vUv.x + torn);
+  float edge = mix(-0.08, 1.08, uLevel);
+  float g = 1.0 - smoothstep(edge - 0.02, edge + 0.02, vUv.x + torn);
   gl_FragColor = vec4(vec3(g), 1.0);
 }
 `;

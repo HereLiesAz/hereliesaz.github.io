@@ -110,6 +110,15 @@ export default function AnamorphicCam() {
   // hitting a wall at the top.
   const didInit = useRef(false);
 
+  // drei's scroll container is a focusable, unnamed <div>; a screen reader lands
+  // on it as an anonymous scrollable region. Name it and say how it is driven.
+  useEffect(() => {
+    const el = scroll.el;
+    if (!el) return;
+    el.setAttribute('role', 'region');
+    el.setAttribute('aria-label', 'Gallery. Scroll, or use the arrow keys, to move through the paintings.');
+  }, [scroll]);
+
   useEffect(() => {
     const onKeyDown = (e) => {
       if (!SCROLL_KEYS.has(e.key)) return;

@@ -69,11 +69,24 @@ const Gallery = () => {
     return () => clearTimeout(hideTimer);
   }, [ready, loadError]);
 
+  // A slow-connection notice (above) must not outlive the load it describes.
+  useEffect(() => {
+    if (ready && useStore.getState().loadError?.startsWith('Still loading')) {
+      useStore.getState().setLoadError(null);
+    }
+  }, [ready]);
+
   useEffect(() => {
     let hideTimer = null;
     const maxTimer = setTimeout(() => {
       setBootFading(true);
       hideTimer = setTimeout(() => setBootVisible(false), BOOT_FADE_MS);
+      // Past this point the boot screen is gone. If the data still has not
+      // arrived, the viewer would be left with a bare black screen and no word
+      // why; say so. The effect below clears it if the gallery does load.
+      const st = useStore.getState();
+      const ready = st.nodes.length > 0 && st.activeClusters.length > 0;
+      if (!ready && !st.loadError) st.setLoadError('Still loading — the connection looks slow.');
     }, BOOT_MAX_MS);
     // Clear BOTH timers: the inner hide timer can still be pending if the
     // gallery unmounts (route change) inside the BOOT_FADE_MS window.
