@@ -71,6 +71,19 @@ jobs:
       - name: Verify repository and build
         run: npm run verify
 
+      # GitHub Pages rejects published sites over 1 GB. vite.config.js drops
+      # everything the runtime never fetches (scripts/ship-filter.mjs); this
+      # fails the build with a clear message before the upload does.
+      - name: Check site size
+        run: |
+          size_mb=$(du -sm dist | cut -f1)
+          echo "dist is ${size_mb} MB"
+          if [ "$size_mb" -gt 900 ]; then
+            echo "::error::dist is ${size_mb} MB; GitHub Pages rejects sites over 1 GB (limit checked at 900 MB). Largest entries:"
+            du -sm dist/* dist/data/* 2>/dev/null | sort -rn | head -10
+            exit 1
+          fi
+
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:

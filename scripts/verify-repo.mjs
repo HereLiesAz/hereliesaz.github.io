@@ -53,6 +53,7 @@ try {
 
   run(python, ['-m', 'py_compile', ...pythonFiles], 'Python syntax check');
   run(python, ['-m', 'unittest', 'scripts/test_integrate_painting_bakes.py'], 'Integration builder unit tests');
+  run(process.execPath, ['--test', 'scripts/test-ship-filter.mjs'], 'Ship filter unit tests');
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'verify-assets'], 'Asset/legacy graph verification');
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], 'Production Vite build');
   console.log('\nRepository verification passed.');
