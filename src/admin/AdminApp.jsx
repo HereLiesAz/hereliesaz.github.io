@@ -16,7 +16,7 @@ const STYLES = `
      this the admin page would inherit it and nothing here could scroll.
      Own height + overflow makes this its own scrolling context regardless
      of what the body does. */
-  height: 100vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  height: 100vh; height: 100dvh; overflow-y: auto; -webkit-overflow-scrolling: touch;
   box-sizing: border-box;
   background: #0a0a0a; color: #f4f0e6;
   font-family: monospace; padding: 1rem 1rem 3rem;

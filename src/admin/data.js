@@ -75,8 +75,16 @@ export async function saveSiteContent(content) {
  * live site itself fetches, so this always matches reality with no
  * separate admin-only listing endpoint to keep in sync. */
 export async function listBakedPaintings() {
-  const res = await fetch('/data/theater/_manifest.json', { cache: 'no-store' });
-  if (!res.ok) return [];
+  let res;
+  try {
+    res = await fetch('/data/theater/_manifest.json', { cache: 'no-store' });
+  } catch {
+    throw new Error('Could not reach the site to read the painting list — check your connection.');
+  }
+  // Only a 404 means "nothing baked yet". Any other failure is an error, not an
+  // empty gallery: an empty list would look like every painting had vanished.
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`Could not read the painting list (HTTP ${res.status}).`);
   const ids = await res.json();
   return Array.isArray(ids) ? ids : [];
 }

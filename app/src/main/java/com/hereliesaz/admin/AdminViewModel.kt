@@ -285,9 +285,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 repo.dispatchTheaterBake(ids)
                 selectedArtworkIds = selectedArtworkIds - ids.toSet()
                 bakeMessage = "Submitted " + ids.size +
-                    " photo(s) to Theater Bake. Refresh Art after the workflow completes to see updated status."
+                    " photo(s) to Theater Bake. It runs in HereLiesAz/workflows (about ten minutes per 20 photos); " +
+                    "Refresh Art after it finishes to see updated status."
             } catch (e: Exception) {
-                bakeMessage = "Could not queue Theater Bake: " + (e.message ?: "unknown error")
+                bakeMessage = dispatchFailure("Theater Bake", e)
             } finally {
                 bakeBusy = false
             }
@@ -383,7 +384,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 dedupExpectedRequestId = null
                 dedupBusy = false
                 dedupFailure = true
-                dedupMessage = e.message ?: "Could not queue dedup scan."
+                dedupMessage = dispatchFailure("the dedup scan", e)
             }
         }
     }
@@ -856,7 +857,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 publishBusy = false
                 publishFailure = true
-                publishMessage = "Could not queue publication: " + (e.message ?: "unknown error")
+                publishMessage = dispatchFailure("publication", e)
                 return@launch
             }
 
@@ -933,6 +934,19 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     fun dedupImageUrl(image: DedupImage): String = repo.dedupImageUrl(image)
     fun paintingUrl(id: String): String = repo.paintingUrl(id)
     fun depthUrl(): String? = theaterMeta?.let { repo.depthUrl(it.depthFile) }
+
+    /** A readable reason for a failed workflow dispatch; the raw message is an API path and status. */
+    private fun dispatchFailure(what: String, e: Exception): String {
+        val reason = when ((e as? GitHubApiException)?.status) {
+            401 -> "GitHub rejected the token. Open Settings and save a valid one."
+            403 -> "The token is not allowed to run workflows. It needs Actions: Read and write on this repository."
+            404 -> "GitHub could not find that workflow on the main branch."
+            422 -> "GitHub refused the request (the workflow may not accept these inputs): " + (e.message ?: "")
+            0 -> e.message ?: "No connection to GitHub."
+            else -> e.message ?: "unknown error"
+        }
+        return "Could not queue $what: $reason"
+    }
 
     private fun persistDraft(next: AdminDraft) {
         draft = next

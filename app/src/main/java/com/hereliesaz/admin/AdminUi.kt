@@ -974,13 +974,21 @@ private fun formatBytes(bytes: Long): String =
 }
 
 @Composable private fun NetworkImage(url: String, vm: AdminViewModel, modifier: Modifier = Modifier) {
-    val bitmap by produceState<android.graphics.Bitmap?>(null, url) {
-        value = runCatching { vm.bitmap(url) }.getOrNull()
+    // A failed load must not look like a slow one: "…" forever hid broken images.
+    val state by produceState<Pair<android.graphics.Bitmap?, Boolean>>(Pair(null, false), url) {
+        val result = runCatching { vm.bitmap(url) }
+        value = Pair(result.getOrNull(), result.isFailure)
     }
+    val (bitmap, failed) = state
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
-        bitmap?.let {
-            Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-        } ?: Text("…", color = Ink.copy(alpha = 0.4f))
+        if (bitmap != null) {
+            Image(bitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        } else {
+            Text(
+                if (failed) "unavailable" else "…",
+                color = if (failed) DangerInk else Ink.copy(alpha = 0.4f),
+            )
+        }
     }
 }
 
@@ -1002,7 +1010,17 @@ private fun formatBytes(bytes: Long): String =
         message.startsWith("Submitted") ||
         message.startsWith("Discarded") ||
         loadedCleanly
-    Text(message, modifier = modifier, color = if (good) Good else Ink.copy(alpha = 0.78f))
+    // Failures read as failures, not as neutral status.
+    val failed = message.contains("Could not", ignoreCase = true) || message.contains("failed", ignoreCase = true)
+    Text(
+        message,
+        modifier = modifier,
+        color = when {
+            failed -> DangerInk
+            good -> Good
+            else -> Ink.copy(alpha = 0.78f)
+        },
+    )
 }
 
 @Composable private fun OpenLinkButton(label: String, url: String) {

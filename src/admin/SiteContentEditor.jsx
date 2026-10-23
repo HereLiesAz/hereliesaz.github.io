@@ -10,6 +10,8 @@ import { DEFAULT_SITE_CONTENT, safeHref } from '../siteContent';
 export default function SiteContentEditor() {
   const [content, setContent] = useState(null);
   const [status, setStatus] = useState(null); // null | 'saving' | 'saved' | { error }
+  const [loadError, setLoadError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     // Guard a file that parses but lacks menuLinks (or has a non-array
@@ -18,9 +20,21 @@ export default function SiteContentEditor() {
       ? { about: typeof c.about === 'string' ? c.about : DEFAULT_SITE_CONTENT.about,
           menuLinks: Array.isArray(c.menuLinks) ? c.menuLinks : [] }
       : DEFAULT_SITE_CONTENT);
-    loadSiteContent().then(c => setContent(normalize(c))).catch(() => setContent(DEFAULT_SITE_CONTENT));
-  }, []);
+    // A file that does not exist yet loads as the defaults. A FAILED load must
+    // not: showing the defaults there made Save overwrite the live content with
+    // them after a 401, a rate limit or a dropped connection.
+    setLoadError(null);
+    loadSiteContent().then(c => setContent(normalize(c))).catch(e => setLoadError(e.message));
+  }, [attempt]);
 
+  if (loadError) {
+    return (
+      <div className="admin-panel">
+        <p className="admin-error" role="alert">Could not load the site content, so editing is disabled: {loadError}</p>
+        <button type="button" onClick={() => setAttempt(a => a + 1)}>try again</button>
+      </div>
+    );
+  }
   if (!content) return <div className="admin-panel"><p>loading…</p></div>;
 
   const updateLink = (i, key, value) => {
