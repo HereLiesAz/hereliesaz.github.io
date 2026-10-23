@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Route, Switch, useLocation } from 'wouter';
+import { loadAnalytics } from './analytics.js';
 import Scene from './components/Scene';
 import Overlay from './components/Overlay';
 import { Loader } from '@react-three/drei';
@@ -294,6 +295,11 @@ function useRouteManifest(pathname) {
 const App = () => {
   const [location] = useLocation();
   useRouteManifest(location);
+  // The admin keeps a write-scoped GitHub token in localStorage; no third-party
+  // script runs on that route (see src/analytics.js).
+  useEffect(() => {
+    if (!location.startsWith('/admin')) loadAnalytics();
+  }, [location]);
 
   return (
     <Switch>

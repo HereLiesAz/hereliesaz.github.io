@@ -5,6 +5,7 @@ import TokenSetup from './TokenSetup.jsx';
 import PaintingsList from './PaintingsList.jsx';
 import AddPainting from './AddPainting.jsx';
 import SiteContentEditor from './SiteContentEditor.jsx';
+import { lockDownAdminPage } from './lockdown.js';
 
 const TABS = ['paintings', 'add', 'site', 'settings'];
 
@@ -63,6 +64,7 @@ button:disabled { opacity: 0.5; cursor: default; }
  * not linked from the public gallery UI. See docs/ARCHITECTURE.md. */
 export default function AdminApp() {
   useEffect(() => {
+    lockDownAdminPage();
     const sheet = document.createElement('style');
     sheet.dataset.adminApp = 'true';
     sheet.textContent = STYLES;
