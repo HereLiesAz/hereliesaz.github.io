@@ -145,3 +145,8 @@ without the `ANDROID_KEY*` signing env vars.
   third-party scripts to `/admin`.
 - Colours, type, motion and hit size come from `src/tokens.css`; see
   `docs/AESTHETIC.md` section 9.
+
+<!-- entire-agent:begin -->
+Read .entire/agent-guide.md for this repository's workflow, source inspection, and verification guidance.
+@.entire/agent-guide.md
+<!-- entire-agent:end -->
