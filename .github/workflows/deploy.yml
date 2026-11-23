@@ -21,7 +21,7 @@ permissions:
 concurrency:
   # One group per pull request, so a PR run never cancels a production deploy.
   group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || 'pages' }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
